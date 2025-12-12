@@ -1,0 +1,985 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mise Flow - Smart Inventory Assistant</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      min-height: 100vh;
+      color: #e0e0e0;
+    }
+
+    .header {
+      background: rgba(255, 255, 255, 0.05);
+      backdrop-filter: blur(10px);
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .logo-icon {
+      font-size: 1.75rem;
+    }
+
+    .logo h1 {
+      font-size: 1.5rem;
+      font-weight: 600;
+      background: linear-gradient(135deg, #00d9ff, #00ff88);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .logo span {
+      font-size: 0.75rem;
+      color: #888;
+      display: block;
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 1rem;
+      align-items: center;
+    }
+
+    .status-badge {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      background: rgba(255, 255, 255, 0.05);
+      border-radius: 20px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .status-badge:hover {
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .status-badge.connected {
+      border: 1px solid rgba(0, 255, 136, 0.3);
+    }
+
+    .status-badge.disconnected {
+      border: 1px solid rgba(255, 100, 100, 0.3);
+    }
+
+    .main-container {
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 2rem;
+      display: grid;
+      grid-template-columns: 1fr 400px;
+      gap: 2rem;
+    }
+
+    .panel {
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      overflow: hidden;
+    }
+
+    .panel-header {
+      padding: 1rem 1.5rem;
+      background: rgba(255, 255, 255, 0.03);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .panel-header h2 {
+      font-size: 1rem;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .panel-content {
+      padding: 1.5rem;
+    }
+
+    /* Dictation Panel */
+    .dictation-area {
+      min-height: 200px;
+      background: rgba(0, 0, 0, 0.2);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1rem;
+      font-size: 1.1rem;
+      line-height: 1.6;
+      color: #fff;
+    }
+
+    .dictation-area.empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #666;
+      font-style: italic;
+    }
+
+    .partial-transcript {
+      color: #888;
+      font-style: italic;
+    }
+
+    .controls {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      padding: 0.75rem 1.5rem;
+      border-radius: 8px;
+      border: none;
+      font-size: 0.95rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #00d9ff, #00a8cc);
+      color: #fff;
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 15px rgba(0, 217, 255, 0.3);
+    }
+
+    .btn-primary.recording {
+      background: linear-gradient(135deg, #ff4444, #cc3333);
+      animation: pulse 1.5s infinite;
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.1);
+      color: #e0e0e0;
+    }
+
+    .btn-secondary:hover {
+      background: rgba(255, 255, 255, 0.15);
+    }
+
+    .btn-success {
+      background: linear-gradient(135deg, #00ff88, #00cc6a);
+      color: #1a1a2e;
+    }
+
+    .btn-success:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 15px rgba(0, 255, 136, 0.3);
+    }
+
+    .btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+
+    @keyframes pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(255, 68, 68, 0.4); }
+      50% { box-shadow: 0 0 0 10px rgba(255, 68, 68, 0); }
+    }
+
+    /* AI Response Panel */
+    .ai-response {
+      min-height: 150px;
+      background: rgba(0, 217, 255, 0.05);
+      border: 1px solid rgba(0, 217, 255, 0.2);
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 1rem;
+      white-space: pre-wrap;
+      line-height: 1.6;
+    }
+
+    .ai-response.empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #666;
+      font-style: italic;
+    }
+
+    .ai-response.loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .loader {
+      width: 40px;
+      height: 40px;
+      border: 3px solid rgba(0, 217, 255, 0.2);
+      border-top-color: #00d9ff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    /* Sidebar */
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    /* Quick Actions */
+    .quick-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+
+    .action-btn {
+      padding: 1rem;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 12px;
+      color: #e0e0e0;
+      cursor: pointer;
+      transition: all 0.2s;
+      text-align: center;
+    }
+
+    .action-btn:hover {
+      background: rgba(255, 255, 255, 0.1);
+      transform: translateY(-2px);
+    }
+
+    .action-btn .icon {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+    }
+
+    .action-btn .label {
+      font-size: 0.85rem;
+    }
+
+    /* Activity Log */
+    .activity-log {
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .activity-item {
+      padding: 0.75rem;
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 8px;
+      margin-bottom: 0.5rem;
+      font-size: 0.85rem;
+    }
+
+    .activity-item .time {
+      color: #666;
+      font-size: 0.75rem;
+    }
+
+    .activity-item .action {
+      color: #00d9ff;
+    }
+
+    /* Spreadsheet Config */
+    .config-input {
+      width: 100%;
+      padding: 0.75rem;
+      background: rgba(0, 0, 0, 0.2);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      color: #e0e0e0;
+      font-size: 0.9rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .config-input:focus {
+      outline: none;
+      border-color: #00d9ff;
+    }
+
+    .config-input::placeholder {
+      color: #666;
+    }
+
+    /* Modal */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.7);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+      opacity: 0;
+      visibility: hidden;
+      transition: all 0.3s;
+    }
+
+    .modal-overlay.active {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    .modal {
+      background: #1a1a2e;
+      border-radius: 16px;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 2rem;
+      width: 90%;
+      max-width: 500px;
+      transform: translateY(20px);
+      transition: transform 0.3s;
+    }
+
+    .modal-overlay.active .modal {
+      transform: translateY(0);
+    }
+
+    .modal h3 {
+      margin-bottom: 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .modal-actions {
+      display: flex;
+      gap: 1rem;
+      margin-top: 1.5rem;
+    }
+
+    .modal-actions .btn {
+      flex: 1;
+    }
+
+    /* Toast notifications */
+    .toast-container {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      z-index: 1001;
+    }
+
+    .toast {
+      padding: 1rem 1.5rem;
+      background: #1a1a2e;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 8px;
+      margin-top: 0.5rem;
+      animation: slideIn 0.3s ease;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .toast.success {
+      border-color: rgba(0, 255, 136, 0.3);
+    }
+
+    .toast.error {
+      border-color: rgba(255, 68, 68, 0.3);
+    }
+
+    @keyframes slideIn {
+      from {
+        transform: translateX(100%);
+        opacity: 0;
+      }
+      to {
+        transform: translateX(0);
+        opacity: 1;
+      }
+    }
+
+    /* Responsive */
+    @media (max-width: 1024px) {
+      .main-container {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 600px) {
+      .header {
+        flex-direction: column;
+        gap: 1rem;
+      }
+
+      .main-container {
+        padding: 1rem;
+      }
+
+      .quick-actions {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="logo">
+      <span class="logo-icon">📦</span>
+      <div>
+        <h1>Mise Flow</h1>
+        <span>Voice-powered inventory assistant</span>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div id="googleStatus" class="status-badge disconnected" onclick="handleGoogleAuth()">
+        <span id="googleIcon">🔗</span>
+        <span id="googleText">Connect Google</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-container">
+    <div class="content">
+      <!-- Dictation Panel -->
+      <div class="panel">
+        <div class="panel-header">
+          <h2>🎤 Voice Input</h2>
+          <span id="recordingStatus" style="color: #666; font-size: 0.85rem;">Ready</span>
+        </div>
+        <div class="panel-content">
+          <div id="dictationArea" class="dictation-area empty">
+            Press the microphone button and speak...
+          </div>
+          <div class="controls">
+            <button id="recordBtn" class="btn btn-primary" onclick="toggleRecording()">
+              🎙️ Start Dictation
+            </button>
+            <button id="processBtn" class="btn btn-success" onclick="processText()" disabled>
+              ✨ Process with AI
+            </button>
+            <button class="btn btn-secondary" onclick="clearDictation()">
+              🗑️ Clear
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- AI Response Panel -->
+      <div class="panel" style="margin-top: 1.5rem;">
+        <div class="panel-header">
+          <h2>🤖 AI Assistant</h2>
+        </div>
+        <div class="panel-content">
+          <div id="aiResponse" class="ai-response empty">
+            AI response will appear here after processing...
+          </div>
+          <div class="controls">
+            <button id="emailBtn" class="btn btn-secondary" onclick="openEmailModal()" disabled>
+              📧 Send Email
+            </button>
+            <button id="sheetBtn" class="btn btn-secondary" onclick="updateSheet()" disabled>
+              📊 Update Sheet
+            </button>
+            <button class="btn btn-secondary" onclick="copyResponse()">
+              📋 Copy
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="sidebar">
+      <!-- Quick Actions -->
+      <div class="panel">
+        <div class="panel-header">
+          <h2>⚡ Quick Actions</h2>
+        </div>
+        <div class="panel-content">
+          <div class="quick-actions">
+            <button class="action-btn" onclick="quickAction('inventory check')">
+              <div class="icon">📋</div>
+              <div class="label">Check Stock</div>
+            </button>
+            <button class="action-btn" onclick="quickAction('low stock report')">
+              <div class="icon">⚠️</div>
+              <div class="label">Low Stock</div>
+            </button>
+            <button class="action-btn" onclick="quickAction('daily summary')">
+              <div class="icon">📊</div>
+              <div class="label">Daily Summary</div>
+            </button>
+            <button class="action-btn" onclick="quickAction('supplier order')">
+              <div class="icon">📦</div>
+              <div class="label">Order Stock</div>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Spreadsheet Config -->
+      <div class="panel">
+        <div class="panel-header">
+          <h2>📊 Spreadsheet</h2>
+        </div>
+        <div class="panel-content">
+          <input type="text" id="spreadsheetId" class="config-input" placeholder="Spreadsheet ID (from URL)">
+          <input type="text" id="sheetRange" class="config-input" placeholder="Range (e.g., Inventory!A:E)" value="Inventory!A:E">
+          <button class="btn btn-secondary" style="width: 100%;" onclick="testSheetConnection()">
+            🔄 Test Connection
+          </button>
+        </div>
+      </div>
+
+      <!-- Activity Log -->
+      <div class="panel">
+        <div class="panel-header">
+          <h2>📝 Activity</h2>
+        </div>
+        <div class="panel-content">
+          <div id="activityLog" class="activity-log">
+            <div class="activity-item">
+              <div class="time">--</div>
+              <div>Waiting for activity...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Email Modal -->
+  <div id="emailModal" class="modal-overlay">
+    <div class="modal">
+      <h3>📧 Send Email</h3>
+      <input type="email" id="emailTo" class="config-input" placeholder="Recipient email">
+      <input type="text" id="emailSubject" class="config-input" placeholder="Subject">
+      <textarea id="emailBody" class="config-input" style="min-height: 150px; resize: vertical;" placeholder="Email body..."></textarea>
+      <div class="modal-actions">
+        <button class="btn btn-secondary" onclick="closeEmailModal()">Cancel</button>
+        <button class="btn btn-success" onclick="sendEmail()">📤 Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toastContainer" class="toast-container"></div>
+
+  <script>
+    // State
+    let isRecording = false;
+    let ws = null;
+    let mediaStream = null;
+    let audioContext = null;
+    let processor = null;
+    let finalTranscript = '';
+    let partialTranscript = '';
+    let currentAiResponse = '';
+    let googleConnected = false;
+
+    // Initialize
+    document.addEventListener('DOMContentLoaded', () => {
+      checkGoogleStatus();
+      handleUrlParams();
+    });
+
+    // Check URL params for OAuth callback
+    function handleUrlParams() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('google') === 'connected') {
+        showToast('✅ Google connected successfully!', 'success');
+        window.history.replaceState({}, '', '/');
+      } else if (params.get('google') === 'error') {
+        showToast('❌ Google connection failed', 'error');
+        window.history.replaceState({}, '', '/');
+      }
+    }
+
+    // Google Auth
+    async function checkGoogleStatus() {
+      try {
+        const res = await fetch('/api/google/status');
+        const data = await res.json();
+        googleConnected = data.connected;
+        updateGoogleUI();
+      } catch (e) {
+        console.error('Failed to check Google status:', e);
+      }
+    }
+
+    function updateGoogleUI() {
+      const badge = document.getElementById('googleStatus');
+      const icon = document.getElementById('googleIcon');
+      const text = document.getElementById('googleText');
+      const emailBtn = document.getElementById('emailBtn');
+      const sheetBtn = document.getElementById('sheetBtn');
+
+      if (googleConnected) {
+        badge.className = 'status-badge connected';
+        icon.textContent = '✅';
+        text.textContent = 'Google Connected';
+        emailBtn.disabled = false;
+        sheetBtn.disabled = false;
+      } else {
+        badge.className = 'status-badge disconnected';
+        icon.textContent = '🔗';
+        text.textContent = 'Connect Google';
+        emailBtn.disabled = true;
+        sheetBtn.disabled = true;
+      }
+    }
+
+    function handleGoogleAuth() {
+      if (googleConnected) {
+        if (confirm('Disconnect Google account?')) {
+          fetch('/api/google/disconnect').then(() => {
+            googleConnected = false;
+            updateGoogleUI();
+            showToast('Google disconnected', 'success');
+          });
+        }
+      } else {
+        window.location.href = '/auth/google';
+      }
+    }
+
+    // Recording
+    async function toggleRecording() {
+      if (isRecording) {
+        stopRecording();
+      } else {
+        await startRecording();
+      }
+    }
+
+    async function startRecording() {
+      try {
+        mediaStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            sampleRate: 16000,
+            echoCancellation: true,
+            noiseSuppression: true
+          }
+        });
+
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        ws = new WebSocket(`${wsProtocol}//${window.location.host}`);
+
+        ws.onopen = () => {
+          console.log('WebSocket connected');
+          setupAudioProcessing();
+          isRecording = true;
+          updateRecordingUI();
+        };
+
+        ws.onmessage = (event) => {
+          const data = JSON.parse(event.data);
+          if (data.type === 'transcript') {
+            if (data.is_final) {
+              finalTranscript += data.text + ' ';
+              partialTranscript = '';
+            } else {
+              partialTranscript = data.text;
+            }
+            updateDictationArea();
+          } else if (data.type === 'error') {
+            showToast('Transcription error: ' + data.message, 'error');
+          }
+        };
+
+        ws.onerror = (err) => {
+          console.error('WebSocket error:', err);
+          stopRecording();
+        };
+
+        ws.onclose = () => {
+          console.log('WebSocket closed');
+        };
+
+      } catch (err) {
+        console.error('Microphone error:', err);
+        showToast('Could not access microphone', 'error');
+      }
+    }
+
+    function setupAudioProcessing() {
+      audioContext = new AudioContext({ sampleRate: 16000 });
+      const source = audioContext.createMediaStreamSource(mediaStream);
+      processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+      processor.onaudioprocess = (e) => {
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          const inputData = e.inputBuffer.getChannelData(0);
+          const pcmData = new Int16Array(inputData.length);
+          for (let i = 0; i < inputData.length; i++) {
+            pcmData[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
+          }
+          ws.send(pcmData.buffer);
+        }
+      };
+
+      source.connect(processor);
+      processor.connect(audioContext.destination);
+    }
+
+    function stopRecording() {
+      isRecording = false;
+      
+      if (processor) {
+        processor.disconnect();
+        processor = null;
+      }
+      if (audioContext) {
+        audioContext.close();
+        audioContext = null;
+      }
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+        mediaStream = null;
+      }
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+
+      updateRecordingUI();
+      
+      if (finalTranscript.trim()) {
+        document.getElementById('processBtn').disabled = false;
+      }
+    }
+
+    function updateRecordingUI() {
+      const btn = document.getElementById('recordBtn');
+      const status = document.getElementById('recordingStatus');
+
+      if (isRecording) {
+        btn.innerHTML = '⏹️ Stop';
+        btn.classList.add('recording');
+        status.textContent = '🔴 Recording...';
+        status.style.color = '#ff4444';
+      } else {
+        btn.innerHTML = '🎙️ Start Dictation';
+        btn.classList.remove('recording');
+        status.textContent = 'Ready';
+        status.style.color = '#666';
+      }
+    }
+
+    function updateDictationArea() {
+      const area = document.getElementById('dictationArea');
+      area.classList.remove('empty');
+      
+      let html = finalTranscript;
+      if (partialTranscript) {
+        html += `<span class="partial-transcript">${partialTranscript}</span>`;
+      }
+      
+      area.innerHTML = html || '<span style="color: #666; font-style: italic;">Press the microphone button and speak...</span>';
+      
+      if (!html) {
+        area.classList.add('empty');
+      }
+    }
+
+    function clearDictation() {
+      finalTranscript = '';
+      partialTranscript = '';
+      updateDictationArea();
+      document.getElementById('dictationArea').classList.add('empty');
+      document.getElementById('dictationArea').innerHTML = 'Press the microphone button and speak...';
+      document.getElementById('processBtn').disabled = true;
+    }
+
+    // AI Processing
+    async function processText() {
+      const text = finalTranscript.trim();
+      if (!text) return;
+
+      const responseArea = document.getElementById('aiResponse');
+      responseArea.classList.remove('empty');
+      responseArea.classList.add('loading');
+      responseArea.innerHTML = '<div class="loader"></div>';
+
+      try {
+        const res = await fetch('/api/process', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            text,
+            context: 'Coffee shop inventory management'
+          })
+        });
+
+        const data = await res.json();
+        currentAiResponse = data.response;
+        
+        responseArea.classList.remove('loading');
+        responseArea.innerHTML = currentAiResponse;
+        
+        addActivity('Processed voice input', text.substring(0, 50) + '...');
+        
+      } catch (err) {
+        console.error('Processing error:', err);
+        responseArea.classList.remove('loading');
+        responseArea.innerHTML = 'Error processing request. Please try again.';
+        showToast('Processing failed', 'error');
+      }
+    }
+
+    function quickAction(action) {
+      finalTranscript = action;
+      updateDictationArea();
+      document.getElementById('processBtn').disabled = false;
+      processText();
+    }
+
+    // Email
+    function openEmailModal() {
+      document.getElementById('emailBody').value = currentAiResponse || '';
+      document.getElementById('emailModal').classList.add('active');
+    }
+
+    function closeEmailModal() {
+      document.getElementById('emailModal').classList.remove('active');
+    }
+
+    async function sendEmail() {
+      const to = document.getElementById('emailTo').value;
+      const subject = document.getElementById('emailSubject').value;
+      const body = document.getElementById('emailBody').value;
+
+      if (!to || !subject || !body) {
+        showToast('Please fill all fields', 'error');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/gmail/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to, subject, body })
+        });
+
+        const data = await res.json();
+        
+        if (data.success) {
+          showToast('Email sent successfully!', 'success');
+          closeEmailModal();
+          addActivity('Email sent', `To: ${to}`);
+        } else {
+          showToast('Failed to send email: ' + data.error, 'error');
+        }
+      } catch (err) {
+        showToast('Email error: ' + err.message, 'error');
+      }
+    }
+
+    // Sheets
+    async function testSheetConnection() {
+      const spreadsheetId = document.getElementById('spreadsheetId').value;
+      const range = document.getElementById('sheetRange').value;
+
+      if (!spreadsheetId) {
+        showToast('Enter a spreadsheet ID', 'error');
+        return;
+      }
+
+      try {
+        const res = await fetch(`/api/sheets/read?spreadsheetId=${spreadsheetId}&range=${encodeURIComponent(range)}`);
+        const data = await res.json();
+
+        if (data.values) {
+          showToast(`Connected! Found ${data.values.length} rows`, 'success');
+          addActivity('Sheet connected', `${data.values.length} rows found`);
+        } else {
+          showToast('Connected but no data found', 'success');
+        }
+      } catch (err) {
+        showToast('Sheet connection failed', 'error');
+      }
+    }
+
+    async function updateSheet() {
+      const spreadsheetId = document.getElementById('spreadsheetId').value;
+      
+      if (!spreadsheetId) {
+        showToast('Configure spreadsheet ID first', 'error');
+        return;
+      }
+
+      // This would be enhanced to parse AI response for inventory updates
+      showToast('Sheet update feature - configure based on AI response', 'success');
+    }
+
+    function copyResponse() {
+      if (currentAiResponse) {
+        navigator.clipboard.writeText(currentAiResponse);
+        showToast('Copied to clipboard!', 'success');
+      }
+    }
+
+    // Activity Log
+    function addActivity(action, detail) {
+      const log = document.getElementById('activityLog');
+      const time = new Date().toLocaleTimeString();
+      
+      const item = document.createElement('div');
+      item.className = 'activity-item';
+      item.innerHTML = `
+        <div class="time">${time}</div>
+        <div><span class="action">${action}</span> - ${detail}</div>
+      `;
+      
+      log.insertBefore(item, log.firstChild);
+      
+      // Keep only last 10 items
+      while (log.children.length > 10) {
+        log.removeChild(log.lastChild);
+      }
+    }
+
+    // Toast notifications
+    function showToast(message, type = 'success') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      toast.className = `toast ${type}`;
+      toast.innerHTML = `<span>${type === 'success' ? '✓' : '✗'}</span> ${message}`;
+      
+      container.appendChild(toast);
+      
+      setTimeout(() => {
+        toast.style.animation = 'slideIn 0.3s ease reverse';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+  </script>
+</body>
+</html>

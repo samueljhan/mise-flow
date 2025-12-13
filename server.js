@@ -65,31 +65,44 @@ console.log('AWS Region:', process.env.AWS_REGION || 'us-east-1');
 console.log('========================');
 
 // System prompt for inventory assistant
-const INVENTORY_SYSTEM_PROMPT = `You are Mise Flow, an AI assistant for small business inventory management. Your name comes from "mise en place" - the culinary practice of having everything in its place.
+const SYSTEM_PROMPT = `You are Mise Flow, an AI assistant for Archives of Us Coffee. Your name comes from "mise en place" - the culinary practice of having everything in its place.
 
-You help users:
-1. Track inventory items (add, remove, update quantities)
-2. Log deliveries and shipments
-3. Set low-stock alerts
-4. Generate inventory reports
-5. Send emails to suppliers
-6. Update spreadsheets
+You help with:
+1. **Invoicing** - Create invoices for wholesale customers
+2. **Inventory** - Track stock, log deliveries, set alerts
+3. **Orders** - Document and process orders
+4. **Communication** - Email suppliers and customers
+5. **Reporting** - Generate reports and update spreadsheets
 
-When parsing voice commands, extract:
-- ACTION: add, remove, update, check, report, email, etc.
-- ITEM: the inventory item name
-- QUANTITY: number and unit (e.g., "5 bags", "10 lbs", "3 cases")
-- NOTES: any additional context
+KNOWN WHOLESALE CUSTOMERS: Archives of Us, CED, Dex, Junia
 
-Respond in a friendly, efficient manner. Be concise but helpful.
+SMART PATTERN RECOGNITION:
+When you see a pattern like "[Customer] [Quantity] [Product]" (e.g., "CED 100 lbs Archives Blend"), recognize this as an invoice request.
 
-Example interactions:
-- "Add 10 bags of espresso beans" → Extract: add, espresso beans, 10 bags
-- "We're low on oat milk, order 5 cases" → Extract: alert + order, oat milk, 5 cases
-- "Check stock on cups" → Extract: check, cups
-- "Email the supplier about tomorrow's delivery" → Extract: email, supplier, delivery inquiry
+Examples:
+- "CED 100 lbs Archives Blend" → ACTION: create_invoice
+- "Dex 50lb Ethiopia" → ACTION: create_invoice  
+- "Maru Coffee 100lb archives blend" → ACTION: create_invoice (new customer - ask to confirm adding them)
+- "Add 20 bags espresso to inventory" → ACTION: update_inventory
+- "What's our stock on Colombia?" → ACTION: check_inventory
+- "Email CED about their order" → ACTION: send_email
 
-Always confirm actions before executing them when they involve sending emails or modifying spreadsheets.`;
+RESPONSE FORMAT:
+When you identify an action, respond with:
+1. A brief, friendly confirmation of what you understood
+2. The action you'll take
+3. DO NOT show raw JSON to the user - keep it conversational
+
+For invoice patterns, respond like:
+"Got it! Creating an invoice for [Customer] - [Quantity] of [Product]. Processing now..."
+
+For unknown customers, respond like:
+"I don't recognize [Customer] as a current wholesale client. Would you like me to add them as a new customer?"
+
+Be concise, friendly, and action-oriented. Don't ask unnecessary questions - if the intent is clear, proceed with the action.`;
+
+// Known wholesale customers (shared with invoice generation)
+let knownCustomers = ['Archives of Us', 'CED', 'Dex', 'Junia'];
 
 // ============ Google OAuth Routes ============
 
@@ -318,9 +331,6 @@ app.post('/api/sheets/append', async (req, res) => {
   }
 });
 
-// Known wholesale customers
-let knownCustomers = ['Archives of Us', 'CED', 'Dex', 'Junia'];
-
 // Get list of known customers
 app.get('/api/customers', (req, res) => {
   res.json({ customers: knownCustomers });
@@ -373,13 +383,68 @@ app.post('/api/invoice/generate', async (req, res) => {
       return res.status(400).json({ error: 'Invoice details required' });
     }
 
-    // Parse the details (e.g., "CED, 100 lbs Archives Blend")
-    const parsed = parseInvoiceDetails(details);
-    if (!parsed) {
-      return res.status(400).json({ error: 'Could not parse invoice details. Please use format: "Customer, Quantity lbs Product"' });
+    // Use Gemini to parse the invoice details flexibly
+    const parseModel = genAI.getGenerativeModel({ 
+      model: "gemini-2.5-flash",
+      generationConfig: { temperature: 0 }
+    });
+    
+    const parsePrompt = `Parse this invoice request into structured data. The input may have customer, quantity, and product in ANY order.
+
+KNOWN CUSTOMERS: ${knownCustomers.join(', ')}
+KNOWN CUSTOMER ALIASES:
+- "AOU", "archives", "archives of us" → "Archives of Us"
+- "CED" → "CED"
+- "Dex", "deks" → "Dex"
+- "Junia", "juna" → "Junia"
+
+KNOWN PRODUCTS:
+- "Archives Blend", "archives", "house blend"
+- "Ethiopia Gera Natural", "ethiopia", "ethiopian"
+- "Colombia Excelso", "colombia", "colombian"
+- "Colombia Decaf", "decaf", "decaffeinated"
+
+INPUT: "${details}"
+
+Respond ONLY with valid JSON (no markdown):
+{
+  "customer": "<matched customer name from known list, or original if new>",
+  "quantity": <number>,
+  "product": "<matched product name>",
+  "unit": "<lbs, lb, bags, etc. - default to lbs>",
+  "isKnownCustomer": <true/false>,
+  "confidence": "high/medium/low"
+}
+
+Examples:
+- "CED 100 lbs Archives Blend" → customer: "CED", quantity: 100, product: "Archives Blend"
+- "archives blend 100lb for aou" → customer: "Archives of Us", quantity: 100, product: "Archives Blend"
+- "50 ethiopia for dex" → customer: "Dex", quantity: 50, product: "Ethiopia Gera Natural"`;
+
+    let customer, quantity, product;
+    
+    try {
+      const parseResult = await parseModel.generateContent(parsePrompt);
+      const parseText = parseResult.response.text().trim();
+      console.log(`🤖 Gemini parse result: ${parseText}`);
+      
+      const cleanJson = parseText.replace(/```json\n?|\n?```/g, '').trim();
+      const parsed = JSON.parse(cleanJson);
+      
+      customer = parsed.customer;
+      quantity = parseInt(parsed.quantity);
+      product = parsed.product;
+      
+      console.log(`📝 Parsed: customer="${customer}", quantity=${quantity}, product="${product}"`);
+    } catch (parseError) {
+      console.error('⚠️ Gemini parsing failed:', parseError.message);
+      return res.status(400).json({ error: 'Could not parse invoice details. Please try again with customer, quantity, and product.' });
+    }
+    
+    if (!customer || !quantity || !product) {
+      return res.status(400).json({ error: 'Could not parse invoice details. Please include customer, quantity, and product.' });
     }
 
-    const { customer, quantity, product } = parsed;
     console.log(`📝 Generating invoice for: ${customer}, ${quantity} lbs ${product}`);
 
     oauth2Client.setCredentials(userTokens);
@@ -503,19 +568,24 @@ SPREADSHEET DATA (columns A through H):
 ${pricingRows.map((row, i) => `Row ${i + 1}: ${row.map((cell, j) => `${String.fromCharCode(65 + j)}="${cell || ''}"`).join(', ')}`).join('\n')}
 
 PRICING RULES:
-1. If customer is "Archives of Us", use the "At-Cost" table and get the price from column H ("Per lb")
-2. For all other customers, look for their specific "Wholesale [CustomerName]" table and get the price from column D ("Per lb")
-3. If no specific wholesale table exists for the customer, use "Wholesale Tier 1" pricing from column D
+1. IMPORTANT: If customer is "Archives of Us" (or AOU), you MUST use the "At-Cost" table (around row 2) and get the price from column H ("Per lb"). For example, "Archives Blend" at-cost per lb is in cell H4.
+2. For customer "CED", use "Wholesale CED" table and get price from column D
+3. For customer "Dex", use "Wholesale Dex" table and get price from column D  
+4. For customer "Junia", use "Wholesale Junia" table and get price from column D
+5. For any new/unknown customer, use "Wholesale Tier 1" pricing from column D
 
 LOOKUP REQUEST:
 - Customer: "${finalCustomer}"
 - Product: "${matchedProduct}"
 
+The price should be a number like 10.22, 11.50, 14.00, etc. NOT zero.
+
 Respond ONLY with valid JSON (no markdown, no explanation):
 {
-  "price": <number or null if not found>,
+  "price": <number - this should NOT be zero or null>,
   "table": "<name of table used>",
   "row": <row number where product was found>,
+  "column": "<H for At-Cost, D for Wholesale>",
   "explanation": "<brief explanation of how you found it>"
 }`;
 
@@ -535,18 +605,23 @@ Respond ONLY with valid JSON (no markdown, no explanation):
       const cleanJson = pricingText.replace(/```json\n?|\n?```/g, '').trim();
       const pricingData = JSON.parse(cleanJson);
       
-      if (pricingData.price !== null) {
+      if (pricingData.price !== null && pricingData.price > 0) {
         unitPrice = parseFloat(pricingData.price);
         pricingSource = pricingData.table;
-        console.log(`✅ Found price: $${unitPrice}/lb from ${pricingSource} (row ${pricingData.row})`);
+        console.log(`✅ Found price: $${unitPrice}/lb from ${pricingSource} (row ${pricingData.row}, column ${pricingData.column})`);
         console.log(`   Explanation: ${pricingData.explanation}`);
+      } else {
+        console.log(`⚠️ Gemini returned invalid price: ${pricingData.price}`);
       }
     } catch (pricingError) {
       console.error('⚠️ Gemini pricing lookup failed:', pricingError.message);
     }
     
-    if (!unitPrice) {
-      return res.status(400).json({ error: `Could not find pricing for "${matchedProduct}" for customer "${finalCustomer}"` });
+    if (!unitPrice || unitPrice <= 0) {
+      return res.status(400).json({ 
+        error: `Could not find valid pricing for "${matchedProduct}" for customer "${finalCustomer}". Please check the pricing sheet.`,
+        debug: { customer: finalCustomer, product: matchedProduct, pricingSource }
+      });
     }
     
     // Update product name to the matched version for the invoice
@@ -802,17 +877,91 @@ app.post('/api/process', async (req, res) => {
     const model = genAI.getGenerativeModel({ 
       model: "gemini-2.5-flash",
       generationConfig: {
-        temperature: 0.3,
+        temperature: 0.1,
         maxOutputTokens: 1000,
       }
     });
     
-    const prompt = `${INVENTORY_SYSTEM_PROMPT}\n\nContext: ${context || 'General inventory management'}\n\nUser said: "${text}"\n\nParse this and respond with:\n1. What action to take\n2. A friendly confirmation message\n3. If applicable, structured data (JSON) for the action`;
+    // First, detect intent and extract structured data
+    const intentPrompt = `${SYSTEM_PROMPT}
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
+KNOWN CUSTOMERS: ${knownCustomers.join(', ')}
 
-    res.json({ response: response.text() });
+User said: "${text}"
+
+Analyze this input and determine the intent. Respond ONLY with valid JSON:
+{
+  "intent": "create_invoice" | "update_inventory" | "check_inventory" | "send_email" | "general_question" | "unknown",
+  "customer": "<customer name if mentioned, or null>",
+  "quantity": <number or null>,
+  "unit": "<lbs, bags, cases, etc. or null>",
+  "product": "<product name if mentioned, or null>",
+  "isKnownCustomer": <true if customer matches known list, false if new, null if no customer>,
+  "confidence": "high" | "medium" | "low",
+  "friendlyResponse": "<a brief, friendly response to show the user>"
+}
+
+Examples:
+- "CED 100 lbs Archives Blend" → intent: create_invoice, customer: CED, quantity: 100, unit: lbs, product: Archives Blend
+- "Maru Coffee 50lb ethiopia" → intent: create_invoice, customer: Maru Coffee, isKnownCustomer: false
+- "add 20 bags to inventory" → intent: update_inventory
+- "create invoice" or "yes" after a prompt → intent: create_invoice (use context)`;
+
+    const intentResult = await model.generateContent(intentPrompt);
+    const intentText = intentResult.response.text().trim();
+    console.log(`🤖 Intent detection: ${intentText}`);
+    
+    let intentData;
+    try {
+      const cleanJson = intentText.replace(/```json\n?|\n?```/g, '').trim();
+      intentData = JSON.parse(cleanJson);
+    } catch (parseError) {
+      // If JSON parsing fails, return a general response
+      return res.json({ 
+        response: intentText,
+        action: null
+      });
+    }
+    
+    // Handle different intents
+    if (intentData.intent === 'create_invoice') {
+      if (intentData.customer && intentData.quantity && intentData.product) {
+        // We have enough info to create an invoice
+        if (intentData.isKnownCustomer === false) {
+          // Unknown customer - ask to add
+          return res.json({
+            response: `I don't recognize "${intentData.customer}" as a current wholesale client. Would you like me to add them as a new customer?`,
+            action: 'confirm_new_customer',
+            pendingInvoice: {
+              customer: intentData.customer,
+              quantity: intentData.quantity,
+              unit: intentData.unit || 'lbs',
+              product: intentData.product
+            }
+          });
+        } else {
+          // Known customer - proceed with invoice
+          return res.json({
+            response: `Got it! Creating an invoice for ${intentData.customer} - ${intentData.quantity} ${intentData.unit || 'lbs'} of ${intentData.product}. Processing now...`,
+            action: 'create_invoice',
+            invoiceDetails: `${intentData.customer} ${intentData.quantity} ${intentData.unit || 'lbs'} ${intentData.product}`
+          });
+        }
+      } else {
+        // Missing info for invoice
+        return res.json({
+          response: intentData.friendlyResponse || "I'd be happy to create an invoice! Could you provide the customer name, quantity, and product?",
+          action: 'need_more_info'
+        });
+      }
+    }
+    
+    // For other intents, return the friendly response
+    res.json({ 
+      response: intentData.friendlyResponse || "How can I help you today?",
+      action: intentData.intent,
+      data: intentData
+    });
   } catch (error) {
     console.error('AI processing error:', error);
     res.status(500).json({ error: 'Failed to process', details: error.message });

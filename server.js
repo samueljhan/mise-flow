@@ -7,6 +7,9 @@ const WebSocket = require('ws');
 const crypto = require('crypto');
 const { TranscribeStreamingClient, StartStreamTranscriptionCommand } = require("@aws-sdk/client-transcribe-streaming");
 const { PassThrough } = require('stream');
+const PDFDocument = require('pdfkit');
+const fs = require('fs');
+const path = require('path');
 require('dotenv').config();
 
 const app = express();
@@ -18,6 +21,15 @@ const PORT = process.env.PORT || 8080;
 app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
+
+// Archives of Us Coffee Spreadsheet ID
+const SPREADSHEET_ID = '1D5JuAEpOC2ZXD2IAel1ImBXqFUrcMzFY-gXu4ocOMCw';
+
+// Create invoices directory if it doesn't exist
+const invoicesDir = path.join(__dirname, 'public', 'invoices');
+if (!fs.existsSync(invoicesDir)) {
+  fs.mkdirSync(invoicesDir, { recursive: true });
+}
 
 // Gemini AI configuration
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
@@ -305,6 +317,250 @@ app.post('/api/sheets/append', async (req, res) => {
     res.status(500).json({ error: 'Failed to append to spreadsheet', details: error.message });
   }
 });
+
+// ============ Invoice Generation ============
+
+app.post('/api/invoice/generate', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected. Please connect Google first.' });
+  }
+
+  try {
+    const { details } = req.body;
+    
+    if (!details) {
+      return res.status(400).json({ error: 'Invoice details required' });
+    }
+
+    // Parse the details (e.g., "CED, 100 lbs Archives Blend")
+    const parsed = parseInvoiceDetails(details);
+    if (!parsed) {
+      return res.status(400).json({ error: 'Could not parse invoice details. Please use format: "Customer, Quantity lbs Product"' });
+    }
+
+    const { customer, quantity, product } = parsed;
+    console.log(`📝 Generating invoice for: ${customer}, ${quantity} lbs ${product}`);
+
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    // Step 1: Get pricing from Wholesale Pricing sheet
+    const pricingResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Wholesale Pricing!A:B'
+    });
+    
+    const pricingRows = pricingResponse.data.values || [];
+    let unitPrice = null;
+    
+    for (const row of pricingRows) {
+      if (row[0] && row[0].toLowerCase().includes(product.toLowerCase())) {
+        unitPrice = parseFloat(row[1].replace(/[$,]/g, ''));
+        break;
+      }
+    }
+    
+    if (!unitPrice) {
+      return res.status(400).json({ error: `Product "${product}" not found in Wholesale Pricing sheet` });
+    }
+
+    console.log(`💰 Unit price for ${product}: $${unitPrice}/lb`);
+
+    // Step 2: Get last invoice number from Invoices sheet
+    const invoicesResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Invoices!A:D'
+    });
+    
+    const invoiceRows = invoicesResponse.data.values || [];
+    const customerPrefix = customer.substring(0, 3).toUpperCase();
+    let lastNumber = 999; // Start at 999 so first invoice is 1000
+    
+    for (const row of invoiceRows) {
+      if (row[1] && row[1].startsWith(`C-${customerPrefix}-`)) {
+        const num = parseInt(row[1].split('-')[2]);
+        if (num > lastNumber) {
+          lastNumber = num;
+        }
+      }
+    }
+    
+    const invoiceNumber = `C-${customerPrefix}-${lastNumber + 1}`;
+    console.log(`🧾 Generated invoice number: ${invoiceNumber}`);
+
+    // Step 3: Calculate totals
+    const total = quantity * unitPrice;
+    const today = new Date();
+    const dateStr = today.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+    const dueDateObj = new Date(today);
+    dueDateObj.setDate(dueDateObj.getDate() + 2); // Due in 2 days like your example
+    const dueDateStr = dueDateObj.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+
+    // Step 4: Generate PDF
+    const pdfFilename = `${invoiceNumber}.pdf`;
+    const pdfPath = path.join(invoicesDir, pdfFilename);
+    
+    await generateInvoicePDF({
+      invoiceNumber,
+      customer,
+      date: dateStr,
+      dueDate: dueDateStr,
+      items: [{
+        description: `${product} (units in lbs)`,
+        quantity,
+        unitPrice,
+        total
+      }],
+      subtotal: total,
+      total
+    }, pdfPath);
+
+    console.log(`📄 PDF generated: ${pdfPath}`);
+
+    // Step 5: Record in Invoices sheet
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Invoices!A:D',
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: {
+        values: [[dateStr, invoiceNumber, customer, `$${total.toFixed(2)}`]]
+      }
+    });
+
+    console.log(`✅ Invoice recorded in spreadsheet`);
+
+    // Return response
+    res.json({
+      success: true,
+      invoiceNumber,
+      customer,
+      date: dateStr,
+      dueDate: dueDateStr,
+      quantity,
+      product,
+      unitPrice,
+      total,
+      pdfUrl: `/invoices/${pdfFilename}`
+    });
+
+  } catch (error) {
+    console.error('Invoice generation error:', error);
+    res.status(500).json({ error: 'Failed to generate invoice', details: error.message });
+  }
+});
+
+// Parse invoice details from natural language
+function parseInvoiceDetails(details) {
+  // Pattern: "Customer, Quantity lbs Product" or "Customer, Quantity Product"
+  const patterns = [
+    /^([^,]+),?\s*(\d+)\s*(?:lbs?|pounds?)?\s+(.+)$/i,
+    /^([^,]+),?\s*(\d+)\s+(.+)$/i
+  ];
+  
+  for (const pattern of patterns) {
+    const match = details.match(pattern);
+    if (match) {
+      return {
+        customer: match[1].trim(),
+        quantity: parseInt(match[2]),
+        product: match[3].trim()
+      };
+    }
+  }
+  
+  return null;
+}
+
+// Generate PDF invoice
+async function generateInvoicePDF(data, outputPath) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 50 });
+    const writeStream = fs.createWriteStream(outputPath);
+    
+    doc.pipe(writeStream);
+
+    // Header
+    doc.fontSize(20).font('Helvetica-Bold').text('Archives Of Us', { align: 'left' });
+    doc.fontSize(10).font('Helvetica')
+      .text('555 N Spring Suite 201')
+      .text('Los Angeles, CA')
+      .text('424.313.2013');
+
+    // Invoice title
+    doc.moveDown(2);
+    doc.fontSize(24).font('Helvetica-Bold').text('Invoice', { align: 'right' });
+    doc.fontSize(10).font('Helvetica').text(`Submitted on ${data.date}`, { align: 'right' });
+
+    // Invoice details box
+    doc.moveDown(2);
+    const tableTop = doc.y;
+    
+    doc.fontSize(10).font('Helvetica-Bold');
+    doc.text('Invoice for', 50, tableTop);
+    doc.text('Payable to', 200, tableTop);
+    doc.text('Invoice #', 350, tableTop);
+    
+    doc.font('Helvetica');
+    doc.text(data.customer, 50, tableTop + 15);
+    doc.text('Archives Of Us Coffee Inc', 200, tableTop + 15);
+    doc.text(data.invoiceNumber, 350, tableTop + 15);
+
+    doc.font('Helvetica-Bold').text('Tracking #', 50, tableTop + 40);
+    doc.font('Helvetica-Bold').text('Due date', 350, tableTop + 40);
+    doc.font('Helvetica').text(data.dueDate, 350, tableTop + 55);
+
+    // Line items table
+    doc.moveDown(4);
+    const itemsTop = doc.y + 20;
+    
+    // Table header
+    doc.fillColor('#f0f0f0').rect(50, itemsTop, 500, 20).fill();
+    doc.fillColor('#000000').font('Helvetica-Bold').fontSize(10);
+    doc.text('Description', 55, itemsTop + 5);
+    doc.text('Qty', 280, itemsTop + 5);
+    doc.text('Unit price', 350, itemsTop + 5);
+    doc.text('Total price', 450, itemsTop + 5);
+
+    // Table rows
+    let rowY = itemsTop + 25;
+    doc.font('Helvetica');
+    
+    for (const item of data.items) {
+      doc.text(item.description, 55, rowY);
+      doc.text(item.quantity.toString(), 280, rowY);
+      doc.text(`$${item.unitPrice.toFixed(2)}`, 350, rowY);
+      doc.text(`$${item.total.toFixed(2)}`, 450, rowY);
+      rowY += 20;
+    }
+
+    // Bank info and totals
+    doc.moveDown(4);
+    const bankY = rowY + 30;
+    
+    doc.font('Helvetica-Bold').fontSize(9).text('Bank Information for Payment:', 50, bankY);
+    doc.font('Helvetica').fontSize(9)
+      .text('- Bank Name: CHASE BANK', 50, bankY + 15)
+      .text('- Account Number: 2906513172', 50, bankY + 28)
+      .text('- Routing Number: 322271627', 50, bankY + 41)
+      .text('- Account Holder Name: ARCHIVES OF US COFFEE INC', 50, bankY + 54);
+
+    // Totals on right side
+    doc.font('Helvetica-Bold').fontSize(10);
+    doc.text('Subtotal', 380, bankY);
+    doc.text(`$${data.subtotal.toFixed(2)}`, 450, bankY);
+    
+    doc.text('Adjustments', 380, bankY + 20);
+    
+    doc.fontSize(12);
+    doc.text(`$${data.total.toFixed(2)}`, 450, bankY + 45);
+
+    doc.end();
+
+    writeStream.on('finish', resolve);
+    writeStream.on('error', reject);
+  });
+}
 
 // ============ AI Processing ============
 

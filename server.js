@@ -392,7 +392,6 @@ app.post('/api/invoice/generate', async (req, res) => {
     });
     
     const pricingRows = pricingResponse.data.values || [];
-    let unitPrice = null;
     
     // Extract all table headers (customers) and products from the sheet
     const tableHeaders = [];

@@ -1,1005 +1,1006 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Mise Flow - Smart Inventory Assistant</title>
-  <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #1a1a1a;
-      min-height: 100vh;
-      color: #e0e0e0;
-    }
-
-    .header {
-      background: #1f1f1f;
-      padding: 20px 30px;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      border-bottom: 1px solid #3a3a3a;
-    }
-
-    .header-logo {
-      width: 48px;
-      height: 48px;
-      object-fit: contain;
-      flex-shrink: 0;
-      user-select: none;
-      -webkit-user-select: none;
-      pointer-events: none;
-      -webkit-user-drag: none;
-    }
-
-    .header-text {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      flex: 1;
-    }
-
-    .header-text h1 {
-      color: #b0b0b0;
-      font-size: 26px;
-      font-weight: 600;
-      margin: 0;
-      line-height: 1.1;
-    }
-
-    .header-text p {
-      opacity: 0.7;
-      font-size: 13px;
-      margin: 0;
-      line-height: 1.2;
-      color: #909090;
-    }
-
-    .status-badge {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      padding: 6px 12px;
-      background: #3a3a3a;
-      border-radius: 6px;
-      font-size: 12px;
-      cursor: pointer;
-      transition: all 0.2s;
-      color: #909090;
-    }
-
-    .status-badge:hover {
-      opacity: 0.8;
-    }
-
-    .status-badge.connected {
-      background: #1f3a2e;
-      color: #a0e0b0;
-    }
-
-    .status-badge.disconnected {
-      background: #3a3a3a;
-      color: #909090;
-    }
-
-    .main-container {
-      max-width: 1400px;
-      margin: 0 auto;
-      padding: 2rem;
-      display: grid;
-      grid-template-columns: 1fr 400px;
-      gap: 2rem;
-    }
-
-    .panel {
-      background: #2a2a2a;
-      border-radius: 16px;
-      border: 1px solid #3a3a3a;
-      overflow: hidden;
-    }
-
-    .panel-header {
-      padding: 1rem 1.5rem;
-      background: #242424;
-      border-bottom: 1px solid #3a3a3a;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .panel-header h2 {
-      font-size: 1rem;
-      font-weight: 500;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      color: #b0b0b0;
-    }
-
-    .panel-content {
-      padding: 1.5rem;
-    }
-
-    /* Dictation Panel */
-    .dictation-area {
-      min-height: 200px;
-      background: #333333;
-      border: 1px solid #404040;
-      border-radius: 12px;
-      padding: 1.5rem;
-      margin-bottom: 1rem;
-      font-size: 1.1rem;
-      line-height: 1.6;
-      color: #e0e0e0;
-    }
-
-    .dictation-area.empty {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #707070;
-      font-style: italic;
-    }
-
-    .partial-transcript {
-      color: #909090;
-      font-style: italic;
-    }
-
-    .controls {
-      display: flex;
-      gap: 1rem;
-      flex-wrap: wrap;
-    }
-
-    .btn {
-      padding: 0.75rem 1.5rem;
-      border-radius: 8px;
-      border: none;
-      font-size: 0.95rem;
-      font-weight: 500;
-      cursor: pointer;
-      transition: all 0.2s;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-
-    .btn-primary {
-      background: #333333;
-      border: 1px solid #404040;
-      color: #e0e0e0;
-    }
-
-    .btn-primary:hover {
-      background: #3a3a3a;
-      border-color: #505050;
-    }
-
-    .btn-primary.recording {
-      background: #dc3545;
-      border-color: #dc3545;
-      animation: pulse 1.5s infinite;
-    }
-
-    .btn-secondary {
-      background: #333333;
-      border: 1px solid #404040;
-      color: #e0e0e0;
-    }
-
-    .btn-secondary:hover {
-      background: #3a3a3a;
-      border-color: #505050;
-    }
-
-    .btn-success {
-      background: #28a745;
-      color: white;
-      border: none;
-    }
-
-    .btn-success:hover {
-      background: #218838;
-    }
-
-    .btn:disabled {
-      opacity: 0.5;
-      cursor: not-allowed;
-      transform: none !important;
-    }
-
-    @keyframes pulse {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(220, 53, 69, 0.4); }
-      50% { box-shadow: 0 0 0 10px rgba(220, 53, 69, 0); }
-    }
-
-    /* AI Response Panel */
-    .ai-response {
-      min-height: 150px;
-      background: rgba(40, 167, 69, 0.05);
-      border: 1px solid rgba(40, 167, 69, 0.2);
-      border-radius: 12px;
-      padding: 1.5rem;
-      margin-bottom: 1rem;
-      white-space: pre-wrap;
-      line-height: 1.6;
-    }
-
-    .ai-response.empty {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #707070;
-      font-style: italic;
-    }
-
-    .ai-response.loading {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .loader {
-      width: 40px;
-      height: 40px;
-      border: 3px solid rgba(40, 167, 69, 0.2);
-      border-top-color: #28a745;
-      border-radius: 50%;
-      animation: spin 1s linear infinite;
-    }
-
-    @keyframes spin {
-      to { transform: rotate(360deg); }
-    }
-
-    /* Sidebar */
-    .sidebar {
-      display: flex;
-      flex-direction: column;
-      gap: 1.5rem;
-    }
-
-    /* Quick Actions */
-    .quick-actions {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 0.75rem;
-    }
-
-    .action-btn {
-      padding: 1rem;
-      background: #333333;
-      border: 1px solid #404040;
-      border-radius: 12px;
-      color: #e0e0e0;
-      cursor: pointer;
-      transition: all 0.2s;
-      text-align: center;
-    }
-
-    .action-btn:hover {
-      background: #3a3a3a;
-      border-color: #505050;
-    }
-
-    .action-btn .icon {
-      font-size: 1.5rem;
-      margin-bottom: 0.5rem;
-    }
-
-    .action-btn .label {
-      font-size: 0.85rem;
-    }
-
-    /* Activity Log */
-    .activity-log {
-      max-height: 300px;
-      overflow-y: auto;
-    }
-
-    .activity-item {
-      padding: 0.75rem;
-      background: #333333;
-      border-radius: 8px;
-      margin-bottom: 0.5rem;
-      font-size: 0.85rem;
-    }
-
-    .activity-item .time {
-      color: #707070;
-      font-size: 0.75rem;
-    }
-
-    .activity-item .action {
-      color: #28a745;
-    }
-
-    /* Spreadsheet Config */
-    .config-input {
-      width: 100%;
-      padding: 0.75rem;
-      background: #333333;
-      border: 1px solid #404040;
-      border-radius: 8px;
-      color: #e0e0e0;
-      font-size: 0.9rem;
-      margin-bottom: 0.75rem;
-    }
-
-    .config-input:focus {
-      outline: none;
-      border-color: #505050;
-    }
-
-    .config-input::placeholder {
-      color: #707070;
-    }
-
-    /* Modal */
-    .modal-overlay {
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(0, 0, 0, 0.7);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 1000;
-      opacity: 0;
-      visibility: hidden;
-      transition: all 0.3s;
-    }
-
-    .modal-overlay.active {
-      opacity: 1;
-      visibility: visible;
-    }
-
-    .modal {
-      background: #2a2a2a;
-      border-radius: 16px;
-      border: 1px solid #404040;
-      padding: 2rem;
-      width: 90%;
-      max-width: 500px;
-      transform: translateY(20px);
-      transition: transform 0.3s;
-    }
-
-    .modal-overlay.active .modal {
-      transform: translateY(0);
-    }
-
-    .modal h3 {
-      margin-bottom: 1.5rem;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      color: #e0e0e0;
-    }
-
-    .modal-actions {
-      display: flex;
-      gap: 1rem;
-      margin-top: 1.5rem;
-    }
-
-    .modal-actions .btn {
-      flex: 1;
-    }
-
-    /* Toast notifications */
-    .toast-container {
-      position: fixed;
-      bottom: 2rem;
-      right: 2rem;
-      z-index: 1001;
-    }
-
-    .toast {
-      padding: 1rem 1.5rem;
-      background: #2a2a2a;
-      border: 1px solid #404040;
-      border-radius: 8px;
-      margin-top: 0.5rem;
-      animation: slideIn 0.3s ease;
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-    }
-
-    .toast.success {
-      border-color: rgba(40, 167, 69, 0.3);
-    }
-
-    .toast.error {
-      border-color: rgba(220, 53, 69, 0.3);
-    }
-
-    @keyframes slideIn {
-      from {
-        transform: translateX(100%);
-        opacity: 0;
-      }
-      to {
-        transform: translateX(0);
-        opacity: 1;
-      }
-    }
-
-    /* Responsive */
-    @media (max-width: 1024px) {
-      .main-container {
-        grid-template-columns: 1fr;
-      }
-    }
-
-    @media (max-width: 600px) {
-      .header {
-        padding: 15px;
-      }
-
-      .header-logo {
-        width: 42px;
-        height: 42px;
-      }
-
-      .header-text h1 {
-        font-size: 20px;
-      }
-
-      .header-text p {
-        font-size: 11px;
-      }
-
-      .main-container {
-        padding: 1rem;
-      }
-
-      .quick-actions {
-        grid-template-columns: 1fr;
-      }
-    }
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Mise Flow - Smart Inventory Assistant</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #1a1a1a;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: #2a2a2a;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+            max-width: 1000px;
+            width: 100%;
+            height: 90vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .header {
+            background: #1f1f1f;
+            color: #e0e0e0;
+            padding: 25px 30px;
+            border-radius: 20px 20px 0 0;
+            border-bottom: 1px solid #3a3a3a;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        
+        .header-logo {
+            width: 64px;
+            height: 64px;
+            object-fit: contain;
+            flex-shrink: 0;
+            user-select: none;
+            -webkit-user-select: none;
+            pointer-events: none;
+            -webkit-user-drag: none;
+        }
+        
+        .header-text {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            flex: 1;
+        }
+
+        .header h1 { 
+            color: #b0b0b0;
+            font-size: 26px;
+            font-weight: 600;
+            margin: 0;
+            line-height: 1.1;
+        }
+
+        .header p {
+            opacity: 0.7;
+            font-size: 13px;
+            margin: 0;
+            line-height: 1.2;
+            color: #909090;
+        }
+
+        .google-status {
+            font-size: 12px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .google-status.connected {
+            background: #1f3a2e;
+            color: #a0e0b0;
+        }
+
+        .google-status.disconnected {
+            background: #3a3a3a;
+            color: #909090;
+        }
+
+        .google-status:hover {
+            opacity: 0.8;
+        }
+
+        .microphone-status {
+            padding: 8px 30px;
+            background: #242424;
+            border-bottom: 1px solid #3a3a3a;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 12px;
+            color: #909090;
+        }
+
+        .mic-indicator {
+            width: 7px;
+            height: 7px;
+            border-radius: 50%;
+            background: #666;
+        }
+
+        .mic-indicator.connected {
+            background: #28a745;
+            animation: pulse-green 2s infinite;
+        }
+
+        .mic-indicator.recording {
+            background: #dc3545;
+            animation: pulse-red 1s infinite;
+        }
+
+        @keyframes pulse-green {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        @keyframes pulse-red {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.2); }
+        }
+
+        .chat-container {
+            flex: 1;
+            overflow-y: auto;
+            padding: 30px;
+            padding-bottom: 20px;
+            background: #2a2a2a;
+        }
+
+        .message {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 15px;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .message.user { flex-direction: row-reverse; }
+
+        .avatar {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: 14px;
+            flex-shrink: 0;
+        }
+
+        .user .avatar { background: #404040; color: #e0e0e0; }
+        .assistant .avatar { background: #353535; color: #b0b0b0; }
+
+        .message-content {
+            max-width: 70%;
+            padding: 12px 18px;
+            border-radius: 18px;
+            line-height: 1.5;
+            font-size: 14px;
+        }
+
+        .user .message-content {
+            background: #3a3a3a;
+            color: #e0e0e0;
+            border-radius: 18px 18px 4px 18px;
+        }
+
+        .assistant .message-content {
+            background: #333333;
+            color: #d0d0d0;
+            border: 1px solid #404040;
+            border-radius: 18px 18px 18px 4px;
+        }
+
+        .response-buttons {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+
+        .action-btn {
+            background: #404040;
+            color: #e0e0e0;
+            border: none;
+            padding: 7px 14px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            transition: all 0.3s;
+        }
+
+        .action-btn:hover { background: #505050; }
+        .action-btn.success { background: #28a745; }
+        .action-btn:disabled { 
+            background: #333; 
+            color: #666; 
+            cursor: not-allowed; 
+        }
+
+        /* Email Modal */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: #2a2a2a;
+            border-radius: 12px;
+            padding: 24px;
+            width: 90%;
+            max-width: 400px;
+            border: 1px solid #404040;
+        }
+
+        .modal h3 {
+            color: #e0e0e0;
+            margin-bottom: 16px;
+            font-size: 18px;
+        }
+
+        .modal input, .modal textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #404040;
+            border-radius: 8px;
+            background: #333;
+            color: #e0e0e0;
+            font-size: 14px;
+            margin-bottom: 12px;
+            font-family: inherit;
+        }
+
+        .modal textarea {
+            min-height: 120px;
+            resize: vertical;
+        }
+
+        .modal input:focus, .modal textarea:focus {
+            outline: none;
+            border-color: #505050;
+        }
+
+        .modal-buttons {
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+
+        .modal-btn {
+            padding: 10px 20px;
+            border-radius: 6px;
+            border: none;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .modal-btn.cancel {
+            background: #404040;
+            color: #e0e0e0;
+        }
+
+        .modal-btn.send {
+            background: #28a745;
+            color: white;
+        }
+
+        .modal-btn:hover {
+            opacity: 0.9;
+        }
+
+        /* Input container */
+        .input-container {
+            padding: 15px 20px 20px;
+            background: #242424;
+            border-top: 1px solid #3a3a3a;
+        }
+
+        .input-wrapper {
+            background: #3a3a3a;
+            border: 1px solid #4a4a4a;
+            border-radius: 28px;
+            padding: 8px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            transition: border-color 0.2s;
+        }
+
+        .input-wrapper:focus-within {
+            border-color: #606060;
+        }
+
+        #userInput {
+            flex: 1;
+            background: transparent;
+            border: none;
+            font-size: 15px;
+            color: #e0e0e0;
+            font-family: inherit;
+            resize: none;
+            outline: none;
+            line-height: 24px;
+            min-height: 24px;
+            max-height: 240px;
+            padding: 0;
+        }
+
+        #userInput::placeholder {
+            color: #707070;
+        }
+
+        .voice-btn {
+            background: #333333;
+            border: 1px solid #404040;
+            cursor: pointer;
+            padding: 0;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            transition: all 0.3s;
+            flex-shrink: 0;
+        }
+
+        .voice-btn:hover {
+            background: #3a3a3a;
+            border-color: #505050;
+        }
+
+        .voice-btn svg {
+            width: 20px;
+            height: 20px;
+            fill: none;
+            stroke: #d0d0d0;
+            stroke-width: 2;
+            stroke-linecap: round;
+            stroke-linejoin: round;
+        }
+
+        .voice-btn.recording {
+            background: #dc3545;
+            border-color: #dc3545;
+        }
+
+        .voice-btn.recording:hover {
+            background: #c82333;
+        }
+
+        .voice-btn.recording svg {
+            stroke: white;
+            animation: pulse-mic 1.5s infinite;
+        }
+
+        @keyframes pulse-mic {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        #sendBtn {
+            background: #333333;
+            border: 1px solid #404040;
+            color: #d0d0d0;
+            cursor: pointer;
+            padding: 0;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            transition: all 0.3s;
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #sendBtn:hover {
+            background: #3a3a3a;
+            border-color: #505050;
+        }
+
+        #sendBtn svg {
+            width: 20px;
+            height: 20px;
+            stroke: #d0d0d0;
+            stroke-width: 2.5;
+            fill: none;
+        }
+
+        .welcome-message {
+            text-align: center;
+            padding: 60px 20px;
+            color: #909090;
+        }
+
+        .welcome-message h2 {
+            font-size: 22px;
+            margin-bottom: 12px;
+            color: #b0b0b0;
+            font-weight: 500;
+        }
+
+        .example-prompts {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+            gap: 12px;
+            margin-top: 25px;
+        }
+
+        .example-prompt {
+            background: #333333;
+            padding: 14px;
+            border-radius: 12px;
+            border: 1px solid #404040;
+            cursor: pointer;
+            transition: all 0.2s;
+            text-align: left;
+        }
+
+        .example-prompt:hover {
+            border-color: #505050;
+            background: #363636;
+        }
+
+        .example-prompt strong {
+            display: block;
+            margin-bottom: 6px;
+            font-size: 13px;
+            color: #e0e0e0;
+        }
+
+        .example-prompt span {
+            font-size: 12px;
+            color: #808080;
+            line-height: 1.4;
+        }
+
+        /* Prevent body scroll */
+        html, body {
+            overflow: hidden;
+            position: fixed;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Mobile responsive */
+        @media (max-width: 768px) {
+            html, body {
+                margin: 0;
+                padding: 0;
+                overflow: hidden;
+                position: fixed;
+                width: 100%;
+                height: 100%;
+            }
+            
+            .container {
+                position: fixed;
+                top: 0;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                border-radius: 0;
+                height: 100vh;
+                height: 100dvh;
+                max-width: 100%;
+                width: 100%;
+                box-shadow: none;
+            }
+            
+            .header {
+                border-radius: 0;
+                padding: 12px 15px;
+            }
+
+            .header-logo {
+                width: 50px;
+                height: 50px;
+            }
+            
+            .header h1 {
+                font-size: 20px;
+            }
+            
+            .header p {
+                font-size: 11px;
+            }
+
+            .google-status {
+                font-size: 10px;
+                padding: 4px 8px;
+            }
+            
+            .microphone-status {
+                padding: 5px 15px;
+                font-size: 11px;
+            }
+            
+            .chat-container {
+                padding: 15px;
+            }
+            
+            .welcome-message {
+                padding: 20px 10px;
+            }
+            
+            .welcome-message h2 {
+                font-size: 18px;
+            }
+            
+            .example-prompts {
+                margin-top: 15px;
+                gap: 8px;
+                grid-template-columns: 1fr;
+            }
+            
+            .example-prompt {
+                padding: 10px;
+            }
+            
+            .example-prompt strong {
+                font-size: 12px;
+            }
+            
+            .input-container {
+                padding: 12px 15px 15px;
+            }
+            
+            .input-wrapper {
+                padding: 6px 12px;
+            }
+            
+            #userInput {
+                font-size: 14px;
+            }
+            
+            .voice-btn, #sendBtn {
+                width: 32px;
+                height: 32px;
+            }
+            
+            .voice-btn svg, #sendBtn svg {
+                width: 16px;
+                height: 16px;
+            }
+            
+            .message-content {
+                max-width: 85%;
+                font-size: 13px;
+                padding: 8px 12px;
+            }
+            
+            .avatar {
+                width: 28px;
+                height: 28px;
+                font-size: 11px;
+            }
+        }
+    </style>
 </head>
 <body>
-  <header class="header">
-    <img src="/images/logo.png" alt="Mise Flow Logo" class="header-logo" draggable="false">
-    <div class="header-text">
-      <h1>Mise Flow</h1>
-      <p>Voice-powered inventory assistant</p>
-    </div>
-    <div id="googleStatus" class="status-badge disconnected" onclick="handleGoogleAuth()">
-      <span id="googleIcon">🔗</span>
-      <span id="googleText">Connect Google</span>
-    </div>
-  </header>
-
-  <main class="main-container">
-    <div class="content">
-      <!-- Dictation Panel -->
-      <div class="panel">
-        <div class="panel-header">
-          <h2>🎤 Voice Input</h2>
-          <span id="recordingStatus" style="color: #707070; font-size: 0.85rem;">Ready</span>
-        </div>
-        <div class="panel-content">
-          <div id="dictationArea" class="dictation-area empty">
-            Press the microphone button and speak...
-          </div>
-          <div class="controls">
-            <button id="recordBtn" class="btn btn-primary" onclick="toggleRecording()">
-              🎙️ Start Dictation
-            </button>
-            <button id="processBtn" class="btn btn-success" onclick="processText()" disabled>
-              ✨ Process with AI
-            </button>
-            <button class="btn btn-secondary" onclick="clearDictation()">
-              🗑️ Clear
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- AI Response Panel -->
-      <div class="panel" style="margin-top: 1.5rem;">
-        <div class="panel-header">
-          <h2>🤖 AI Assistant</h2>
-        </div>
-        <div class="panel-content">
-          <div id="aiResponse" class="ai-response empty">
-            AI response will appear here after processing...
-          </div>
-          <div class="controls">
-            <button id="emailBtn" class="btn btn-secondary" onclick="openEmailModal()" disabled>
-              📧 Send Email
-            </button>
-            <button id="sheetBtn" class="btn btn-secondary" onclick="updateSheet()" disabled>
-              📊 Update Sheet
-            </button>
-            <button class="btn btn-secondary" onclick="copyResponse()">
-              📋 Copy
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Sidebar -->
-    <div class="sidebar">
-      <!-- Quick Actions -->
-      <div class="panel">
-        <div class="panel-header">
-          <h2>⚡ Quick Actions</h2>
-        </div>
-        <div class="panel-content">
-          <div class="quick-actions">
-            <button class="action-btn" onclick="quickAction('inventory check')">
-              <div class="icon">📋</div>
-              <div class="label">Check Stock</div>
-            </button>
-            <button class="action-btn" onclick="quickAction('low stock report')">
-              <div class="icon">⚠️</div>
-              <div class="label">Low Stock</div>
-            </button>
-            <button class="action-btn" onclick="quickAction('daily summary')">
-              <div class="icon">📊</div>
-              <div class="label">Daily Summary</div>
-            </button>
-            <button class="action-btn" onclick="quickAction('supplier order')">
-              <div class="icon">📦</div>
-              <div class="label">Order Stock</div>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Spreadsheet Config -->
-      <div class="panel">
-        <div class="panel-header">
-          <h2>📊 Spreadsheet</h2>
-        </div>
-        <div class="panel-content">
-          <input type="text" id="spreadsheetId" class="config-input" placeholder="Spreadsheet ID (from URL)">
-          <input type="text" id="sheetRange" class="config-input" placeholder="Range (e.g., Inventory!A:E)" value="Inventory!A:E">
-          <button class="btn btn-secondary" style="width: 100%;" onclick="testSheetConnection()">
-            🔄 Test Connection
-          </button>
-        </div>
-      </div>
-
-      <!-- Activity Log -->
-      <div class="panel">
-        <div class="panel-header">
-          <h2>📝 Activity</h2>
-        </div>
-        <div class="panel-content">
-          <div id="activityLog" class="activity-log">
-            <div class="activity-item">
-              <div class="time">--</div>
-              <div>Waiting for activity...</div>
+    <div class="container">
+        <div class="header">
+            <img src="/images/logo.png" alt="Mise Flow Logo" class="header-logo" draggable="false">
+            <div class="header-text">
+                <h1>Mise Flow</h1>
+                <p>Voice-powered inventory assistant</p>
             </div>
-          </div>
+            <div class="google-status disconnected" id="googleStatus" onclick="handleGoogleAuth()">
+                🔗 Connect Google
+            </div>
         </div>
-      </div>
+
+        <div class="microphone-status">
+            <div class="mic-indicator" id="micIndicator"></div>
+            <span id="micStatus">Ready</span>
+        </div>
+
+        <div class="chat-container" id="chatContainer">
+            <div class="welcome-message">
+                <h2>Welcome to Mise Flow</h2>
+                <p>Voice-powered inventory management for your business</p>
+                
+                <div class="example-prompts">
+                    <div class="example-prompt" onclick="useExample(this)">
+                        <strong>📋 Check Stock</strong>
+                        <span>"What's our current inventory of oat milk and espresso beans?"</span>
+                    </div>
+                    <div class="example-prompt" onclick="useExample(this)">
+                        <strong>⚠️ Low Stock Alert</strong>
+                        <span>"Show me items that are running low and need to be reordered"</span>
+                    </div>
+                    <div class="example-prompt" onclick="useExample(this)">
+                        <strong>📦 Log Delivery</strong>
+                        <span>"We just received 24 gallons of whole milk and 10 bags of dark roast"</span>
+                    </div>
+                    <div class="example-prompt" onclick="useExample(this)">
+                        <strong>📊 Daily Summary</strong>
+                        <span>"Give me a summary of today's inventory changes"</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="input-container">
+            <div class="input-wrapper">
+                <textarea id="userInput" placeholder="Speak or type your inventory request..." rows="1"></textarea>
+                <button class="voice-btn" id="voiceBtn" title="Start recording">
+                    <svg viewBox="0 0 24 24">
+                        <path d="M12 1a4 4 0 0 1 4 4v7a4 4 0 1 1-8 0V5a4 4 0 0 1 4-4z"/>
+                        <path d="M8 11v1a4 4 0 1 0 8 0v-1M12 16v5M8 21h8"/>
+                    </svg>
+                </button>
+                <button id="sendBtn" title="Send message">
+                    <svg viewBox="0 0 24 24">
+                        <path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.59 5.58L20 12l-8-8z" fill="#d0d0d0" stroke="none"/>
+                    </svg>
+                </button>
+            </div>
+        </div>
     </div>
-  </main>
 
-  <!-- Email Modal -->
-  <div id="emailModal" class="modal-overlay">
-    <div class="modal">
-      <h3>📧 Send Email</h3>
-      <input type="email" id="emailTo" class="config-input" placeholder="Recipient email">
-      <input type="text" id="emailSubject" class="config-input" placeholder="Subject">
-      <textarea id="emailBody" class="config-input" style="min-height: 150px; resize: vertical;" placeholder="Email body..."></textarea>
-      <div class="modal-actions">
-        <button class="btn btn-secondary" onclick="closeEmailModal()">Cancel</button>
-        <button class="btn btn-success" onclick="sendEmail()">📤 Send</button>
-      </div>
+    <!-- Email Modal -->
+    <div class="modal-overlay" id="emailModal">
+        <div class="modal">
+            <h3>📧 Send Email</h3>
+            <input type="email" id="emailTo" placeholder="Recipient email">
+            <input type="text" id="emailSubject" placeholder="Subject" value="Inventory Update">
+            <textarea id="emailBody" placeholder="Email content..."></textarea>
+            <div class="modal-buttons">
+                <button class="modal-btn cancel" onclick="closeEmailModal()">Cancel</button>
+                <button class="modal-btn send" id="sendEmailBtn" onclick="sendEmail()">Send</button>
+            </div>
+        </div>
     </div>
-  </div>
 
-  <!-- Toast Container -->
-  <div id="toastContainer" class="toast-container"></div>
+    <script>
+        const chatContainer = document.getElementById('chatContainer');
+        const userInput = document.getElementById('userInput');
+        const sendBtn = document.getElementById('sendBtn');
+        const voiceBtn = document.getElementById('voiceBtn');
+        const micIndicator = document.getElementById('micIndicator');
+        const micStatus = document.getElementById('micStatus');
+        const googleStatusEl = document.getElementById('googleStatus');
+        
+        let ws = null;
+        let audioContext = null;
+        let mediaStream = null;
+        let processor = null;
+        let isRecording = false;
+        let googleConnected = false;
+        let currentResponseText = '';
 
-  <script>
-    // State
-    let isRecording = false;
-    let ws = null;
-    let mediaStream = null;
-    let audioContext = null;
-    let processor = null;
-    let finalTranscript = '';
-    let partialTranscript = '';
-    let currentAiResponse = '';
-    let googleConnected = false;
-
-    // Initialize
-    document.addEventListener('DOMContentLoaded', () => {
-      checkGoogleStatus();
-      handleUrlParams();
-    });
-
-    // Check URL params for OAuth callback
-    function handleUrlParams() {
-      const params = new URLSearchParams(window.location.search);
-      if (params.get('google') === 'connected') {
-        showToast('✅ Google connected successfully!', 'success');
-        window.history.replaceState({}, '', '/');
-      } else if (params.get('google') === 'error') {
-        showToast('❌ Google connection failed', 'error');
-        window.history.replaceState({}, '', '/');
-      }
-    }
-
-    // Google Auth
-    async function checkGoogleStatus() {
-      try {
-        const res = await fetch('/api/google/status');
-        const data = await res.json();
-        googleConnected = data.connected;
-        updateGoogleUI();
-      } catch (e) {
-        console.error('Failed to check Google status:', e);
-      }
-    }
-
-    function updateGoogleUI() {
-      const badge = document.getElementById('googleStatus');
-      const icon = document.getElementById('googleIcon');
-      const text = document.getElementById('googleText');
-      const emailBtn = document.getElementById('emailBtn');
-      const sheetBtn = document.getElementById('sheetBtn');
-
-      if (googleConnected) {
-        badge.className = 'status-badge connected';
-        icon.textContent = '✅';
-        text.textContent = 'Google Connected';
-        emailBtn.disabled = false;
-        sheetBtn.disabled = false;
-      } else {
-        badge.className = 'status-badge disconnected';
-        icon.textContent = '🔗';
-        text.textContent = 'Connect Google';
-        emailBtn.disabled = true;
-        sheetBtn.disabled = true;
-      }
-    }
-
-    function handleGoogleAuth() {
-      if (googleConnected) {
-        if (confirm('Disconnect Google account?')) {
-          fetch('/api/google/disconnect').then(() => {
-            googleConnected = false;
-            updateGoogleUI();
-            showToast('Google disconnected', 'success');
-          });
-        }
-      } else {
-        window.location.href = '/auth/google';
-      }
-    }
-
-    // Recording
-    async function toggleRecording() {
-      if (isRecording) {
-        stopRecording();
-      } else {
-        await startRecording();
-      }
-    }
-
-    async function startRecording() {
-      try {
-        mediaStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            channelCount: 1,
-            sampleRate: 16000,
-            echoCancellation: true,
-            noiseSuppression: true
-          }
-        });
-
-        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = new WebSocket(`${wsProtocol}//${window.location.host}`);
-
-        ws.onopen = () => {
-          console.log('WebSocket connected');
-          setupAudioProcessing();
-          isRecording = true;
-          updateRecordingUI();
-        };
-
-        ws.onmessage = (event) => {
-          const data = JSON.parse(event.data);
-          if (data.type === 'transcript') {
-            if (data.is_final) {
-              finalTranscript += data.text + ' ';
-              partialTranscript = '';
-            } else {
-              partialTranscript = data.text;
+        // Check Google status on load
+        async function checkGoogleStatus() {
+            try {
+                const response = await fetch('/api/google/status');
+                const data = await response.json();
+                googleConnected = data.connected;
+                updateGoogleUI();
+            } catch (error) {
+                console.error('Error checking Google status:', error);
             }
-            updateDictationArea();
-          } else if (data.type === 'error') {
-            showToast('Transcription error: ' + data.message, 'error');
-          }
-        };
-
-        ws.onerror = (err) => {
-          console.error('WebSocket error:', err);
-          stopRecording();
-        };
-
-        ws.onclose = () => {
-          console.log('WebSocket closed');
-        };
-
-      } catch (err) {
-        console.error('Microphone error:', err);
-        showToast('Could not access microphone', 'error');
-      }
-    }
-
-    function setupAudioProcessing() {
-      audioContext = new AudioContext({ sampleRate: 16000 });
-      const source = audioContext.createMediaStreamSource(mediaStream);
-      processor = audioContext.createScriptProcessor(4096, 1, 1);
-
-      processor.onaudioprocess = (e) => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          const inputData = e.inputBuffer.getChannelData(0);
-          const pcmData = new Int16Array(inputData.length);
-          for (let i = 0; i < inputData.length; i++) {
-            pcmData[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
-          }
-          ws.send(pcmData.buffer);
         }
-      };
 
-      source.connect(processor);
-      processor.connect(audioContext.destination);
-    }
+        function updateGoogleUI() {
+            if (googleConnected) {
+                googleStatusEl.textContent = '✅ Google Connected';
+                googleStatusEl.classList.remove('disconnected');
+                googleStatusEl.classList.add('connected');
+            } else {
+                googleStatusEl.textContent = '🔗 Connect Google';
+                googleStatusEl.classList.remove('connected');
+                googleStatusEl.classList.add('disconnected');
+            }
+        }
 
-    function stopRecording() {
-      isRecording = false;
-      
-      if (processor) {
-        processor.disconnect();
-        processor = null;
-      }
-      if (audioContext) {
-        audioContext.close();
-        audioContext = null;
-      }
-      if (mediaStream) {
-        mediaStream.getTracks().forEach(track => track.stop());
-        mediaStream = null;
-      }
-      if (ws) {
-        ws.close();
-        ws = null;
-      }
+        function handleGoogleAuth() {
+            if (googleConnected) {
+                if (confirm('Disconnect Google?')) {
+                    fetch('/api/google/disconnect')
+                        .then(() => {
+                            googleConnected = false;
+                            updateGoogleUI();
+                        });
+                }
+            } else {
+                window.location.href = '/auth/google';
+            }
+        }
 
-      updateRecordingUI();
-      
-      if (finalTranscript.trim()) {
-        document.getElementById('processBtn').disabled = false;
-      }
-    }
+        // Check for connection on page load
+        checkGoogleStatus();
 
-    function updateRecordingUI() {
-      const btn = document.getElementById('recordBtn');
-      const status = document.getElementById('recordingStatus');
+        // Check URL params for connection status
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('google') === 'connected') {
+            googleConnected = true;
+            updateGoogleUI();
+            window.history.replaceState({}, document.title, window.location.pathname);
+        }
 
-      if (isRecording) {
-        btn.innerHTML = '⏹️ Stop';
-        btn.classList.add('recording');
-        status.textContent = '🔴 Recording...';
-        status.style.color = '#dc3545';
-      } else {
-        btn.innerHTML = '🎙️ Start Dictation';
-        btn.classList.remove('recording');
-        status.textContent = 'Ready';
-        status.style.color = '#707070';
-      }
-    }
-
-    function updateDictationArea() {
-      const area = document.getElementById('dictationArea');
-      area.classList.remove('empty');
-      
-      let html = finalTranscript;
-      if (partialTranscript) {
-        html += `<span class="partial-transcript">${partialTranscript}</span>`;
-      }
-      
-      area.innerHTML = html || '<span style="color: #707070; font-style: italic;">Press the microphone button and speak...</span>';
-      
-      if (!html) {
-        area.classList.add('empty');
-      }
-    }
-
-    function clearDictation() {
-      finalTranscript = '';
-      partialTranscript = '';
-      updateDictationArea();
-      document.getElementById('dictationArea').classList.add('empty');
-      document.getElementById('dictationArea').innerHTML = 'Press the microphone button and speak...';
-      document.getElementById('processBtn').disabled = true;
-    }
-
-    // AI Processing
-    async function processText() {
-      const text = finalTranscript.trim();
-      if (!text) return;
-
-      const responseArea = document.getElementById('aiResponse');
-      responseArea.classList.remove('empty');
-      responseArea.classList.add('loading');
-      responseArea.innerHTML = '<div class="loader"></div>';
-
-      try {
-        const res = await fetch('/api/process', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-            text,
-            context: 'Coffee shop inventory management'
-          })
+        // Auto-resize textarea
+        userInput.addEventListener('input', function() {
+            this.style.height = 'auto';
+            this.style.height = Math.min(this.scrollHeight, 240) + 'px';
         });
 
-        const data = await res.json();
-        currentAiResponse = data.response;
-        
-        responseArea.classList.remove('loading');
-        responseArea.innerHTML = currentAiResponse;
-        
-        addActivity('Processed voice input', text.substring(0, 50) + '...');
-        
-      } catch (err) {
-        console.error('Processing error:', err);
-        responseArea.classList.remove('loading');
-        responseArea.innerHTML = 'Error processing request. Please try again.';
-        showToast('Processing failed', 'error');
-      }
-    }
+        function useExample(element) {
+            const text = element.querySelector('span').textContent.replace(/['"]/g, '');
+            userInput.value = text;
+            userInput.style.height = 'auto';
+            userInput.style.height = userInput.scrollHeight + 'px';
+            userInput.focus();
+        }
 
-    function quickAction(action) {
-      finalTranscript = action;
-      updateDictationArea();
-      document.getElementById('processBtn').disabled = false;
-      processText();
-    }
-
-    // Email
-    function openEmailModal() {
-      document.getElementById('emailBody').value = currentAiResponse || '';
-      document.getElementById('emailModal').classList.add('active');
-    }
-
-    function closeEmailModal() {
-      document.getElementById('emailModal').classList.remove('active');
-    }
-
-    async function sendEmail() {
-      const to = document.getElementById('emailTo').value;
-      const subject = document.getElementById('emailSubject').value;
-      const body = document.getElementById('emailBody').value;
-
-      if (!to || !subject || !body) {
-        showToast('Please fill all fields', 'error');
-        return;
-      }
-
-      try {
-        const res = await fetch('/api/gmail/send', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ to, subject, body })
+        voiceBtn.addEventListener('click', () => {
+            if (isRecording) {
+                stopRecording();
+            } else {
+                startRecording();
+            }
         });
 
-        const data = await res.json();
-        
-        if (data.success) {
-          showToast('Email sent successfully!', 'success');
-          closeEmailModal();
-          addActivity('Email sent', `To: ${to}`);
-        } else {
-          showToast('Failed to send email: ' + data.error, 'error');
+        async function startRecording() {
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        channelCount: 1,
+                        sampleRate: 16000,
+                        echoCancellation: true,
+                        noiseSuppression: true
+                    }
+                });
+
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                ws = new WebSocket(`${wsProtocol}//${window.location.host}`);
+
+                ws.onopen = () => {
+                    audioContext = new AudioContext({ sampleRate: 16000 });
+                    const source = audioContext.createMediaStreamSource(mediaStream);
+                    processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+                    processor.onaudioprocess = (e) => {
+                        if (ws && ws.readyState === WebSocket.OPEN) {
+                            const inputData = e.inputBuffer.getChannelData(0);
+                            const pcmData = new Int16Array(inputData.length);
+                            for (let i = 0; i < inputData.length; i++) {
+                                pcmData[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
+                            }
+                            ws.send(pcmData.buffer);
+                        }
+                    };
+
+                    source.connect(processor);
+                    processor.connect(audioContext.destination);
+
+                    isRecording = true;
+                    voiceBtn.classList.add('recording');
+                    micIndicator.classList.add('recording');
+                    micStatus.textContent = '🔴 Recording...';
+                };
+
+                ws.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'transcript' && data.is_final) {
+                        const currentText = userInput.value;
+                        userInput.value = currentText + (currentText ? ' ' : '') + data.text;
+                        userInput.style.height = 'auto';
+                        userInput.style.height = Math.min(userInput.scrollHeight, 240) + 'px';
+                    }
+                };
+
+                ws.onerror = () => stopRecording();
+
+            } catch (error) {
+                console.error('Recording error:', error);
+                alert('Could not access microphone');
+            }
         }
-      } catch (err) {
-        showToast('Email error: ' + err.message, 'error');
-      }
-    }
 
-    // Sheets
-    async function testSheetConnection() {
-      const spreadsheetId = document.getElementById('spreadsheetId').value;
-      const range = document.getElementById('sheetRange').value;
+        function stopRecording() {
+            isRecording = false;
+            voiceBtn.classList.remove('recording');
+            micIndicator.classList.remove('recording');
+            micStatus.textContent = 'Ready';
 
-      if (!spreadsheetId) {
-        showToast('Enter a spreadsheet ID', 'error');
-        return;
-      }
+            if (processor) processor.disconnect();
+            if (audioContext) audioContext.close();
+            if (mediaStream) mediaStream.getTracks().forEach(track => track.stop());
+            if (ws) ws.close();
 
-      try {
-        const res = await fetch(`/api/sheets/read?spreadsheetId=${spreadsheetId}&range=${encodeURIComponent(range)}`);
-        const data = await res.json();
-
-        if (data.values) {
-          showToast(`Connected! Found ${data.values.length} rows`, 'success');
-          addActivity('Sheet connected', `${data.values.length} rows found`);
-        } else {
-          showToast('Connected but no data found', 'success');
+            processor = null;
+            audioContext = null;
+            mediaStream = null;
+            ws = null;
         }
-      } catch (err) {
-        showToast('Sheet connection failed', 'error');
-      }
-    }
 
-    async function updateSheet() {
-      const spreadsheetId = document.getElementById('spreadsheetId').value;
-      
-      if (!spreadsheetId) {
-        showToast('Configure spreadsheet ID first', 'error');
-        return;
-      }
+        function addMessage(text, isUser) {
+            const welcomeMsg = chatContainer.querySelector('.welcome-message');
+            if (welcomeMsg) welcomeMsg.remove();
 
-      // This would be enhanced to parse AI response for inventory updates
-      showToast('Sheet update feature - configure based on AI response', 'success');
-    }
+            const messageDiv = document.createElement('div');
+            messageDiv.className = 'message ' + (isUser ? 'user' : 'assistant');
+            
+            const avatar = document.createElement('div');
+            avatar.className = 'avatar';
+            avatar.textContent = isUser ? 'Y' : 'MF';
+            
+            const content = document.createElement('div');
+            content.className = 'message-content';
+            content.innerHTML = text;
+            
+            messageDiv.appendChild(avatar);
+            messageDiv.appendChild(content);
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
 
-    function copyResponse() {
-      if (currentAiResponse) {
-        navigator.clipboard.writeText(currentAiResponse);
-        showToast('Copied to clipboard!', 'success');
-      }
-    }
+        async function processMessage(message) {
+            try {
+                const response = await fetch('/api/process', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: message, context: 'inventory management' })
+                });
 
-    // Activity Log
-    function addActivity(action, detail) {
-      const log = document.getElementById('activityLog');
-      const time = new Date().toLocaleTimeString();
-      
-      const item = document.createElement('div');
-      item.className = 'activity-item';
-      item.innerHTML = `
-        <div class="time">${time}</div>
-        <div><span class="action">${action}</span> - ${detail}</div>
-      `;
-      
-      log.insertBefore(item, log.firstChild);
-      
-      // Keep only last 10 items
-      while (log.children.length > 10) {
-        log.removeChild(log.lastChild);
-      }
-    }
+                if (!response.ok) throw new Error('Processing failed');
+                const data = await response.json();
+                return formatResponseHTML(data.response);
+                
+            } catch (error) {
+                console.error('Error:', error);
+                return '<p style="color: #ff6b6b;">⚠️ Error processing request.</p>';
+            }
+        }
 
-    // Toast notifications
-    function showToast(message, type = 'success') {
-      const container = document.getElementById('toastContainer');
-      const toast = document.createElement('div');
-      toast.className = `toast ${type}`;
-      toast.innerHTML = `<span>${type === 'success' ? '✓' : '✗'}</span> ${message}`;
-      
-      container.appendChild(toast);
-      
-      setTimeout(() => {
-        toast.style.animation = 'slideIn 0.3s ease reverse';
-        setTimeout(() => toast.remove(), 300);
-      }, 3000);
-    }
-  </script>
+        function formatResponseHTML(responseText) {
+            currentResponseText = responseText;
+            
+            let html = '<div style="white-space: pre-wrap;">' + responseText + '</div>';
+            
+            html += '<div class="response-buttons">';
+            html += '<button class="action-btn" onclick="copyResponse(this)">📋 Copy</button>';
+            html += '<button class="action-btn" onclick="openEmailModal()" ' + (googleConnected ? '' : 'disabled title="Connect Google first"') + '>📧 Email</button>';
+            html += '<button class="action-btn" onclick="updateSheet()" ' + (googleConnected ? '' : 'disabled title="Connect Google first"') + '>📊 Update Sheet</button>';
+            html += '</div>';
+            
+            return html;
+        }
+
+        function copyResponse(button) {
+            navigator.clipboard.writeText(currentResponseText).then(() => {
+                button.textContent = '✅ Copied!';
+                button.classList.add('success');
+                setTimeout(() => {
+                    button.textContent = '📋 Copy';
+                    button.classList.remove('success');
+                }, 2000);
+            });
+        }
+
+        function openEmailModal() {
+            if (!googleConnected) {
+                alert('Please connect Google first.');
+                return;
+            }
+            document.getElementById('emailBody').value = currentResponseText;
+            document.getElementById('emailModal').classList.add('active');
+        }
+
+        function closeEmailModal() {
+            document.getElementById('emailModal').classList.remove('active');
+        }
+
+        async function sendEmail() {
+            const to = document.getElementById('emailTo').value.trim();
+            const subject = document.getElementById('emailSubject').value.trim();
+            const body = document.getElementById('emailBody').value;
+            const btn = document.getElementById('sendEmailBtn');
+            
+            if (!to) {
+                alert('Please enter a recipient email.');
+                return;
+            }
+            
+            btn.disabled = true;
+            btn.textContent = 'Sending...';
+            
+            try {
+                const response = await fetch('/api/gmail/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ to, subject, body })
+                });
+                
+                if (response.ok) {
+                    alert('Email sent!');
+                    closeEmailModal();
+                } else {
+                    const data = await response.json();
+                    alert('Failed: ' + (data.error || 'Unknown error'));
+                }
+            } catch (error) {
+                alert('Error sending email');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Send';
+            }
+        }
+
+        async function updateSheet() {
+            if (!googleConnected) {
+                alert('Please connect Google first.');
+                return;
+            }
+            alert('Sheet update feature - coming soon!');
+        }
+
+        function sendMessage() {
+            if (isRecording) stopRecording();
+            
+            const message = userInput.value.trim();
+            if (!message) return;
+
+            addMessage(message, true);
+            
+            userInput.value = '';
+            userInput.style.height = 'auto';
+
+            addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
+
+            processMessage(message).then(response => {
+                const messages = chatContainer.querySelectorAll('.message');
+                messages[messages.length - 1].remove();
+                addMessage(response, false);
+            });
+        }
+
+        sendBtn.addEventListener('click', sendMessage);
+        userInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // Close modal on overlay click
+        document.getElementById('emailModal').addEventListener('click', function(e) {
+            if (e.target === this) closeEmailModal();
+        });
+
+        // Close modal on Escape
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') closeEmailModal();
+        });
+
+        // Detect microphone
+        navigator.mediaDevices.enumerateDevices().then(devices => {
+            const hasAudio = devices.some(d => d.kind === 'audioinput');
+            if (hasAudio) {
+                micIndicator.classList.add('connected');
+                micStatus.textContent = 'Microphone ready';
+            }
+        });
+    </script>
 </body>
 </html>

@@ -636,6 +636,10 @@
                         <strong>📊 Daily Summary</strong>
                         <span>"Give me a summary of today's inventory changes"</span>
                     </div>
+                    <div class="example-prompt" onclick="startInvoice()">
+                        <strong>🧾 Generate Invoice</strong>
+                        <span>Create a new invoice for a wholesale customer</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -749,6 +753,22 @@
             userInput.value = text;
             userInput.style.height = 'auto';
             userInput.style.height = userInput.scrollHeight + 'px';
+            userInput.focus();
+        }
+
+        let pendingInvoice = false;
+
+        function startInvoice() {
+            // Clear welcome message
+            const welcomeMsg = chatContainer.querySelector('.welcome-message');
+            if (welcomeMsg) welcomeMsg.remove();
+
+            // Add assistant message asking for details
+            addMessage('🧾 <strong>Generate Invoice</strong><br><br>Customer and order details?<br><br><em style="color:#707070;">Example: "CED, 100 lbs Archives Blend"</em>', false);
+            
+            // Set flag for next message
+            pendingInvoice = true;
+            userInput.placeholder = 'Enter customer name, quantity, and product...';
             userInput.focus();
         }
 
@@ -965,14 +985,77 @@
             
             userInput.value = '';
             userInput.style.height = 'auto';
+            userInput.placeholder = 'Speak or type your inventory request...';
 
             addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
 
-            processMessage(message).then(response => {
-                const messages = chatContainer.querySelectorAll('.message');
-                messages[messages.length - 1].remove();
-                addMessage(response, false);
-            });
+            if (pendingInvoice) {
+                pendingInvoice = false;
+                generateInvoice(message).then(response => {
+                    const messages = chatContainer.querySelectorAll('.message');
+                    messages[messages.length - 1].remove();
+                    addMessage(response, false);
+                });
+            } else {
+                processMessage(message).then(response => {
+                    const messages = chatContainer.querySelectorAll('.message');
+                    messages[messages.length - 1].remove();
+                    addMessage(response, false);
+                });
+            }
+        }
+
+        async function generateInvoice(details) {
+            try {
+                const response = await fetch('/api/invoice/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ details })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Invoice generation failed');
+                }
+                
+                const data = await response.json();
+                return formatInvoiceResponse(data);
+                
+            } catch (error) {
+                console.error('Error:', error);
+                return '<p style="color: #ff6b6b;">⚠️ Error: ' + error.message + '</p>';
+            }
+        }
+
+        function formatInvoiceResponse(data) {
+            let html = '<div>';
+            html += '<strong>🧾 Invoice Generated!</strong><br><br>';
+            html += '<strong>Invoice #:</strong> ' + data.invoiceNumber + '<br>';
+            html += '<strong>Customer:</strong> ' + data.customer + '<br>';
+            html += '<strong>Date:</strong> ' + data.date + '<br>';
+            html += '<strong>Due Date:</strong> ' + data.dueDate + '<br>';
+            html += '<strong>Total:</strong> $' + data.total.toFixed(2) + '<br><br>';
+            html += '</div>';
+            
+            html += '<div class="response-buttons">';
+            html += '<a href="' + data.pdfUrl + '" download="' + data.invoiceNumber + '.pdf" class="action-btn" style="text-decoration:none;">📥 Download PDF</a>';
+            html += '<button class="action-btn" onclick="openEmailModalWithInvoice(\'' + data.pdfUrl + '\', \'' + data.invoiceNumber + '\')">📧 Email Invoice</button>';
+            html += '</div>';
+            
+            return html;
+        }
+
+        function openEmailModalWithInvoice(pdfUrl, invoiceNumber) {
+            if (!googleConnected) {
+                alert('Please connect Google first.');
+                return;
+            }
+            document.getElementById('emailSubject').value = 'Invoice ' + invoiceNumber + ' - Archives of Us Coffee';
+            document.getElementById('emailBody').value = 'Please find attached invoice ' + invoiceNumber + '.\\n\\nThank you for your business!\\n\\nArchives of Us Coffee';
+            document.getElementById('emailModal').classList.add('active');
+            // Store PDF URL for sending
+            document.getElementById('emailModal').dataset.pdfUrl = pdfUrl;
+            document.getElementById('emailModal').dataset.invoiceNumber = invoiceNumber;
         }
 
         sendBtn.addEventListener('click', sendMessage);

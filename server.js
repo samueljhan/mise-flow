@@ -509,13 +509,44 @@ Rules:
       console.log(`📋 Archives of Us - using At-Cost pricing (column H)`);
       priceColumn = 7; // Column H (index 7)
       
-      // Find At-Cost table
+      // Find At-Cost table - it's in column B
       for (let i = 0; i < pricingRows.length; i++) {
-        const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
-        if (cellB.includes('at-cost')) {
+        const cellB = (pricingRows[i][1] || '').toString().trim();
+        if (cellB.toLowerCase() === 'at-cost') {
           targetTable = 'At-Cost';
           tableStartRow = i;
+          console.log(`✅ Found At-Cost table at row ${i + 1}`);
           break;
+        }
+      }
+      
+      // Search for product in At-Cost table
+      if (tableStartRow !== -1) {
+        for (let i = tableStartRow + 1; i < pricingRows.length; i++) {
+          const row = pricingRows[i];
+          const cellB = (row[1] || '').toString().trim();
+          const cellH = row[7]; // Column H for At-Cost per lb price
+          
+          console.log(`   Row ${i + 1}: B="${cellB}", H="${cellH}"`);
+          
+          // Skip the "Coffee" header row
+          if (cellB.toLowerCase() === 'coffee') {
+            continue;
+          }
+          
+          // Stop if we hit an empty row or another table
+          if (!cellB || cellB.toLowerCase().includes('wholesale')) {
+            break;
+          }
+          
+          // Check for product match
+          if (cellB.toLowerCase() === matchedProduct.toLowerCase()) {
+            console.log(`✅ Found "${matchedProduct}" at row ${i + 1}, price: ${cellH}`);
+            if (cellH) {
+              unitPrice = parseFloat(cellH.toString().replace(/[$,]/g, ''));
+            }
+            break;
+          }
         }
       }
     } else {
@@ -545,8 +576,8 @@ Rules:
     
     console.log(`📋 Using pricing table: ${targetTable} (column ${priceColumn === 7 ? 'H' : 'D'})`);
     
-    // Search for matched product in the table
-    if (tableStartRow !== -1) {
+    // Search for matched product in the table (skip if At-Cost already found it)
+    if (tableStartRow !== -1 && !unitPrice) {
       for (let i = tableStartRow + 1; i < pricingRows.length; i++) {
         const row = pricingRows[i];
         const cellB = (row[1] || '').toString().trim();

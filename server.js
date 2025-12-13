@@ -353,57 +353,68 @@ app.post('/api/invoice/generate', async (req, res) => {
     const pricingRows = pricingResponse.data.values || [];
     let unitPrice = null;
     
-    // Find the customer's pricing table or fall back to "Wholesale Tier 1"
-    // Table headers are like "Wholesale CED", "Wholesale Dex", etc.
+    // Structure:
+    // - Table headers like "Wholesale CED" are in column B
+    // - Row below header has "Coffee" (skip this)
+    // - Products are in column B below that
+    // - Prices are in column D
+    
     let targetTable = null;
     let tableStartRow = -1;
     
-    // First pass: look for customer-specific table (e.g., "Wholesale CED" for customer "CED")
+    console.log(`🔍 Looking for customer: "${customer}", product: "${product}"`);
+    
+    // First pass: look for customer-specific table header in column B
     for (let i = 0; i < pricingRows.length; i++) {
       const row = pricingRows[i];
-      const cellA = (row[0] || '').toString().toLowerCase();
+      const cellB = (row[1] || '').toString().toLowerCase();
       
-      // Check if this row is a table header matching "Wholesale [Customer]"
-      if (cellA.includes('wholesale') && cellA.includes(customer.toLowerCase())) {
-        targetTable = row[0];
+      // Check if column B has "Wholesale [Customer]"
+      if (cellB.includes('wholesale') && cellB.includes(customer.toLowerCase())) {
+        targetTable = row[1];
         tableStartRow = i;
+        console.log(`✅ Found table "${row[1]}" at row ${i + 1}`);
         break;
       }
     }
     
     // If no customer table found, look for "Wholesale Tier 1" as fallback
     if (tableStartRow === -1) {
+      console.log(`⚠️ No table for "${customer}", trying Wholesale Tier 1...`);
       for (let i = 0; i < pricingRows.length; i++) {
         const row = pricingRows[i];
-        const cellA = (row[0] || '').toString().toLowerCase();
+        const cellB = (row[1] || '').toString().toLowerCase();
         
-        if (cellA.includes('wholesale tier 1')) {
+        if (cellB.includes('wholesale tier 1')) {
           targetTable = 'Wholesale Tier 1';
           tableStartRow = i;
+          console.log(`✅ Using fallback Wholesale Tier 1 at row ${i + 1}`);
           break;
         }
       }
     }
     
-    // Search for product in the identified table section and get price from column C (Per lb)
+    // Search for product starting after the header row
+    // Skip the "Coffee" header row (first row after table header)
     if (tableStartRow !== -1) {
-      for (let i = tableStartRow + 1; i < pricingRows.length; i++) {
+      for (let i = tableStartRow + 2; i < pricingRows.length; i++) { // +2 to skip table header AND "Coffee" row
         const row = pricingRows[i];
-        const cellA = (row[0] || '').toString().toLowerCase().trim();
-        const cellD = row[3]; // Column D = Per lb price (0-indexed = 3)
+        const cellB = (row[1] || '').toString().toLowerCase().trim();
+        const cellD = row[3]; // Per lb price in column D
         
-        // Stop if we hit another table header (starts with "Wholesale")
-        if (cellA.startsWith('wholesale')) {
+        // Stop if we hit another table header in column B
+        if (cellB.includes('wholesale')) {
           break;
         }
         
-        // Skip header row (contains "Coffee")
-        if (cellA === 'coffee') {
-          continue;
+        // Stop if we hit an empty row (end of table)
+        if (!cellB) {
+          break;
         }
         
-        // Check if this row contains the product
-        if (cellA.includes(product.toLowerCase())) {
+        // Check if column B contains the product
+        if (cellB.includes(product.toLowerCase())) {
+          console.log(`✅ Found "${product}" at row ${i + 1}, price: ${cellD}`);
           if (cellD) {
             unitPrice = parseFloat(cellD.toString().replace(/[$,]/g, ''));
           }
@@ -412,14 +423,16 @@ app.post('/api/invoice/generate', async (req, res) => {
       }
     }
     
-    // If still not found, do a full sheet search for the product in column D
+    // If still not found, do a full sheet search for the product in column B
     if (!unitPrice) {
+      console.log(`⚠️ Product not found in table, searching entire sheet...`);
       for (const row of pricingRows) {
-        const cellA = (row[0] || '').toString().toLowerCase().trim();
+        const cellB = (row[1] || '').toString().toLowerCase().trim();
         const cellD = row[3];
         
-        if (cellA.includes(product.toLowerCase()) && cellD) {
+        if (cellB.includes(product.toLowerCase()) && cellD) {
           unitPrice = parseFloat(cellD.toString().replace(/[$,]/g, ''));
+          console.log(`✅ Found in fallback search, price: ${cellD}`);
           break;
         }
       }

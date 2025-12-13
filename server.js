@@ -353,68 +353,137 @@ app.post('/api/invoice/generate', async (req, res) => {
     const pricingRows = pricingResponse.data.values || [];
     let unitPrice = null;
     
-    // Structure:
-    // - Table headers like "Wholesale CED" are in column B
-    // - Row below header has "Coffee" (skip this)
-    // - Products are in column B below that
-    // - Prices are in column D
+    // Extract all table headers (customers) and products from the sheet
+    const tableHeaders = [];
+    const allProducts = [];
     
+    for (let i = 0; i < pricingRows.length; i++) {
+      const row = pricingRows[i];
+      const cellB = (row[1] || '').toString().trim();
+      
+      if (cellB.toLowerCase().includes('wholesale')) {
+        tableHeaders.push({ name: cellB, row: i });
+      } else if (cellB && cellB.toLowerCase() !== 'coffee' && !cellB.toLowerCase().includes('price')) {
+        allProducts.push(cellB);
+      }
+    }
+    
+    // Remove duplicate products
+    const uniqueProducts = [...new Set(allProducts)];
+    
+    console.log(`📋 Available customers: ${tableHeaders.map(t => t.name).join(', ')}`);
+    console.log(`📋 Available products: ${uniqueProducts.join(', ')}`);
+    
+    // Use Gemini to fuzzy match customer and product
+    const matchModel = genAI.getGenerativeModel({ 
+      model: "gemini-2.5-flash",
+      generationConfig: { temperature: 0 }
+    });
+    
+    const matchPrompt = `You are a matching assistant. Match the user input to the closest option from the available lists.
+
+Available customers (wholesale tables):
+${tableHeaders.map(t => `- ${t.name}`).join('\n')}
+
+Available products:
+${uniqueProducts.map(p => `- ${p}`).join('\n')}
+
+User entered:
+- Customer: "${customer}"
+- Product: "${product}"
+
+Respond ONLY with valid JSON (no markdown, no explanation):
+{
+  "matchedCustomer": "exact name from customer list or null if no close match",
+  "matchedProduct": "exact name from product list or null if no close match",
+  "customerConfidence": "high/medium/low",
+  "productConfidence": "high/medium/low"
+}
+
+Rules:
+- Match even with typos, abbreviations, or partial names
+- "CED" should match "Wholesale CED"
+- "Dex" should match "Wholesale Dex"
+- "Archives" or "archive blend" should match "Archives Blend"
+- "Ethiopia" should match "Ethiopia Gera Natural"
+- If no reasonable match exists, return null`;
+
+    let matchedCustomer = null;
+    let matchedProduct = null;
+    
+    try {
+      const matchResult = await matchModel.generateContent(matchPrompt);
+      const matchText = matchResult.response.text().trim();
+      console.log(`🤖 Gemini match response: ${matchText}`);
+      
+      // Parse JSON response
+      const cleanJson = matchText.replace(/```json\n?|\n?```/g, '').trim();
+      const matchData = JSON.parse(cleanJson);
+      
+      matchedCustomer = matchData.matchedCustomer;
+      matchedProduct = matchData.matchedProduct;
+      
+      console.log(`✅ Matched customer: "${matchedCustomer}" (${matchData.customerConfidence})`);
+      console.log(`✅ Matched product: "${matchedProduct}" (${matchData.productConfidence})`);
+    } catch (matchError) {
+      console.error('⚠️ Gemini matching failed, using exact match:', matchError.message);
+      // Fall back to exact matching
+      matchedCustomer = tableHeaders.find(t => t.name.toLowerCase().includes(customer.toLowerCase()))?.name;
+      matchedProduct = uniqueProducts.find(p => p.toLowerCase().includes(product.toLowerCase()));
+    }
+    
+    if (!matchedProduct) {
+      return res.status(400).json({ error: `Could not find a product matching "${product}". Available: ${uniqueProducts.join(', ')}` });
+    }
+    
+    // Find the table for matched customer (or fall back to Wholesale Tier 1)
     let targetTable = null;
     let tableStartRow = -1;
     
-    console.log(`🔍 Looking for customer: "${customer}", product: "${product}"`);
-    
-    // First pass: look for customer-specific table header in column B
-    for (let i = 0; i < pricingRows.length; i++) {
-      const row = pricingRows[i];
-      const cellB = (row[1] || '').toString().toLowerCase();
-      
-      // Check if column B has "Wholesale [Customer]"
-      if (cellB.includes('wholesale') && cellB.includes(customer.toLowerCase())) {
-        targetTable = row[1];
-        tableStartRow = i;
-        console.log(`✅ Found table "${row[1]}" at row ${i + 1}`);
-        break;
-      }
-    }
-    
-    // If no customer table found, look for "Wholesale Tier 1" as fallback
-    if (tableStartRow === -1) {
-      console.log(`⚠️ No table for "${customer}", trying Wholesale Tier 1...`);
+    if (matchedCustomer) {
       for (let i = 0; i < pricingRows.length; i++) {
-        const row = pricingRows[i];
-        const cellB = (row[1] || '').toString().toLowerCase();
-        
-        if (cellB.includes('wholesale tier 1')) {
-          targetTable = 'Wholesale Tier 1';
+        const cellB = (pricingRows[i][1] || '').toString().trim();
+        if (cellB === matchedCustomer) {
+          targetTable = matchedCustomer;
           tableStartRow = i;
-          console.log(`✅ Using fallback Wholesale Tier 1 at row ${i + 1}`);
           break;
         }
       }
     }
     
-    // Search for product starting after the header row
-    // Skip the "Coffee" header row (first row after table header)
+    // Fallback to Wholesale Tier 1
+    if (tableStartRow === -1) {
+      console.log(`⚠️ No table for "${customer}", using Wholesale Tier 1`);
+      for (let i = 0; i < pricingRows.length; i++) {
+        const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
+        if (cellB.includes('wholesale tier 1')) {
+          targetTable = pricingRows[i][1];
+          tableStartRow = i;
+          break;
+        }
+      }
+    }
+    
+    // Search for matched product in the table
     if (tableStartRow !== -1) {
-      for (let i = tableStartRow + 2; i < pricingRows.length; i++) { // +2 to skip table header AND "Coffee" row
+      for (let i = tableStartRow + 2; i < pricingRows.length; i++) {
         const row = pricingRows[i];
-        const cellB = (row[1] || '').toString().toLowerCase().trim();
-        const cellD = row[3]; // Per lb price in column D
+        const cellB = (row[1] || '').toString().trim();
+        const cellD = row[3];
         
-        // Stop if we hit another table header in column B
-        if (cellB.includes('wholesale')) {
+        // Stop if we hit another table header
+        if (cellB.toLowerCase().includes('wholesale')) {
           break;
         }
         
-        // Stop if we hit an empty row (end of table)
+        // Stop if empty row
         if (!cellB) {
           break;
         }
         
-        // Check if column B contains the product
-        if (cellB.includes(product.toLowerCase())) {
-          console.log(`✅ Found "${product}" at row ${i + 1}, price: ${cellD}`);
+        // Check for exact match with Gemini's matched product
+        if (cellB.toLowerCase() === matchedProduct.toLowerCase()) {
+          console.log(`✅ Found "${matchedProduct}" at row ${i + 1}, price: ${cellD}`);
           if (cellD) {
             unitPrice = parseFloat(cellD.toString().replace(/[$,]/g, ''));
           }
@@ -423,14 +492,13 @@ app.post('/api/invoice/generate', async (req, res) => {
       }
     }
     
-    // If still not found, do a full sheet search for the product in column B
+    // Fallback: search entire sheet for matched product
     if (!unitPrice) {
-      console.log(`⚠️ Product not found in table, searching entire sheet...`);
       for (const row of pricingRows) {
-        const cellB = (row[1] || '').toString().toLowerCase().trim();
+        const cellB = (row[1] || '').toString().trim();
         const cellD = row[3];
         
-        if (cellB.includes(product.toLowerCase()) && cellD) {
+        if (cellB.toLowerCase() === matchedProduct.toLowerCase() && cellD) {
           unitPrice = parseFloat(cellD.toString().replace(/[$,]/g, ''));
           console.log(`✅ Found in fallback search, price: ${cellD}`);
           break;
@@ -439,12 +507,15 @@ app.post('/api/invoice/generate', async (req, res) => {
     }
     
     if (!unitPrice) {
-      return res.status(400).json({ error: `Product "${product}" not found in Wholesale Pricing sheet` });
+      return res.status(400).json({ error: `Product "${matchedProduct}" not found in Wholesale Pricing sheet` });
     }
+    
+    // Update product name to the matched version for the invoice
+    const finalProduct = matchedProduct;
     
     console.log(`📋 Using pricing from: ${targetTable || 'default'}`)
 
-    console.log(`💰 Unit price for ${product}: $${unitPrice}/lb`);
+    console.log(`💰 Unit price for ${finalProduct}: $${unitPrice}/lb`);
 
     // Step 2: Get last invoice number from Invoices sheet
     const invoicesResponse = await sheets.spreadsheets.values.get({
@@ -486,7 +557,7 @@ app.post('/api/invoice/generate', async (req, res) => {
       date: dateStr,
       dueDate: dueDateStr,
       items: [{
-        description: `${product} (units in lbs)`,
+        description: `${finalProduct} (units in lbs)`,
         quantity,
         unitPrice,
         total
@@ -518,7 +589,7 @@ app.post('/api/invoice/generate', async (req, res) => {
       date: dateStr,
       dueDate: dueDateStr,
       quantity,
-      product,
+      product: finalProduct,
       unitPrice,
       total,
       pdfUrl: `/invoices/${pdfFilename}`

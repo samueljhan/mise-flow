@@ -480,10 +480,10 @@ Rules:
     // If customer not recognized, ask for clarification
     if (!matchedCustomer || customerConfidence === 'none' || customerConfidence === 'low') {
       return res.status(400).json({ 
-        error: 'Customer not recognized',
+        error: `Customer "${customer}" is not recognized. Should I add them as a new wholesale client?`,
         clarification: true,
-        message: `Is "${customer}" a new wholesale customer?`,
         originalDetails: details,
+        originalCustomer: customer,
         knownCustomers: knownCustomers
       });
     }

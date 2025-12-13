@@ -875,12 +875,16 @@
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
 
-        async function processMessage(message) {
+        async function processMessage(message, conversationState) {
             try {
                 const response = await fetch('/api/process', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: message, context: 'inventory management' })
+                    body: JSON.stringify({ 
+                        text: message, 
+                        context: 'inventory management',
+                        conversationState: conversationState || window.currentConversationState || 'none'
+                    })
                 });
 
                 if (!response.ok) throw new Error('Processing failed');
@@ -900,6 +904,7 @@
                 if (data.action === 'confirm_new_customer' && data.pendingInvoice) {
                     // Store pending invoice for later
                     window.pendingNewCustomer = data.pendingInvoice;
+                    window.currentConversationState = 'waiting_for_new_customer_confirmation';
                     let html = '<div style="white-space: pre-wrap;">' + data.response + '</div>';
                     html += '<div class="response-buttons" style="margin-top: 10px;">';
                     html += '<button class="action-btn" onclick="confirmNewCustomer(true)">✅ Yes, add them</button>';
@@ -908,7 +913,24 @@
                     return html;
                 }
                 
-                return formatResponseHTML(data.response);
+                // Format the response - use simple format for short/completed responses
+                let html;
+                if (data.showFollowUp || data.action === 'declined') {
+                    html = formatSimpleResponse(data.response);
+                } else {
+                    html = formatResponseHTML(data.response);
+                }
+                
+                // Check if we should show follow-up menu
+                if (data.showFollowUp) {
+                    window.currentConversationState = 'none';
+                    // Add follow-up after a short delay
+                    setTimeout(() => {
+                        addFollowUpMessage();
+                    }, 300);
+                }
+                
+                return html;
                 
             } catch (error) {
                 console.error('Error:', error);
@@ -917,14 +939,31 @@
         }
         
         async function confirmNewCustomer(confirm) {
-            if (!confirm || !window.pendingNewCustomer) {
-                addMessage('Okay, cancelled.', false);
+            window.currentConversationState = 'none';
+            
+            if (!confirm) {
+                // Send "no" through the API to get proper response
+                addMessage('No', true);
+                addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
+                
+                const response = await processMessage('no, cancel', 'waiting_for_new_customer_confirmation');
+                const messages = chatContainer.querySelectorAll('.message');
+                messages[messages.length - 1].remove();
+                addMessage(response, false);
+                
                 window.pendingNewCustomer = null;
+                return;
+            }
+            
+            if (!window.pendingNewCustomer) {
+                addMessage('No pending customer to add.', false);
                 return;
             }
             
             const pending = window.pendingNewCustomer;
             window.pendingNewCustomer = null;
+            
+            addMessage('Yes, add them', true);
             
             // Add the new customer
             try {
@@ -971,6 +1010,11 @@
             html += '</div>';
             
             return html;
+        }
+        
+        function formatSimpleResponse(responseText) {
+            // For short/simple responses without action buttons
+            return '<div style="white-space: pre-wrap;">' + responseText + '</div>';
         }
 
         function copyResponse(button) {

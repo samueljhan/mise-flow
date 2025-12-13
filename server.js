@@ -868,7 +868,7 @@ async function generateInvoicePDF(data, outputPath) {
 
 app.post('/api/process', async (req, res) => {
   try {
-    const { text, context } = req.body;
+    const { text, context, conversationState } = req.body;
     
     if (!text) {
       return res.status(400).json({ error: 'Text is required' });
@@ -882,30 +882,44 @@ app.post('/api/process', async (req, res) => {
       }
     });
     
-    // First, detect intent and extract structured data
+    // Detect intent, extract data, and determine if conversation reached an endpoint
     const intentPrompt = `${SYSTEM_PROMPT}
 
 KNOWN CUSTOMERS: ${knownCustomers.join(', ')}
 
+CONVERSATION CONTEXT: ${conversationState || 'none'}
+
 User said: "${text}"
 
-Analyze this input and determine the intent. Respond ONLY with valid JSON:
+Analyze this input and determine the intent. Also detect if the conversation has reached an endpoint where the user might want to do something else.
+
+ENDPOINT DETECTION - Set conversationComplete to true if:
+- User declines an offer (says "no", "cancel", "never mind", "not now")
+- User confirms something is done ("thanks", "that's all", "perfect", "got it")
+- A question has been fully answered
+- User indicates they're finished ("I'm done", "that's it")
+- A task has been completed or cancelled
+- The conversation hits a dead end
+
+Respond ONLY with valid JSON:
 {
-  "intent": "create_invoice" | "update_inventory" | "check_inventory" | "send_email" | "general_question" | "unknown",
+  "intent": "create_invoice" | "update_inventory" | "check_inventory" | "send_email" | "decline" | "confirm" | "general_question" | "unknown",
   "customer": "<customer name if mentioned, or null>",
   "quantity": <number or null>,
   "unit": "<lbs, bags, cases, etc. or null>",
   "product": "<product name if mentioned, or null>",
   "isKnownCustomer": <true if customer matches known list, false if new, null if no customer>,
   "confidence": "high" | "medium" | "low",
-  "friendlyResponse": "<a brief, friendly response to show the user>"
+  "friendlyResponse": "<a brief, friendly response to show the user>",
+  "conversationComplete": <true if this is an endpoint and we should offer the menu, false if conversation should continue>
 }
 
 Examples:
-- "CED 100 lbs Archives Blend" → intent: create_invoice, customer: CED, quantity: 100, unit: lbs, product: Archives Blend
-- "Maru Coffee 50lb ethiopia" → intent: create_invoice, customer: Maru Coffee, isKnownCustomer: false
-- "add 20 bags to inventory" → intent: update_inventory
-- "create invoice" or "yes" after a prompt → intent: create_invoice (use context)`;
+- "CED 100 lbs Archives Blend" → intent: create_invoice, conversationComplete: false
+- "no" or "cancel" or "never mind" → intent: decline, conversationComplete: true, friendlyResponse: "No problem!"
+- "yes, add them" → intent: confirm, conversationComplete: false (because we still need to do the action)
+- "thanks" or "that's all" → intent: confirm, conversationComplete: true
+- "what's in stock?" → intent: check_inventory, conversationComplete: false`;
 
     const intentResult = await model.generateContent(intentPrompt);
     const intentText = intentResult.response.text().trim();
@@ -919,7 +933,17 @@ Examples:
       // If JSON parsing fails, return a general response
       return res.json({ 
         response: intentText,
-        action: null
+        action: null,
+        showFollowUp: false
+      });
+    }
+    
+    // Handle decline/cancel
+    if (intentData.intent === 'decline') {
+      return res.json({
+        response: intentData.friendlyResponse || "No problem!",
+        action: 'declined',
+        showFollowUp: true
       });
     }
     
@@ -937,30 +961,34 @@ Examples:
               quantity: intentData.quantity,
               unit: intentData.unit || 'lbs',
               product: intentData.product
-            }
+            },
+            showFollowUp: false
           });
         } else {
           // Known customer - proceed with invoice
           return res.json({
             response: `Got it! Creating an invoice for ${intentData.customer} - ${intentData.quantity} ${intentData.unit || 'lbs'} of ${intentData.product}. Processing now...`,
             action: 'create_invoice',
-            invoiceDetails: `${intentData.customer} ${intentData.quantity} ${intentData.unit || 'lbs'} ${intentData.product}`
+            invoiceDetails: `${intentData.customer} ${intentData.quantity} ${intentData.unit || 'lbs'} ${intentData.product}`,
+            showFollowUp: false  // Follow-up will be added after invoice is generated
           });
         }
       } else {
         // Missing info for invoice
         return res.json({
           response: intentData.friendlyResponse || "I'd be happy to create an invoice! Could you provide the customer name, quantity, and product?",
-          action: 'need_more_info'
+          action: 'need_more_info',
+          showFollowUp: false
         });
       }
     }
     
-    // For other intents, return the friendly response
+    // For other intents, return the friendly response with conversation state
     res.json({ 
       response: intentData.friendlyResponse || "How can I help you today?",
       action: intentData.intent,
-      data: intentData
+      data: intentData,
+      showFollowUp: intentData.conversationComplete === true
     });
   } catch (error) {
     console.error('AI processing error:', error);

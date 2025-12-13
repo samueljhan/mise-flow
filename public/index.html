@@ -885,11 +885,77 @@
 
                 if (!response.ok) throw new Error('Processing failed');
                 const data = await response.json();
+                
+                // Check if this is an invoice action
+                if (data.action === 'create_invoice' && data.invoiceDetails) {
+                    // Show the "Processing now..." message first
+                    const processingHtml = '<div style="white-space: pre-wrap;">' + data.response + '</div>';
+                    
+                    // Actually generate the invoice
+                    const invoiceResult = await generateInvoice(data.invoiceDetails);
+                    return processingHtml + '<br>' + invoiceResult;
+                }
+                
+                // Check if asking about new customer
+                if (data.action === 'confirm_new_customer' && data.pendingInvoice) {
+                    // Store pending invoice for later
+                    window.pendingNewCustomer = data.pendingInvoice;
+                    let html = '<div style="white-space: pre-wrap;">' + data.response + '</div>';
+                    html += '<div class="response-buttons" style="margin-top: 10px;">';
+                    html += '<button class="action-btn" onclick="confirmNewCustomer(true)">✅ Yes, add them</button>';
+                    html += '<button class="action-btn" onclick="confirmNewCustomer(false)">❌ No, cancel</button>';
+                    html += '</div>';
+                    return html;
+                }
+                
                 return formatResponseHTML(data.response);
                 
             } catch (error) {
                 console.error('Error:', error);
                 return '<p style="color: #ff6b6b;">⚠️ Error processing request.</p>';
+            }
+        }
+        
+        async function confirmNewCustomer(confirm) {
+            if (!confirm || !window.pendingNewCustomer) {
+                addMessage('Okay, cancelled.', false);
+                window.pendingNewCustomer = null;
+                return;
+            }
+            
+            const pending = window.pendingNewCustomer;
+            window.pendingNewCustomer = null;
+            
+            // Add the new customer
+            try {
+                const addResponse = await fetch('/api/customers/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name: pending.customer })
+                });
+                
+                if (!addResponse.ok) {
+                    const error = await addResponse.json();
+                    addMessage('<p style="color: #ff6b6b;">⚠️ ' + error.error + '</p>', false);
+                    return;
+                }
+                
+                const addData = await addResponse.json();
+                addMessage('✅ ' + addData.message, false);
+                
+                // Now generate the invoice
+                addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
+                
+                const invoiceDetails = `${pending.customer} ${pending.quantity} ${pending.unit} ${pending.product}`;
+                const invoiceResult = await generateInvoice(invoiceDetails);
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                messages[messages.length - 1].remove();
+                addMessage(invoiceResult, false);
+                
+            } catch (error) {
+                console.error('Error:', error);
+                addMessage('<p style="color: #ff6b6b;">⚠️ Error adding customer.</p>', false);
             }
         }
 
@@ -1042,7 +1108,36 @@
             html += '<button class="action-btn" onclick="openEmailModalWithInvoice(\'' + data.pdfUrl + '\', \'' + data.invoiceNumber + '\')">📧 Email Invoice</button>';
             html += '</div>';
             
+            // Add follow-up message after a short delay
+            setTimeout(() => {
+                addFollowUpMessage();
+            }, 500);
+            
             return html;
+        }
+
+        function addFollowUpMessage() {
+            let html = '<div style="margin-bottom: 15px;">What else can I help with?</div>';
+            html += '<div class="quick-actions" style="display: flex; flex-wrap: wrap; gap: 8px;">';
+            html += '<button class="action-btn" onclick="startInvoice()" style="display: flex; align-items: center; gap: 5px;">🧾 Generate Invoice</button>';
+            html += '<button class="action-btn" onclick="useQuickAction(\'Check current inventory levels\')" style="display: flex; align-items: center; gap: 5px;">📋 Check Stock</button>';
+            html += '<button class="action-btn" onclick="useQuickAction(\'Show me items running low\')" style="display: flex; align-items: center; gap: 5px;">⚠️ Low Stock</button>';
+            html += '<button class="action-btn" onclick="useQuickAction(\'Log a delivery\')" style="display: flex; align-items: center; gap: 5px;">📦 Log Delivery</button>';
+            html += '</div>';
+            
+            addMessage(html, false);
+        }
+
+        function useQuickAction(prompt) {
+            addMessage(prompt, true);
+            
+            addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
+            
+            processMessage(prompt).then(response => {
+                const messages = chatContainer.querySelectorAll('.message');
+                messages[messages.length - 1].remove();
+                addMessage(response, false);
+            });
         }
 
         function openEmailModalWithInvoice(pdfUrl, invoiceNumber) {

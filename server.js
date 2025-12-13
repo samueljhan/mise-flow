@@ -344,25 +344,88 @@ app.post('/api/invoice/generate', async (req, res) => {
     oauth2Client.setCredentials(userTokens);
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
 
-    // Step 1: Get pricing from Wholesale Pricing sheet
+    // Step 1: Get pricing from Wholesale Pricing sheet (entire sheet)
     const pricingResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Wholesale Pricing!A:B'
+      range: 'Wholesale Pricing!A:Z'
     });
     
     const pricingRows = pricingResponse.data.values || [];
     let unitPrice = null;
     
-    for (const row of pricingRows) {
-      if (row[0] && row[0].toLowerCase().includes(product.toLowerCase())) {
-        unitPrice = parseFloat(row[1].replace(/[$,]/g, ''));
+    // Find the customer's pricing table or fall back to "Wholesale Tier 1"
+    let targetTable = null;
+    let tableStartRow = -1;
+    
+    // First pass: look for customer-specific table
+    for (let i = 0; i < pricingRows.length; i++) {
+      const row = pricingRows[i];
+      const cellA = (row[0] || '').toString().toLowerCase();
+      
+      // Check if this row is a table header matching the customer
+      if (cellA.includes(customer.toLowerCase()) || 
+          cellA.includes(customer.substring(0, 3).toLowerCase())) {
+        targetTable = customer;
+        tableStartRow = i;
         break;
+      }
+    }
+    
+    // If no customer table found, look for "Wholesale Tier 1" as fallback
+    if (tableStartRow === -1) {
+      for (let i = 0; i < pricingRows.length; i++) {
+        const row = pricingRows[i];
+        const cellA = (row[0] || '').toString().toLowerCase();
+        
+        if (cellA.includes('wholesale tier 1') || cellA.includes('tier 1')) {
+          targetTable = 'Wholesale Tier 1';
+          tableStartRow = i;
+          break;
+        }
+      }
+    }
+    
+    // Search for product in the identified table section (column A) and get price from column D
+    if (tableStartRow !== -1) {
+      for (let i = tableStartRow; i < pricingRows.length; i++) {
+        const row = pricingRows[i];
+        const cellA = (row[0] || '').toString().toLowerCase();
+        const cellD = row[3]; // Column D (0-indexed = 3)
+        
+        // Stop if we hit another table header (empty row or new header)
+        if (i > tableStartRow && cellA && !cellA.includes(product.toLowerCase()) && 
+            (cellA.includes('tier') || cellA.includes('wholesale') || cellA.includes('pricing'))) {
+          break;
+        }
+        
+        // Check if this row contains the product
+        if (cellA.includes(product.toLowerCase())) {
+          if (cellD) {
+            unitPrice = parseFloat(cellD.toString().replace(/[$,]/g, ''));
+          }
+          break;
+        }
+      }
+    }
+    
+    // If still not found, do a full sheet search for the product
+    if (!unitPrice) {
+      for (const row of pricingRows) {
+        const cellA = (row[0] || '').toString().toLowerCase();
+        const cellD = row[3];
+        
+        if (cellA.includes(product.toLowerCase()) && cellD) {
+          unitPrice = parseFloat(cellD.toString().replace(/[$,]/g, ''));
+          break;
+        }
       }
     }
     
     if (!unitPrice) {
       return res.status(400).json({ error: `Product "${product}" not found in Wholesale Pricing sheet` });
     }
+    
+    console.log(`📋 Using pricing from: ${targetTable || 'default'}`)
 
     console.log(`💰 Unit price for ${product}: $${unitPrice}/lb`);
 

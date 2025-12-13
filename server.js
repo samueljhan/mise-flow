@@ -497,142 +497,63 @@ Rules:
     let finalCustomer = matchedCustomer;
     console.log(`✅ Using customer: "${finalCustomer}"`);
     
-    // Determine which pricing table to use
-    // Archives of Us always gets At-Cost pricing (column H)
-    // All other customers use their Wholesale table or Tier 1 fallback (column D)
-    let targetTable = null;
-    let tableStartRow = -1;
-    let priceColumn = 3; // Default: column D (index 3) for wholesale pricing
+    // Use Gemini to find the correct price from the sheet
+    const pricingPrompt = `You are a pricing lookup assistant. Given the spreadsheet data below, find the correct per-pound price.
+
+SPREADSHEET DATA (columns A through H):
+${pricingRows.map((row, i) => `Row ${i + 1}: ${row.map((cell, j) => `${String.fromCharCode(65 + j)}="${cell || ''}"`).join(', ')}`).join('\n')}
+
+PRICING RULES:
+1. If customer is "Archives of Us", use the "At-Cost" table and get the price from column H ("Per lb")
+2. For all other customers, look for their specific "Wholesale [CustomerName]" table and get the price from column D ("Per lb")
+3. If no specific wholesale table exists for the customer, use "Wholesale Tier 1" pricing from column D
+
+LOOKUP REQUEST:
+- Customer: "${finalCustomer}"
+- Product: "${matchedProduct}"
+
+Respond ONLY with valid JSON (no markdown, no explanation):
+{
+  "price": <number or null if not found>,
+  "table": "<name of table used>",
+  "row": <row number where product was found>,
+  "explanation": "<brief explanation of how you found it>"
+}`;
+
+    let unitPrice = null;
+    let pricingSource = null;
     
-    if (finalCustomer.toLowerCase() === 'archives of us') {
-      // Use At-Cost pricing from column H
-      console.log(`📋 Archives of Us - using At-Cost pricing (column H)`);
-      priceColumn = 7; // Column H (index 7)
+    try {
+      const pricingModel = genAI.getGenerativeModel({ 
+        model: "gemini-2.5-flash",
+        generationConfig: { temperature: 0 }
+      });
       
-      // Find At-Cost table - it's in column B
-      for (let i = 0; i < pricingRows.length; i++) {
-        const cellB = (pricingRows[i][1] || '').toString().trim();
-        if (cellB.toLowerCase() === 'at-cost') {
-          targetTable = 'At-Cost';
-          tableStartRow = i;
-          console.log(`✅ Found At-Cost table at row ${i + 1}`);
-          break;
-        }
-      }
+      const pricingResult = await pricingModel.generateContent(pricingPrompt);
+      const pricingText = pricingResult.response.text().trim();
+      console.log(`🤖 Gemini pricing response: ${pricingText}`);
       
-      // Search for product in At-Cost table
-      if (tableStartRow !== -1) {
-        for (let i = tableStartRow + 1; i < pricingRows.length; i++) {
-          const row = pricingRows[i];
-          const cellB = (row[1] || '').toString().trim();
-          const cellH = row[7]; // Column H for At-Cost per lb price
-          
-          console.log(`   Row ${i + 1}: B="${cellB}", H="${cellH}"`);
-          
-          // Skip the "Coffee" header row
-          if (cellB.toLowerCase() === 'coffee') {
-            continue;
-          }
-          
-          // Stop if we hit an empty row or another table
-          if (!cellB || cellB.toLowerCase().includes('wholesale')) {
-            break;
-          }
-          
-          // Check for product match
-          if (cellB.toLowerCase() === matchedProduct.toLowerCase()) {
-            console.log(`✅ Found "${matchedProduct}" at row ${i + 1}, price: ${cellH}`);
-            if (cellH) {
-              unitPrice = parseFloat(cellH.toString().replace(/[$,]/g, ''));
-            }
-            break;
-          }
-        }
-      }
-    } else {
-      // Look for customer-specific wholesale table
-      for (let i = 0; i < pricingRows.length; i++) {
-        const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
-        if (cellB.includes('wholesale') && cellB.includes(finalCustomer.toLowerCase())) {
-          targetTable = pricingRows[i][1];
-          tableStartRow = i;
-          break;
-        }
-      }
+      const cleanJson = pricingText.replace(/```json\n?|\n?```/g, '').trim();
+      const pricingData = JSON.parse(cleanJson);
       
-      // Fallback to Wholesale Tier 1 for new or unmatched customers
-      if (tableStartRow === -1) {
-        console.log(`⚠️ No specific table for "${finalCustomer}", using Wholesale Tier 1`);
-        for (let i = 0; i < pricingRows.length; i++) {
-          const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
-          if (cellB.includes('wholesale tier 1')) {
-            targetTable = 'Wholesale Tier 1';
-            tableStartRow = i;
-            break;
-          }
-        }
+      if (pricingData.price !== null) {
+        unitPrice = parseFloat(pricingData.price);
+        pricingSource = pricingData.table;
+        console.log(`✅ Found price: $${unitPrice}/lb from ${pricingSource} (row ${pricingData.row})`);
+        console.log(`   Explanation: ${pricingData.explanation}`);
       }
-    }
-    
-    console.log(`📋 Using pricing table: ${targetTable} (column ${priceColumn === 7 ? 'H' : 'D'})`);
-    
-    // Search for matched product in the table (skip if At-Cost already found it)
-    if (tableStartRow !== -1 && !unitPrice) {
-      for (let i = tableStartRow + 1; i < pricingRows.length; i++) {
-        const row = pricingRows[i];
-        const cellB = (row[1] || '').toString().trim();
-        const priceCell = row[priceColumn];
-        
-        // Stop if we hit another table header
-        if (cellB.toLowerCase().includes('wholesale') || cellB.toLowerCase().includes('at-cost')) {
-          break;
-        }
-        
-        // Skip header row
-        if (cellB.toLowerCase() === 'coffee') {
-          continue;
-        }
-        
-        // Stop if empty row
-        if (!cellB) {
-          break;
-        }
-        
-        // Check for match with Gemini's matched product
-        if (cellB.toLowerCase() === matchedProduct.toLowerCase()) {
-          console.log(`✅ Found "${matchedProduct}" at row ${i + 1}, price: ${priceCell}`);
-          if (priceCell) {
-            unitPrice = parseFloat(priceCell.toString().replace(/[$,]/g, ''));
-          }
-          break;
-        }
-      }
-    }
-    
-    // Fallback: search entire sheet for matched product
-    if (!unitPrice) {
-      for (const row of pricingRows) {
-        const cellB = (row[1] || '').toString().trim();
-        const priceCell = row[priceColumn];
-        
-        if (cellB.toLowerCase() === matchedProduct.toLowerCase() && priceCell) {
-          unitPrice = parseFloat(priceCell.toString().replace(/[$,]/g, ''));
-          console.log(`✅ Found in fallback search, price: ${priceCell}`);
-          break;
-        }
-      }
+    } catch (pricingError) {
+      console.error('⚠️ Gemini pricing lookup failed:', pricingError.message);
     }
     
     if (!unitPrice) {
-      return res.status(400).json({ error: `Product "${matchedProduct}" not found in Wholesale Pricing sheet` });
+      return res.status(400).json({ error: `Could not find pricing for "${matchedProduct}" for customer "${finalCustomer}"` });
     }
     
     // Update product name to the matched version for the invoice
     const finalProduct = matchedProduct;
-    
-    console.log(`📋 Using pricing from: ${targetTable || 'default'}`)
 
-    console.log(`💰 Unit price for ${finalProduct}: $${unitPrice}/lb`);
+    console.log(`💰 Unit price for ${finalProduct}: $${unitPrice}/lb (from ${pricingSource})`);
 
     // Step 2: Get last invoice number from Invoices sheet
     const invoicesResponse = await sheets.spreadsheets.values.get({

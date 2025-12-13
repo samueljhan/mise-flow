@@ -318,6 +318,38 @@ app.post('/api/sheets/append', async (req, res) => {
   }
 });
 
+// Known wholesale customers
+let knownCustomers = ['Archives of Us', 'CED', 'Dex', 'Junia'];
+
+// Get list of known customers
+app.get('/api/customers', (req, res) => {
+  res.json({ customers: knownCustomers });
+});
+
+// Add a new customer
+app.post('/api/customers/add', (req, res) => {
+  const { name } = req.body;
+  
+  if (!name) {
+    return res.status(400).json({ error: 'Customer name required' });
+  }
+  
+  const trimmedName = name.trim();
+  
+  if (knownCustomers.map(c => c.toLowerCase()).includes(trimmedName.toLowerCase())) {
+    return res.status(400).json({ error: `Customer "${trimmedName}" already exists` });
+  }
+  
+  knownCustomers.push(trimmedName);
+  console.log(`✅ Added new customer: ${trimmedName}`);
+  
+  res.json({ 
+    success: true, 
+    message: `"${trimmedName}" has been added as a new customer. They will receive Wholesale Tier 1 pricing.`,
+    customers: knownCustomers 
+  });
+});
+
 // ============ Invoice Generation ============
 
 app.post('/api/invoice/generate', async (req, res) => {
@@ -326,7 +358,16 @@ app.post('/api/invoice/generate', async (req, res) => {
   }
 
   try {
-    const { details } = req.body;
+    const { details, confirmNewCustomer, newCustomerName } = req.body;
+    
+    // Handle adding a new customer
+    if (confirmNewCustomer && newCustomerName) {
+      if (!knownCustomers.map(c => c.toLowerCase()).includes(newCustomerName.toLowerCase())) {
+        knownCustomers.push(newCustomerName);
+        console.log(`✅ Added new customer: ${newCustomerName}`);
+      }
+      // Continue processing with the new customer name
+    }
     
     if (!details) {
       return res.status(400).json({ error: 'Invoice details required' });
@@ -344,10 +385,10 @@ app.post('/api/invoice/generate', async (req, res) => {
     oauth2Client.setCredentials(userTokens);
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
 
-    // Step 1: Get pricing from Wholesale Pricing sheet (entire sheet)
+    // Step 1: Get pricing from Wholesale Pricing sheet (entire sheet including At-Cost)
     const pricingResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Wholesale Pricing!A:D'
+      range: 'Wholesale Pricing!A:H'  // Extended to column H for At-Cost pricing
     });
     
     const pricingRows = pricingResponse.data.values || [];
@@ -361,7 +402,7 @@ app.post('/api/invoice/generate', async (req, res) => {
       const row = pricingRows[i];
       const cellB = (row[1] || '').toString().trim();
       
-      if (cellB.toLowerCase().includes('wholesale')) {
+      if (cellB.toLowerCase().includes('wholesale') || cellB.toLowerCase().includes('at-cost')) {
         tableHeaders.push({ name: cellB, row: i });
       } else if (cellB && cellB.toLowerCase() !== 'coffee' && !cellB.toLowerCase().includes('price')) {
         allProducts.push(cellB);
@@ -371,8 +412,9 @@ app.post('/api/invoice/generate', async (req, res) => {
     // Remove duplicate products
     const uniqueProducts = [...new Set(allProducts)];
     
-    console.log(`📋 Available customers: ${tableHeaders.map(t => t.name).join(', ')}`);
+    console.log(`📋 Available tables: ${tableHeaders.map(t => t.name).join(', ')}`);
     console.log(`📋 Available products: ${uniqueProducts.join(', ')}`);
+    console.log(`📋 Known customers: ${knownCustomers.join(', ')}`);
     
     // Use Gemini to fuzzy match customer and product
     const matchModel = genAI.getGenerativeModel({ 
@@ -382,8 +424,8 @@ app.post('/api/invoice/generate', async (req, res) => {
     
     const matchPrompt = `You are a matching assistant. Match the user input to the closest option from the available lists.
 
-Available customers (wholesale tables):
-${tableHeaders.map(t => `- ${t.name}`).join('\n')}
+Known customers:
+${knownCustomers.map(c => `- ${c}`).join('\n')}
 
 Available products:
 ${uniqueProducts.map(p => `- ${p}`).join('\n')}
@@ -394,22 +436,25 @@ User entered:
 
 Respond ONLY with valid JSON (no markdown, no explanation):
 {
-  "matchedCustomer": "exact name from customer list or null if no close match",
+  "matchedCustomer": "exact name from known customers list or null if no close match",
   "matchedProduct": "exact name from product list or null if no close match",
-  "customerConfidence": "high/medium/low",
+  "customerConfidence": "high/medium/low/none",
   "productConfidence": "high/medium/low"
 }
 
 Rules:
 - Match even with typos, abbreviations, or partial names
-- "CED" should match "Wholesale CED"
-- "Dex" should match "Wholesale Dex"
-- "Archives" or "archive blend" should match "Archives Blend"
+- "CED" should match "CED"
+- "Dex" or "deks" should match "Dex"
+- "Archives" or "AOU" should match "Archives of Us"
+- "junia" or "juna" should match "Junia"
+- "Archives" or "archive blend" for PRODUCT should match "Archives Blend"
 - "Ethiopia" should match "Ethiopia Gera Natural"
-- If no reasonable match exists, return null`;
+- If the customer doesn't closely match any known customer, set matchedCustomer to null and customerConfidence to "none"`;
 
     let matchedCustomer = null;
     let matchedProduct = null;
+    let customerConfidence = 'none';
     
     try {
       const matchResult = await matchModel.generateContent(matchPrompt);
@@ -422,58 +467,99 @@ Rules:
       
       matchedCustomer = matchData.matchedCustomer;
       matchedProduct = matchData.matchedProduct;
+      customerConfidence = matchData.customerConfidence;
       
-      console.log(`✅ Matched customer: "${matchedCustomer}" (${matchData.customerConfidence})`);
+      console.log(`✅ Matched customer: "${matchedCustomer}" (${customerConfidence})`);
       console.log(`✅ Matched product: "${matchedProduct}" (${matchData.productConfidence})`);
     } catch (matchError) {
       console.error('⚠️ Gemini matching failed, using exact match:', matchError.message);
       // Fall back to exact matching
-      matchedCustomer = tableHeaders.find(t => t.name.toLowerCase().includes(customer.toLowerCase()))?.name;
+      matchedCustomer = knownCustomers.find(c => c.toLowerCase().includes(customer.toLowerCase()));
       matchedProduct = uniqueProducts.find(p => p.toLowerCase().includes(product.toLowerCase()));
+    }
+    
+    // If customer not recognized, ask for clarification
+    if (!matchedCustomer || customerConfidence === 'none' || customerConfidence === 'low') {
+      return res.status(400).json({ 
+        error: 'Customer not recognized',
+        clarification: true,
+        message: `Is "${customer}" a new wholesale customer?`,
+        originalDetails: details,
+        knownCustomers: knownCustomers
+      });
     }
     
     if (!matchedProduct) {
       return res.status(400).json({ error: `Could not find a product matching "${product}". Available: ${uniqueProducts.join(', ')}` });
     }
     
-    // Find the table for matched customer (or fall back to Wholesale Tier 1)
+    // Use matched customer name
+    let finalCustomer = matchedCustomer;
+    console.log(`✅ Using customer: "${finalCustomer}"`);
+    
+    // Determine which pricing table to use
+    // Archives of Us always gets At-Cost pricing (column H)
+    // All other customers use their Wholesale table or Tier 1 fallback (column D)
     let targetTable = null;
     let tableStartRow = -1;
+    let priceColumn = 3; // Default: column D (index 3) for wholesale pricing
     
-    if (matchedCustomer) {
+    if (finalCustomer.toLowerCase() === 'archives of us') {
+      // Use At-Cost pricing from column H
+      console.log(`📋 Archives of Us - using At-Cost pricing (column H)`);
+      priceColumn = 7; // Column H (index 7)
+      
+      // Find At-Cost table
       for (let i = 0; i < pricingRows.length; i++) {
-        const cellB = (pricingRows[i][1] || '').toString().trim();
-        if (cellB === matchedCustomer) {
-          targetTable = matchedCustomer;
+        const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
+        if (cellB.includes('at-cost')) {
+          targetTable = 'At-Cost';
           tableStartRow = i;
           break;
         }
       }
-    }
-    
-    // Fallback to Wholesale Tier 1
-    if (tableStartRow === -1) {
-      console.log(`⚠️ No table for "${customer}", using Wholesale Tier 1`);
+    } else {
+      // Look for customer-specific wholesale table
       for (let i = 0; i < pricingRows.length; i++) {
         const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
-        if (cellB.includes('wholesale tier 1')) {
+        if (cellB.includes('wholesale') && cellB.includes(finalCustomer.toLowerCase())) {
           targetTable = pricingRows[i][1];
           tableStartRow = i;
           break;
         }
       }
+      
+      // Fallback to Wholesale Tier 1 for new or unmatched customers
+      if (tableStartRow === -1) {
+        console.log(`⚠️ No specific table for "${finalCustomer}", using Wholesale Tier 1`);
+        for (let i = 0; i < pricingRows.length; i++) {
+          const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
+          if (cellB.includes('wholesale tier 1')) {
+            targetTable = 'Wholesale Tier 1';
+            tableStartRow = i;
+            break;
+          }
+        }
+      }
     }
+    
+    console.log(`📋 Using pricing table: ${targetTable} (column ${priceColumn === 7 ? 'H' : 'D'})`);
     
     // Search for matched product in the table
     if (tableStartRow !== -1) {
-      for (let i = tableStartRow + 2; i < pricingRows.length; i++) {
+      for (let i = tableStartRow + 1; i < pricingRows.length; i++) {
         const row = pricingRows[i];
         const cellB = (row[1] || '').toString().trim();
-        const cellD = row[3];
+        const priceCell = row[priceColumn];
         
         // Stop if we hit another table header
-        if (cellB.toLowerCase().includes('wholesale')) {
+        if (cellB.toLowerCase().includes('wholesale') || cellB.toLowerCase().includes('at-cost')) {
           break;
+        }
+        
+        // Skip header row
+        if (cellB.toLowerCase() === 'coffee') {
+          continue;
         }
         
         // Stop if empty row
@@ -481,11 +567,11 @@ Rules:
           break;
         }
         
-        // Check for exact match with Gemini's matched product
+        // Check for match with Gemini's matched product
         if (cellB.toLowerCase() === matchedProduct.toLowerCase()) {
-          console.log(`✅ Found "${matchedProduct}" at row ${i + 1}, price: ${cellD}`);
-          if (cellD) {
-            unitPrice = parseFloat(cellD.toString().replace(/[$,]/g, ''));
+          console.log(`✅ Found "${matchedProduct}" at row ${i + 1}, price: ${priceCell}`);
+          if (priceCell) {
+            unitPrice = parseFloat(priceCell.toString().replace(/[$,]/g, ''));
           }
           break;
         }
@@ -496,11 +582,11 @@ Rules:
     if (!unitPrice) {
       for (const row of pricingRows) {
         const cellB = (row[1] || '').toString().trim();
-        const cellD = row[3];
+        const priceCell = row[priceColumn];
         
-        if (cellB.toLowerCase() === matchedProduct.toLowerCase() && cellD) {
-          unitPrice = parseFloat(cellD.toString().replace(/[$,]/g, ''));
-          console.log(`✅ Found in fallback search, price: ${cellD}`);
+        if (cellB.toLowerCase() === matchedProduct.toLowerCase() && priceCell) {
+          unitPrice = parseFloat(priceCell.toString().replace(/[$,]/g, ''));
+          console.log(`✅ Found in fallback search, price: ${priceCell}`);
           break;
         }
       }
@@ -524,7 +610,7 @@ Rules:
     });
     
     const invoiceRows = invoicesResponse.data.values || [];
-    const customerPrefix = customer.substring(0, 3).toUpperCase();
+    const customerPrefix = finalCustomer.substring(0, 3).toUpperCase();
     let lastNumber = 999; // Start at 999 so first invoice is 1000
     
     for (const row of invoiceRows) {
@@ -553,7 +639,7 @@ Rules:
     
     await generateInvoicePDF({
       invoiceNumber,
-      customer,
+      customer: finalCustomer,
       date: dateStr,
       dueDate: dueDateStr,
       items: [{
@@ -575,7 +661,7 @@ Rules:
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
-        values: [[dateStr, invoiceNumber, customer, `$${total.toFixed(2)}`]]
+        values: [[dateStr, invoiceNumber, finalCustomer, `$${total.toFixed(2)}`]]
       }
     });
 
@@ -585,7 +671,7 @@ Rules:
     res.json({
       success: true,
       invoiceNumber,
-      customer,
+      customer: finalCustomer,
       date: dateStr,
       dueDate: dueDateStr,
       quantity,

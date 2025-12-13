@@ -554,21 +554,59 @@ Respond ONLY with valid JSON (no markdown, no explanation):
 
     console.log(`💰 Unit price for ${finalProduct}: $${unitPrice}/lb (from ${pricingSource})`);
 
-    // Step 2: Get last invoice number from Invoices sheet
+    // Step 2: Get last invoice number from Invoices sheet using Gemini
     const invoicesResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!A:D'
+      range: 'Invoices!A:E'
     });
     
     const invoiceRows = invoicesResponse.data.values || [];
     const customerPrefix = finalCustomer.substring(0, 3).toUpperCase();
-    let lastNumber = 999; // Start at 999 so first invoice is 1000
     
-    for (const row of invoiceRows) {
-      if (row[1] && row[1].startsWith(`C-${customerPrefix}-`)) {
-        const num = parseInt(row[1].split('-')[2]);
-        if (num > lastNumber) {
-          lastNumber = num;
+    // Use Gemini to find the last invoice number for this customer
+    const invoicePrompt = `You are an invoice number lookup assistant. Given the spreadsheet data below, find the highest invoice number for customer prefix "${customerPrefix}".
+
+SPREADSHEET DATA (Invoices sheet):
+${invoiceRows.map((row, i) => `Row ${i + 1}: ${row.map((cell, j) => `${String.fromCharCode(65 + j)}="${cell || ''}"`).join(', ')}`).join('\n')}
+
+RULES:
+1. Invoice numbers are in column C and follow the format: C-XXX-#### (e.g., C-CED-1000, C-AOU-1001)
+2. Find all invoices that match the prefix "C-${customerPrefix}-"
+3. Return the highest number found, or 999 if no invoices exist for this customer (so next one will be 1000)
+
+Respond ONLY with valid JSON (no markdown, no explanation):
+{
+  "lastNumber": <highest invoice number found or 999 if none>,
+  "invoicesFound": <count of invoices found for this customer>,
+  "explanation": "<brief explanation>"
+}`;
+
+    let lastNumber = 999;
+    
+    try {
+      const invoiceModel = genAI.getGenerativeModel({ 
+        model: "gemini-2.5-flash",
+        generationConfig: { temperature: 0 }
+      });
+      
+      const invoiceResult = await invoiceModel.generateContent(invoicePrompt);
+      const invoiceText = invoiceResult.response.text().trim();
+      console.log(`🤖 Gemini invoice lookup: ${invoiceText}`);
+      
+      const cleanJson = invoiceText.replace(/```json\n?|\n?```/g, '').trim();
+      const invoiceData = JSON.parse(cleanJson);
+      
+      lastNumber = invoiceData.lastNumber;
+      console.log(`✅ Last invoice for ${customerPrefix}: ${lastNumber} (${invoiceData.invoicesFound} found)`);
+    } catch (invoiceError) {
+      console.error('⚠️ Gemini invoice lookup failed, using fallback:', invoiceError.message);
+      // Fallback to manual search in column C
+      for (const row of invoiceRows) {
+        if (row[2] && row[2].startsWith(`C-${customerPrefix}-`)) {
+          const num = parseInt(row[2].split('-')[2]);
+          if (num > lastNumber) {
+            lastNumber = num;
+          }
         }
       }
     }
@@ -606,13 +644,14 @@ Respond ONLY with valid JSON (no markdown, no explanation):
     console.log(`📄 PDF generated: ${pdfPath}`);
 
     // Step 5: Record in Invoices sheet
+    // Format: Column B = Date, Column C = Invoice #, Column D = Price, Column E = (blank for Paid)
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!A:D',
+      range: 'Invoices!B:E',
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
-        values: [[dateStr, invoiceNumber, finalCustomer, `$${total.toFixed(2)}`]]
+        values: [[dateStr, invoiceNumber, `$${total.toFixed(2)}`, '']]
       }
     });
 

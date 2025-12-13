@@ -347,25 +347,25 @@ app.post('/api/invoice/generate', async (req, res) => {
     // Step 1: Get pricing from Wholesale Pricing sheet (entire sheet)
     const pricingResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Wholesale Pricing!A:Z'
+      range: 'Wholesale Pricing!A:D'
     });
     
     const pricingRows = pricingResponse.data.values || [];
     let unitPrice = null;
     
     // Find the customer's pricing table or fall back to "Wholesale Tier 1"
+    // Table headers are like "Wholesale CED", "Wholesale Dex", etc.
     let targetTable = null;
     let tableStartRow = -1;
     
-    // First pass: look for customer-specific table
+    // First pass: look for customer-specific table (e.g., "Wholesale CED" for customer "CED")
     for (let i = 0; i < pricingRows.length; i++) {
       const row = pricingRows[i];
       const cellA = (row[0] || '').toString().toLowerCase();
       
-      // Check if this row is a table header matching the customer
-      if (cellA.includes(customer.toLowerCase()) || 
-          cellA.includes(customer.substring(0, 3).toLowerCase())) {
-        targetTable = customer;
+      // Check if this row is a table header matching "Wholesale [Customer]"
+      if (cellA.includes('wholesale') && cellA.includes(customer.toLowerCase())) {
+        targetTable = row[0];
         tableStartRow = i;
         break;
       }
@@ -377,7 +377,7 @@ app.post('/api/invoice/generate', async (req, res) => {
         const row = pricingRows[i];
         const cellA = (row[0] || '').toString().toLowerCase();
         
-        if (cellA.includes('wholesale tier 1') || cellA.includes('tier 1')) {
+        if (cellA.includes('wholesale tier 1')) {
           targetTable = 'Wholesale Tier 1';
           tableStartRow = i;
           break;
@@ -385,17 +385,21 @@ app.post('/api/invoice/generate', async (req, res) => {
       }
     }
     
-    // Search for product in the identified table section (column A) and get price from column D
+    // Search for product in the identified table section and get price from column C (Per lb)
     if (tableStartRow !== -1) {
-      for (let i = tableStartRow; i < pricingRows.length; i++) {
+      for (let i = tableStartRow + 1; i < pricingRows.length; i++) {
         const row = pricingRows[i];
-        const cellA = (row[0] || '').toString().toLowerCase();
-        const cellD = row[3]; // Column D (0-indexed = 3)
+        const cellA = (row[0] || '').toString().toLowerCase().trim();
+        const cellD = row[3]; // Column D = Per lb price (0-indexed = 3)
         
-        // Stop if we hit another table header (empty row or new header)
-        if (i > tableStartRow && cellA && !cellA.includes(product.toLowerCase()) && 
-            (cellA.includes('tier') || cellA.includes('wholesale') || cellA.includes('pricing'))) {
+        // Stop if we hit another table header (starts with "Wholesale")
+        if (cellA.startsWith('wholesale')) {
           break;
+        }
+        
+        // Skip header row (contains "Coffee")
+        if (cellA === 'coffee') {
+          continue;
         }
         
         // Check if this row contains the product
@@ -408,10 +412,10 @@ app.post('/api/invoice/generate', async (req, res) => {
       }
     }
     
-    // If still not found, do a full sheet search for the product
+    // If still not found, do a full sheet search for the product in column D
     if (!unitPrice) {
       for (const row of pricingRows) {
-        const cellA = (row[0] || '').toString().toLowerCase();
+        const cellA = (row[0] || '').toString().toLowerCase().trim();
         const cellD = row[3];
         
         if (cellA.includes(product.toLowerCase()) && cellD) {

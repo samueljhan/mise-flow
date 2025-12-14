@@ -771,7 +771,7 @@ Examples:
     const today = new Date();
     const dateStr = today.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
     const dueDateObj = new Date(today);
-    dueDateObj.setDate(dueDateObj.getDate() + 2); // Due in 2 days
+    dueDateObj.setDate(dueDateObj.getDate() + 14); // Due in 2 weeks
     const dueDateStr = dueDateObj.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
 
     // Step 4: Generate PDF with all items
@@ -790,22 +790,12 @@ Examples:
 
     console.log(`📄 PDF generated: ${pdfPath}`);
 
-    // Step 5: Record in Invoices sheet
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!B:E',
-      valueInputOption: 'USER_ENTERED',
-      insertDataOption: 'INSERT_ROWS',
-      requestBody: {
-        values: [[dateStr, invoiceNumber, `$${grandTotal.toFixed(2)}`, '']]
-      }
-    });
+    // Don't record to spreadsheet yet - wait for confirmation
 
-    console.log(`✅ Invoice recorded in spreadsheet`);
-
-    // Return response
+    // Return response with pending status
     res.json({
       success: true,
+      pending: true,
       invoiceNumber,
       customer: finalCustomer,
       date: dateStr,
@@ -818,6 +808,43 @@ Examples:
   } catch (error) {
     console.error('Invoice generation error:', error);
     res.status(500).json({ error: 'Failed to generate invoice', details: error.message });
+  }
+});
+
+// Confirm invoice and record to spreadsheet
+app.post('/api/invoice/confirm', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+
+  try {
+    const { invoiceNumber, date, total } = req.body;
+    
+    if (!invoiceNumber || !date || total === undefined) {
+      return res.status(400).json({ error: 'Missing invoice details' });
+    }
+
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    // Record in Invoices sheet
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Invoices!B:E',
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: {
+        values: [[date, invoiceNumber, `$${parseFloat(total).toFixed(2)}`, '']]
+      }
+    });
+
+    console.log(`✅ Invoice ${invoiceNumber} confirmed and recorded in spreadsheet`);
+
+    res.json({ success: true, message: `Invoice ${invoiceNumber} confirmed` });
+
+  } catch (error) {
+    console.error('Invoice confirmation error:', error);
+    res.status(500).json({ error: 'Failed to confirm invoice', details: error.message });
   }
 });
 

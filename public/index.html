@@ -1211,36 +1211,85 @@
         }
 
         function formatInvoiceResponse(data) {
+            // Store invoice data for confirmation
+            window.pendingInvoiceData = {
+                invoiceNumber: data.invoiceNumber,
+                date: data.date,
+                total: data.total,
+                pdfUrl: data.pdfUrl,
+                customer: data.customer
+            };
+            
             let html = '<div>';
             html += '<strong>🧾 Invoice Generated!</strong><br><br>';
             html += '<strong>Invoice #:</strong> ' + data.invoiceNumber + '<br>';
             html += '<strong>Customer:</strong> ' + data.customer + '<br>';
-            html += '<strong>Date:</strong> ' + data.date + '<br>';
-            html += '<strong>Due Date:</strong> ' + data.dueDate + '<br><br>';
             
-            // Display line items
+            // Display brief order description
             if (data.items && data.items.length > 0) {
-                html += '<strong>Items:</strong><br>';
-                data.items.forEach(item => {
-                    html += '• ' + item.quantity + ' lbs ' + item.description.replace(' (units in lbs)', '') + ' @ $' + item.unitPrice.toFixed(2) + ' = $' + item.total.toFixed(2) + '<br>';
-                });
-                html += '<br>';
+                const orderDesc = data.items.map(item => item.quantity + ' lbs ' + item.description.replace(' (units in lbs)', '')).join(', ');
+                html += '<strong>Order:</strong> ' + orderDesc + '<br>';
             }
             
+            html += '<strong>Date:</strong> ' + data.date + '<br>';
+            html += '<strong>Due Date:</strong> ' + data.dueDate + '<br>';
             html += '<strong>Total:</strong> $' + data.total.toFixed(2) + '<br><br>';
             html += '</div>';
             
-            html += '<div class="response-buttons">';
-            html += '<a href="' + data.pdfUrl + '" download="' + data.invoiceNumber + '.pdf" class="action-btn" style="text-decoration:none;">📥 Download PDF</a>';
-            html += '<button class="action-btn" onclick="openEmailModalWithInvoice(\'' + data.pdfUrl + '\', \'' + data.invoiceNumber + '\', \'' + data.customer.replace(/'/g, "\\'") + '\')">📧 Draft Invoice Email</button>';
+            html += '<div class="response-buttons" id="invoiceButtons-' + data.invoiceNumber + '">';
+            html += '<button class="action-btn" onclick="confirmInvoice(\'' + data.invoiceNumber + '\')" style="background:#28a745;color:white;">✅ Confirm Invoice</button>';
+            html += '<a href="' + data.pdfUrl + '" download="' + data.invoiceNumber + '.pdf" class="action-btn disabled-btn" style="text-decoration:none;pointer-events:none;opacity:0.5;">📥 Download PDF</a>';
+            html += '<button class="action-btn disabled-btn" style="pointer-events:none;opacity:0.5;" disabled>📧 Draft Invoice Email</button>';
             html += '</div>';
             
-            // Add follow-up message after a short delay
-            setTimeout(() => {
-                addFollowUpMessage();
-            }, 500);
-            
             return html;
+        }
+        
+        async function confirmInvoice(invoiceNumber) {
+            if (!window.pendingInvoiceData) {
+                addMessage('⚠️ No pending invoice to confirm.', false);
+                return;
+            }
+            
+            const data = window.pendingInvoiceData;
+            
+            try {
+                const response = await fetch('/api/invoice/confirm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        invoiceNumber: data.invoiceNumber,
+                        date: data.date,
+                        total: data.total
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    // Update buttons to enable PDF and Email
+                    const buttonsDiv = document.getElementById('invoiceButtons-' + data.invoiceNumber);
+                    if (buttonsDiv) {
+                        buttonsDiv.innerHTML = '<span style="color:#28a745;font-weight:bold;">✅ Confirmed</span>' +
+                            '<a href="' + data.pdfUrl + '" download="' + data.invoiceNumber + '.pdf" class="action-btn" style="text-decoration:none;">📥 Download PDF</a>' +
+                            '<button class="action-btn" onclick="openEmailModalWithInvoice(\'' + data.pdfUrl + '\', \'' + data.invoiceNumber + '\', \'' + data.customer.replace(/'/g, "\\'") + '\')">📧 Draft Invoice Email</button>';
+                    }
+                    
+                    addMessage('✅ Invoice ' + data.invoiceNumber + ' confirmed and added to spreadsheet!', false);
+                    
+                    window.pendingInvoiceData = null;
+                    
+                    // Add follow-up after confirmation
+                    setTimeout(() => {
+                        addFollowUpMessage();
+                    }, 500);
+                } else {
+                    addMessage('⚠️ ' + (result.error || 'Failed to confirm invoice'), false);
+                }
+            } catch (error) {
+                console.error('Error confirming invoice:', error);
+                addMessage('⚠️ Error confirming invoice. Please try again.', false);
+            }
         }
 
         function addFollowUpMessage() {

@@ -1238,8 +1238,6 @@
             
             html += '<div class="response-buttons" id="invoiceButtons-' + data.invoiceNumber + '">';
             html += '<button class="action-btn" onclick="confirmInvoice(\'' + data.invoiceNumber + '\')" style="background:#28a745;color:white;">✅ Confirm Invoice</button>';
-            html += '<a href="#" class="action-btn" style="text-decoration:none;pointer-events:none;cursor:not-allowed;">📥 Download PDF</a>';
-            html += '<button class="action-btn" style="pointer-events:none;cursor:not-allowed;">📧 Draft Invoice Email</button>';
             html += '</div>';
             
             return html;
@@ -1267,7 +1265,7 @@
                 const result = await response.json();
                 
                 if (result.success) {
-                    // Update buttons to enable PDF and Email
+                    // Update buttons to show PDF and Email options
                     const buttonsDiv = document.getElementById('invoiceButtons-' + data.invoiceNumber);
                     if (buttonsDiv) {
                         buttonsDiv.innerHTML = '<span style="color:#28a745;font-weight:bold;">✅ Confirmed</span>' +

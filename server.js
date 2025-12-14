@@ -140,7 +140,7 @@ app.get('/auth/google', (req, res) => {
   const scopes = [
     'https://www.googleapis.com/auth/gmail.send',
     'https://www.googleapis.com/auth/gmail.readonly',
-    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.compose',
     'https://www.googleapis.com/auth/spreadsheets'
   ];
   

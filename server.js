@@ -76,6 +76,15 @@ const oauth2Client = new google.auth.OAuth2(
 // Token storage (use database for production)
 let userTokens = null;
 
+// Auto-load refresh token from environment if available
+if (process.env.GOOGLE_REFRESH_TOKEN) {
+  userTokens = {
+    refresh_token: process.env.GOOGLE_REFRESH_TOKEN
+  };
+  oauth2Client.setCredentials(userTokens);
+  console.log('✓ Google account auto-connected from saved refresh token');
+}
+
 // AWS Transcribe configuration (standard, not medical)
 const transcribeClient = new TranscribeStreamingClient({
   region: process.env.AWS_REGION || 'us-east-1',
@@ -89,6 +98,7 @@ console.log('=== Environment Check ===');
 console.log('Gemini:', !!process.env.GEMINI_API_KEY ? '✓' : '✗');
 console.log('Google Client ID:', !!process.env.GOOGLE_CLIENT_ID ? '✓' : '✗');
 console.log('Google Client Secret:', !!process.env.GOOGLE_CLIENT_SECRET ? '✓' : '✗');
+console.log('Google Refresh Token:', !!process.env.GOOGLE_REFRESH_TOKEN ? '✓ (auto-connect enabled)' : '✗ (manual auth required)');
 console.log('AWS Access Key:', !!process.env.AWS_ACCESS_KEY_ID ? '✓' : '✗');
 console.log('AWS Secret Key:', !!process.env.AWS_SECRET_ACCESS_KEY ? '✓' : '✗');
 console.log('AWS Region:', process.env.AWS_REGION || 'us-east-1');
@@ -162,6 +172,15 @@ app.get('/auth/google/callback', async (req, res) => {
     userTokens = tokens;
     
     console.log('✅ Google OAuth successful (Gmail + Sheets)');
+    
+    // Log refresh token so it can be saved to environment variables
+    if (tokens.refresh_token) {
+      console.log('=== SAVE THIS REFRESH TOKEN TO RAILWAY ===');
+      console.log(tokens.refresh_token);
+      console.log('==========================================');
+      console.log('Add to Railway Variables as: GOOGLE_REFRESH_TOKEN');
+    }
+    
     res.redirect('/?google=connected');
   } catch (error) {
     console.error('OAuth error:', error);

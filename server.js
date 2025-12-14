@@ -144,6 +144,24 @@ Be concise, friendly, and action-oriented. Don't ask unnecessary questions - if 
 // Known wholesale customers (shared with invoice generation)
 let knownCustomers = ['Archives of Us', 'CED', 'Dex', 'Junia'];
 
+// Customer 3-letter codes for invoices
+let customerCodes = {
+  'archives of us': 'AOU',
+  'ced': 'CED',
+  'dex': 'DEX',
+  'junia': 'JUN'
+};
+
+// Helper to get customer code
+function getCustomerCode(customerName) {
+  const lower = customerName.toLowerCase();
+  if (customerCodes[lower]) {
+    return customerCodes[lower];
+  }
+  // Default: first 3 letters uppercase
+  return customerName.substring(0, 3).toUpperCase();
+}
+
 // ============ Google OAuth Routes ============
 
 app.get('/auth/google', (req, res) => {
@@ -429,24 +447,30 @@ app.get('/api/customers', (req, res) => {
 
 // Add a new customer
 app.post('/api/customers/add', (req, res) => {
-  const { name } = req.body;
+  const { name, code } = req.body;
   
   if (!name) {
     return res.status(400).json({ error: 'Customer name required' });
   }
   
+  if (!code || code.length !== 3) {
+    return res.status(400).json({ error: 'Three letter code required' });
+  }
+  
   const trimmedName = name.trim();
+  const trimmedCode = code.trim().toUpperCase();
   
   if (knownCustomers.map(c => c.toLowerCase()).includes(trimmedName.toLowerCase())) {
     return res.status(400).json({ error: `Customer "${trimmedName}" already exists` });
   }
   
   knownCustomers.push(trimmedName);
-  console.log(`✅ Added new customer: ${trimmedName}`);
+  customerCodes[trimmedName.toLowerCase()] = trimmedCode;
+  console.log(`✅ Added new customer: ${trimmedName} (code: ${trimmedCode})`);
   
   res.json({ 
     success: true, 
-    message: `"${trimmedName}" has been added as a new customer. They will receive Wholesale Tier 1 pricing.`,
+    message: `"${trimmedName}" (${trimmedCode}) has been added as a new customer. They will receive Wholesale Tier 1 pricing.`,
     customers: knownCustomers 
   });
 });
@@ -855,7 +879,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
     });
     
     const invoiceRows = invoicesResponse.data.values || [];
-    const customerPrefix = finalCustomer.substring(0, 3).toUpperCase();
+    const customerPrefix = getCustomerCode(finalCustomer);
     
     // Use Gemini to find the last invoice number for this customer
     const invoicePrompt = `You are an invoice number lookup assistant. Given the spreadsheet data below, find the highest invoice number for customer prefix "${customerPrefix}".

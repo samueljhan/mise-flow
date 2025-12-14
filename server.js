@@ -714,43 +714,105 @@ Examples:
     
     const pricingRows = pricingResponse.data.values || [];
     
-    // Determine which price column to use
-    const isArchives = finalCustomer.toLowerCase() === 'archives of us';
-    const priceColumn = isArchives ? 7 : 3; // H (index 7) for At-Cost, D (index 3) for Wholesale Tier 1
+    // Use Gemini to find the correct pricing for each item
+    const pricingPrompt = `You are a pricing lookup assistant. Find the correct prices from this spreadsheet.
+
+SPREADSHEET DATA (Wholesale Pricing sheet):
+${pricingRows.map((row, i) => `Row ${i + 1}: ${row.map((cell, j) => `${String.fromCharCode(65 + j)}="${cell || ''}"`).join(', ')}`).join('\n')}
+
+PRICING RULES:
+1. For customer "Archives of Us" or "AOU": Use the "At-Cost" table and get price from column H
+2. For customer "CED": Use "Wholesale CED" table and get price from column D
+3. For customer "Dex": Use "Wholesale Dex" table and get price from column D
+4. For customer "Junia": Use "Wholesale Junia" table and get price from column D
+5. For any other customer: Use "Wholesale Tier 1" table and get price from column D
+
+LOOKUP REQUEST:
+- Customer: "${finalCustomer}"
+- Items to price: ${items.map(item => `"${item.product}"`).join(', ')}
+
+Find the per-lb price for each product from the correct table for this customer.
+
+Respond ONLY with valid JSON (no markdown):
+{
+  "table": "<name of table used>",
+  "prices": {
+    "<product name as given>": <price as number>,
+    "<product name as given>": <price as number>
+  }
+}`;
+
+    let pricingMap = {};
+    let pricingSource = 'unknown';
     
-    // Find the correct table start row
-    let tableStartRow = -1;
-    for (let i = 0; i < pricingRows.length; i++) {
-      const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
-      if (isArchives && cellB === 'at-cost') {
-        tableStartRow = i;
-        break;
-      } else if (!isArchives && cellB.includes('wholesale tier 1')) {
-        tableStartRow = i;
-        break;
+    try {
+      const pricingText = await callGeminiWithRetry(pricingPrompt, { maxRetries: 2 });
+      console.log(`🤖 Gemini pricing response: ${pricingText}`);
+      
+      const cleanJson = pricingText.replace(/```json\n?|\n?```/g, '').trim();
+      const pricingData = JSON.parse(cleanJson);
+      
+      pricingSource = pricingData.table;
+      
+      // Build pricing map from Gemini response
+      for (const [product, price] of Object.entries(pricingData.prices)) {
+        if (price && price > 0) {
+          pricingMap[product.toLowerCase()] = { name: product, price: parseFloat(price) };
+        }
       }
-    }
-    
-    // Build pricing lookup map from the table
-    const pricingMap = {};
-    if (tableStartRow !== -1) {
-      for (let i = tableStartRow + 1; i < pricingRows.length; i++) {
-        const row = pricingRows[i];
-        const productName = (row[1] || '').toString().trim();
-        const priceCell = row[priceColumn];
-        
-        // Stop if we hit another table or empty row
-        if (!productName || productName.toLowerCase().includes('wholesale') || productName.toLowerCase() === 'at-cost') break;
-        if (productName.toLowerCase() === 'coffee') continue; // Skip header
-        
-        const price = parseFloat((priceCell || '').toString().replace(/[$,]/g, ''));
-        if (price > 0) {
-          pricingMap[productName.toLowerCase()] = { name: productName, price };
+      
+      console.log(`✅ Gemini found prices from ${pricingSource}:`, pricingMap);
+    } catch (error) {
+      console.log('⚠️ Gemini pricing failed, using direct lookup:', error.message);
+      
+      // Fallback: Direct sheet parsing
+      const isArchives = finalCustomer.toLowerCase() === 'archives of us';
+      let targetTable = isArchives ? 'at-cost' : `wholesale ${finalCustomer.toLowerCase()}`;
+      let priceColumn = isArchives ? 7 : 3; // H for At-Cost, D for Wholesale
+      
+      // Find the correct table start row
+      let tableStartRow = -1;
+      for (let i = 0; i < pricingRows.length; i++) {
+        const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
+        if (cellB.includes(targetTable) || (isArchives && cellB === 'at-cost')) {
+          tableStartRow = i;
+          pricingSource = cellB;
+          break;
+        }
+      }
+      
+      // Fallback to Tier 1 if no specific table found
+      if (tableStartRow === -1 && !isArchives) {
+        for (let i = 0; i < pricingRows.length; i++) {
+          const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
+          if (cellB.includes('wholesale tier 1')) {
+            tableStartRow = i;
+            pricingSource = 'Wholesale Tier 1 (fallback)';
+            break;
+          }
+        }
+      }
+      
+      // Build pricing map from the table
+      if (tableStartRow !== -1) {
+        for (let i = tableStartRow + 1; i < pricingRows.length; i++) {
+          const row = pricingRows[i];
+          const productName = (row[1] || '').toString().trim();
+          const priceCell = row[priceColumn];
+          
+          // Stop if we hit another table or empty row
+          if (!productName || productName.toLowerCase().includes('wholesale') || productName.toLowerCase() === 'at-cost') break;
+          if (productName.toLowerCase() === 'coffee') continue; // Skip header
+          
+          const price = parseFloat((priceCell || '').toString().replace(/[$,]/g, ''));
+          if (price > 0) {
+            pricingMap[productName.toLowerCase()] = { name: productName, price };
+          }
         }
       }
     }
     
-    console.log(`📋 Pricing map:`, pricingMap);
+    console.log(`📋 Final pricing map (from ${pricingSource}):`, pricingMap);
     
     // Process each item and get pricing
     const processedItems = [];

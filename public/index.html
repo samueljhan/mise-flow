@@ -887,8 +887,12 @@
                     })
                 });
 
-                if (!response.ok) throw new Error('Processing failed');
                 const data = await response.json();
+                
+                if (!response.ok) {
+                    console.error('API error:', data);
+                    return '<p style="color: #ff6b6b;">⚠️ Error: ' + (data.error || 'Processing failed') + '</p>';
+                }
                 
                 // Check if this is an invoice action
                 if (data.action === 'create_invoice' && data.invoiceDetails) {
@@ -898,6 +902,39 @@
                     // Actually generate the invoice
                     const invoiceResult = await generateInvoice(data.invoiceDetails);
                     return processingHtml + '<br>' + invoiceResult;
+                }
+                
+                // Check if user typed "yes" to confirm adding customer
+                if (data.action === 'confirm_add_customer' && window.pendingNewCustomer) {
+                    const pending = window.pendingNewCustomer;
+                    window.pendingNewCustomer = null;
+                    window.currentConversationState = 'none';
+                    
+                    try {
+                        // Add the new customer
+                        const addResponse = await fetch('/api/customers/add', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ name: pending.customer })
+                        });
+                        
+                        if (!addResponse.ok) {
+                            const error = await addResponse.json();
+                            return '<p style="color: #ff6b6b;">⚠️ ' + error.error + '</p>';
+                        }
+                        
+                        const addData = await addResponse.json();
+                        let html = '✅ ' + addData.message + '<br><br>';
+                        
+                        // Generate the invoice
+                        const invoiceDetails = `${pending.customer} ${pending.quantity} ${pending.unit} ${pending.product}`;
+                        const invoiceResult = await generateInvoice(invoiceDetails);
+                        return html + invoiceResult;
+                        
+                    } catch (error) {
+                        console.error('Error:', error);
+                        return '<p style="color: #ff6b6b;">⚠️ Error adding customer.</p>';
+                    }
                 }
                 
                 // Check if asking about new customer

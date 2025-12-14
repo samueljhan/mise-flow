@@ -34,6 +34,36 @@ if (!fs.existsSync(invoicesDir)) {
 // Gemini AI configuration
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
+// Helper: Call Gemini with retry logic for rate limits
+async function callGeminiWithRetry(prompt, options = {}) {
+  const maxRetries = options.maxRetries || 3;
+  const model = genAI.getGenerativeModel({ 
+    model: options.model || "gemini-2.5-flash",
+    generationConfig: { temperature: options.temperature || 0 }
+  });
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const result = await model.generateContent(prompt);
+      return result.response.text().trim();
+    } catch (error) {
+      const isRateLimit = error.message?.includes('429') || error.message?.includes('quota');
+      
+      if (isRateLimit && attempt < maxRetries) {
+        // Extract retry delay from error or use default
+        const retryMatch = error.message?.match(/retry in (\d+)/i);
+        const waitTime = retryMatch ? parseInt(retryMatch[1]) * 1000 : (attempt * 2000);
+        console.log(`⏳ Rate limited, waiting ${waitTime/1000}s before retry ${attempt + 1}/${maxRetries}...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      } else if (isRateLimit) {
+        throw new Error('RATE_LIMITED');
+      } else {
+        throw error;
+      }
+    }
+  }
+}
+
 // Google OAuth configuration (Gmail + Sheets)
 const oauth2Client = new google.auth.OAuth2(
   process.env.GOOGLE_CLIENT_ID,
@@ -383,67 +413,121 @@ app.post('/api/invoice/generate', async (req, res) => {
       return res.status(400).json({ error: 'Invoice details required' });
     }
 
-    // Use Gemini to parse the invoice details flexibly
-    const parseModel = genAI.getGenerativeModel({ 
-      model: "gemini-2.5-flash",
-      generationConfig: { temperature: 0 }
-    });
+    // Try pattern matching first (fast, no API call)
+    let customer = null, quantity = null, product = null;
     
-    const parsePrompt = `Parse this invoice request into structured data. The input may have customer, quantity, and product in ANY order.
-
+    // Common patterns
+    const patterns = [
+      /(?:for\s+)?(\w+(?:'s)?(?:\s+\w+)?)\s*[,.]?\s*(\d+)\s*(?:lbs?|pounds?|lb)?\s*(?:of\s+)?(.+)/i,
+      /^(\w+(?:'s)?(?:\s+\w+)?)\s+(\d+)\s*(?:lbs?|pounds?|lb)?\s*(.+)$/i,
+      /(.+?)\s+(\d+)\s*(?:lbs?|pounds?|lb)?\s*(?:for\s+)?(\w+(?:'s)?(?:\s+\w+)?)$/i
+    ];
+    
+    const knownProducts = ['Archives Blend', 'Ethiopia Gera Natural', 'Colombia Excelso', 'Colombia Decaf'];
+    const productAliases = {
+      'archives': 'Archives Blend', 'archive': 'Archives Blend', 'house': 'Archives Blend', 'blend': 'Archives Blend',
+      'ethiopia': 'Ethiopia Gera Natural', 'ethiopian': 'Ethiopia Gera Natural',
+      'colombia': 'Colombia Excelso', 'colombian': 'Colombia Excelso',
+      'decaf': 'Colombia Decaf', 'decaffeinated': 'Colombia Decaf'
+    };
+    
+    for (const pattern of patterns) {
+      const match = details.match(pattern);
+      if (match) {
+        const [_, part1, qty, part3] = match;
+        quantity = parseInt(qty);
+        
+        // Figure out which is customer and which is product
+        const part1Lower = part1.toLowerCase().trim();
+        const part3Lower = part3.toLowerCase().trim();
+        
+        // Check if part1 is a customer
+        const customerFromPart1 = knownCustomers.find(c => 
+          c.toLowerCase() === part1Lower ||
+          part1Lower.includes(c.toLowerCase()) ||
+          c.toLowerCase().includes(part1Lower)
+        );
+        
+        // Check if part3 contains a product
+        const productFromPart3 = knownProducts.find(p => part3Lower.includes(p.toLowerCase().split(' ')[0])) ||
+          Object.entries(productAliases).find(([alias]) => part3Lower.includes(alias))?.[1];
+        
+        if (customerFromPart1 && productFromPart3) {
+          customer = customerFromPart1;
+          product = productFromPart3;
+          console.log(`✅ Pattern matched: customer="${customer}", quantity=${quantity}, product="${product}"`);
+          break;
+        }
+        
+        // Try reverse (product first, customer last)
+        const productFromPart1 = knownProducts.find(p => part1Lower.includes(p.toLowerCase().split(' ')[0])) ||
+          Object.entries(productAliases).find(([alias]) => part1Lower.includes(alias))?.[1];
+        const customerFromPart3 = knownCustomers.find(c => 
+          c.toLowerCase() === part3Lower ||
+          part3Lower.includes(c.toLowerCase()) ||
+          c.toLowerCase().includes(part3Lower)
+        );
+        
+        if (productFromPart1 && customerFromPart3) {
+          customer = customerFromPart3;
+          product = productFromPart1;
+          console.log(`✅ Pattern matched (reversed): customer="${customer}", quantity=${quantity}, product="${product}"`);
+          break;
+        }
+        
+        // Partial match - keep trying other patterns
+        if (customerFromPart1) customer = customerFromPart1;
+        if (productFromPart3) product = productFromPart3;
+        if (productFromPart1) product = productFromPart1;
+        if (customerFromPart3) customer = customerFromPart3;
+      }
+    }
+    
+    // If pattern matching didn't get everything, try Gemini
+    if (!customer || !quantity || !product) {
+      console.log(`⚡ Pattern matching incomplete, trying Gemini...`);
+      
+      const parsePrompt = `Parse this invoice request. Input: "${details}"
 KNOWN CUSTOMERS: ${knownCustomers.join(', ')}
-KNOWN CUSTOMER ALIASES:
-- "AOU", "archives", "archives of us" → "Archives of Us"
-- "CED" → "CED"
-- "Dex", "deks" → "Dex"
-- "Junia", "juna" → "Junia"
+KNOWN PRODUCTS: Archives Blend, Ethiopia Gera Natural, Colombia Excelso, Colombia Decaf
 
-KNOWN PRODUCTS:
-- "Archives Blend", "archives", "house blend"
-- "Ethiopia Gera Natural", "ethiopia", "ethiopian"
-- "Colombia Excelso", "colombia", "colombian"
-- "Colombia Decaf", "decaf", "decaffeinated"
+Respond ONLY with JSON: {"customer": "name", "quantity": number, "product": "name"}`;
 
-INPUT: "${details}"
-
-Respond ONLY with valid JSON (no markdown):
-{
-  "customer": "<matched customer name from known list, or original if new>",
-  "quantity": <number>,
-  "product": "<matched product name>",
-  "unit": "<lbs, lb, bags, etc. - default to lbs>",
-  "isKnownCustomer": <true/false>,
-  "confidence": "high/medium/low"
-}
-
-Examples:
-- "CED 100 lbs Archives Blend" → customer: "CED", quantity: 100, product: "Archives Blend"
-- "archives blend 100lb for aou" → customer: "Archives of Us", quantity: 100, product: "Archives Blend"
-- "50 ethiopia for dex" → customer: "Dex", quantity: 50, product: "Ethiopia Gera Natural"`;
-
-    let customer, quantity, product;
-    
-    try {
-      const parseResult = await parseModel.generateContent(parsePrompt);
-      const parseText = parseResult.response.text().trim();
-      console.log(`🤖 Gemini parse result: ${parseText}`);
-      
-      const cleanJson = parseText.replace(/```json\n?|\n?```/g, '').trim();
-      const parsed = JSON.parse(cleanJson);
-      
-      customer = parsed.customer;
-      quantity = parseInt(parsed.quantity);
-      product = parsed.product;
-      
-      console.log(`📝 Parsed: customer="${customer}", quantity=${quantity}, product="${product}"`);
-    } catch (parseError) {
-      console.error('⚠️ Gemini parsing failed:', parseError.message);
-      return res.status(400).json({ error: 'Could not parse invoice details. Please try again with customer, quantity, and product.' });
+      try {
+        const parseText = await callGeminiWithRetry(parsePrompt, { maxRetries: 2 });
+        console.log(`🤖 Gemini parse: ${parseText}`);
+        
+        const cleanJson = parseText.replace(/```json\n?|\n?```/g, '').trim();
+        const parsed = JSON.parse(cleanJson);
+        
+        customer = customer || parsed.customer;
+        quantity = quantity || parseInt(parsed.quantity);
+        product = product || parsed.product;
+      } catch (parseError) {
+        if (parseError.message === 'RATE_LIMITED') {
+          console.log('⚠️ Rate limited during parsing');
+          if (!customer || !quantity || !product) {
+            return res.status(429).json({ 
+              error: 'System is busy. Please try again in a moment or use format: "CustomerName 100 lbs Product"' 
+            });
+          }
+        } else {
+          console.error('⚠️ Gemini parsing failed:', parseError.message);
+        }
+      }
     }
     
     if (!customer || !quantity || !product) {
-      return res.status(400).json({ error: 'Could not parse invoice details. Please include customer, quantity, and product.' });
+      return res.status(400).json({ error: 'Could not parse invoice details. Please use format: "CustomerName 100 lbs Product"' });
     }
+    
+    // Match customer to known list
+    const normalizedCustomer = knownCustomers.find(c => 
+      c.toLowerCase() === customer.toLowerCase() ||
+      customer.toLowerCase().includes(c.toLowerCase()) ||
+      c.toLowerCase().includes(customer.toLowerCase())
+    );
+    if (normalizedCustomer) customer = normalizedCustomer;
 
     console.log(`📝 Generating invoice for: ${customer}, ${quantity} lbs ${product}`);
 
@@ -480,12 +564,7 @@ Examples:
     console.log(`📋 Available products: ${uniqueProducts.join(', ')}`);
     console.log(`📋 Known customers: ${knownCustomers.join(', ')}`);
     
-    // Use Gemini to fuzzy match customer and product
-    const matchModel = genAI.getGenerativeModel({ 
-      model: "gemini-2.5-flash",
-      generationConfig: { temperature: 0 }
-    });
-    
+    // Prepare Gemini matching prompt (used if direct matching fails)
     const matchPrompt = `You are a matching assistant. Match the user input to the closest option from the available lists.
 
 Known customers:
@@ -520,26 +599,57 @@ Rules:
     let matchedProduct = null;
     let customerConfidence = 'none';
     
-    try {
-      const matchResult = await matchModel.generateContent(matchPrompt);
-      const matchText = matchResult.response.text().trim();
-      console.log(`🤖 Gemini match response: ${matchText}`);
-      
-      // Parse JSON response
-      const cleanJson = matchText.replace(/```json\n?|\n?```/g, '').trim();
-      const matchData = JSON.parse(cleanJson);
-      
-      matchedCustomer = matchData.matchedCustomer;
-      matchedProduct = matchData.matchedProduct;
-      customerConfidence = matchData.customerConfidence;
-      
-      console.log(`✅ Matched customer: "${matchedCustomer}" (${customerConfidence})`);
-      console.log(`✅ Matched product: "${matchedProduct}" (${matchData.productConfidence})`);
-    } catch (matchError) {
-      console.error('⚠️ Gemini matching failed, using exact match:', matchError.message);
-      // Fall back to exact matching
-      matchedCustomer = knownCustomers.find(c => c.toLowerCase().includes(customer.toLowerCase()));
-      matchedProduct = uniqueProducts.find(p => p.toLowerCase().includes(product.toLowerCase()));
+    // First, check for direct customer match (case-insensitive)
+    const directCustomerMatch = knownCustomers.find(c => 
+      c.toLowerCase() === customer.toLowerCase() ||
+      customer.toLowerCase().includes(c.toLowerCase()) ||
+      c.toLowerCase().includes(customer.toLowerCase())
+    );
+    
+    if (directCustomerMatch) {
+      matchedCustomer = directCustomerMatch;
+      customerConfidence = 'high';
+      console.log(`✅ Direct customer match: "${matchedCustomer}"`);
+    }
+    
+    // Check for direct product match
+    const directProductMatch = uniqueProducts.find(p =>
+      p.toLowerCase() === product.toLowerCase() ||
+      product.toLowerCase().includes(p.toLowerCase().split(' ')[0]) ||
+      p.toLowerCase().includes(product.toLowerCase())
+    );
+    
+    if (directProductMatch) {
+      matchedProduct = directProductMatch;
+      console.log(`✅ Direct product match: "${matchedProduct}"`);
+    }
+    
+    // Only use Gemini if we don't have direct matches
+    if (!matchedCustomer || !matchedProduct) {
+      try {
+        const matchText = await callGeminiWithRetry(matchPrompt, { maxRetries: 1 });
+        console.log(`🤖 Gemini match response: ${matchText}`);
+        
+        // Parse JSON response
+        const cleanJson = matchText.replace(/```json\n?|\n?```/g, '').trim();
+        const matchData = JSON.parse(cleanJson);
+        
+        if (!matchedCustomer) {
+          matchedCustomer = matchData.matchedCustomer;
+          customerConfidence = matchData.customerConfidence;
+        }
+        if (!matchedProduct) {
+          matchedProduct = matchData.matchedProduct;
+        }
+        
+        console.log(`✅ Final customer: "${matchedCustomer}" (${customerConfidence})`);
+        console.log(`✅ Final product: "${matchedProduct}"`);
+      } catch (matchError) {
+        console.log('⚠️ Gemini matching failed, using direct matches only:', matchError.message);
+        // Use customer as-is if Gemini failed but we have direct match attempt
+        if (!matchedCustomer) matchedCustomer = customer;
+        if (!matchedProduct) matchedProduct = product;
+      }
     }
     
     // If customer not recognized, ask for clarification
@@ -592,14 +702,9 @@ Respond ONLY with valid JSON (no markdown, no explanation):
     let unitPrice = null;
     let pricingSource = null;
     
+    // Try Gemini pricing lookup with retry
     try {
-      const pricingModel = genAI.getGenerativeModel({ 
-        model: "gemini-2.5-flash",
-        generationConfig: { temperature: 0 }
-      });
-      
-      const pricingResult = await pricingModel.generateContent(pricingPrompt);
-      const pricingText = pricingResult.response.text().trim();
+      const pricingText = await callGeminiWithRetry(pricingPrompt, { maxRetries: 2 });
       console.log(`🤖 Gemini pricing response: ${pricingText}`);
       
       const cleanJson = pricingText.replace(/```json\n?|\n?```/g, '').trim();
@@ -608,13 +713,66 @@ Respond ONLY with valid JSON (no markdown, no explanation):
       if (pricingData.price !== null && pricingData.price > 0) {
         unitPrice = parseFloat(pricingData.price);
         pricingSource = pricingData.table;
-        console.log(`✅ Found price: $${unitPrice}/lb from ${pricingSource} (row ${pricingData.row}, column ${pricingData.column})`);
-        console.log(`   Explanation: ${pricingData.explanation}`);
-      } else {
-        console.log(`⚠️ Gemini returned invalid price: ${pricingData.price}`);
+        console.log(`✅ Found price: $${unitPrice}/lb from ${pricingSource}`);
       }
     } catch (pricingError) {
-      console.error('⚠️ Gemini pricing lookup failed:', pricingError.message);
+      console.log('⚠️ Gemini pricing failed, using direct lookup:', pricingError.message);
+    }
+    
+    // Fallback: Direct sheet parsing if Gemini failed
+    if (!unitPrice || unitPrice <= 0) {
+      console.log(`📋 Falling back to direct sheet lookup...`);
+      
+      // Determine which table and column to use
+      const isArchives = finalCustomer.toLowerCase() === 'archives of us';
+      const priceColumn = isArchives ? 7 : 3; // H (index 7) for At-Cost, D (index 3) for Wholesale
+      
+      // Find the correct table
+      let targetTable = isArchives ? 'At-Cost' : `Wholesale ${finalCustomer}`;
+      let tableStartRow = -1;
+      
+      for (let i = 0; i < pricingRows.length; i++) {
+        const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
+        if (isArchives && cellB === 'at-cost') {
+          tableStartRow = i;
+          break;
+        } else if (!isArchives && cellB.includes('wholesale') && cellB.includes(finalCustomer.toLowerCase())) {
+          tableStartRow = i;
+          break;
+        }
+      }
+      
+      // Fallback to Tier 1 if no specific table found
+      if (tableStartRow === -1 && !isArchives) {
+        for (let i = 0; i < pricingRows.length; i++) {
+          const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
+          if (cellB.includes('wholesale tier 1')) {
+            tableStartRow = i;
+            targetTable = 'Wholesale Tier 1';
+            break;
+          }
+        }
+      }
+      
+      // Search for product in the table
+      if (tableStartRow !== -1) {
+        for (let i = tableStartRow + 1; i < pricingRows.length; i++) {
+          const row = pricingRows[i];
+          const cellB = (row[1] || '').toString().trim().toLowerCase();
+          const priceCell = row[priceColumn];
+          
+          // Stop if we hit another table or empty row
+          if (!cellB || cellB.includes('wholesale') || cellB === 'at-cost') break;
+          if (cellB === 'coffee') continue; // Skip header
+          
+          if (cellB === matchedProduct.toLowerCase()) {
+            unitPrice = parseFloat((priceCell || '').toString().replace(/[$,]/g, ''));
+            pricingSource = targetTable + ' (direct lookup)';
+            console.log(`✅ Direct lookup found: $${unitPrice}/lb from ${targetTable}`);
+            break;
+          }
+        }
+      }
     }
     
     if (!unitPrice || unitPrice <= 0) {
@@ -658,32 +816,28 @@ Respond ONLY with valid JSON (no markdown, no explanation):
 
     let lastNumber = 999;
     
+    // Try Gemini first with retry
     try {
-      const invoiceModel = genAI.getGenerativeModel({ 
-        model: "gemini-2.5-flash",
-        generationConfig: { temperature: 0 }
-      });
-      
-      const invoiceResult = await invoiceModel.generateContent(invoicePrompt);
-      const invoiceText = invoiceResult.response.text().trim();
+      const invoiceText = await callGeminiWithRetry(invoicePrompt, { maxRetries: 1 });
       console.log(`🤖 Gemini invoice lookup: ${invoiceText}`);
       
       const cleanJson = invoiceText.replace(/```json\n?|\n?```/g, '').trim();
       const invoiceData = JSON.parse(cleanJson);
       
       lastNumber = invoiceData.lastNumber;
-      console.log(`✅ Last invoice for ${customerPrefix}: ${lastNumber} (${invoiceData.invoicesFound} found)`);
+      console.log(`✅ Last invoice for ${customerPrefix}: ${lastNumber}`);
     } catch (invoiceError) {
-      console.error('⚠️ Gemini invoice lookup failed, using fallback:', invoiceError.message);
-      // Fallback to manual search in column C
+      console.log('⚠️ Gemini invoice lookup failed, using direct search:', invoiceError.message);
+      // Direct search in column C
       for (const row of invoiceRows) {
         if (row[2] && row[2].startsWith(`C-${customerPrefix}-`)) {
           const num = parseInt(row[2].split('-')[2]);
-          if (num > lastNumber) {
+          if (!isNaN(num) && num > lastNumber) {
             lastNumber = num;
           }
         }
       }
+      console.log(`✅ Direct search found last number: ${lastNumber}`);
     }
     
     const invoiceNumber = `C-${customerPrefix}-${lastNumber + 1}`;
@@ -873,66 +1027,118 @@ app.post('/api/process', async (req, res) => {
     if (!text) {
       return res.status(400).json({ error: 'Text is required' });
     }
-
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-2.5-flash",
-      generationConfig: {
-        temperature: 0.1,
-        maxOutputTokens: 1000,
-      }
-    });
     
-    // Detect intent, extract data, and determine if conversation reached an endpoint
-    const intentPrompt = `${SYSTEM_PROMPT}
+    // Quick pattern matching for common phrases (fallback when rate limited)
+    const textLower = text.toLowerCase().trim();
+    
+    // Handle simple yes/no without AI
+    if (textLower === 'no' || textLower === 'cancel' || textLower === 'never mind' || textLower === 'nope') {
+      return res.json({
+        response: "No problem!",
+        action: 'declined',
+        showFollowUp: true
+      });
+    }
+    
+    if ((textLower === 'yes' || textLower === 'yeah' || textLower === 'yep' || textLower.includes('yes, add')) && 
+        conversationState === 'waiting_for_new_customer_confirmation') {
+      return res.json({
+        response: "Great! Adding them now...",
+        action: 'confirm_add_customer',
+        showFollowUp: false
+      });
+    }
+    
+    if (textLower === 'thanks' || textLower === 'thank you' || textLower === "that's all") {
+      return res.json({
+        response: "You're welcome!",
+        action: 'completed',
+        showFollowUp: true
+      });
+    }
+
+    // Try to parse invoice pattern without AI first (for rate limit fallback)
+    const invoicePattern = /(?:invoice|order|bill)?\s*(?:for\s+)?(\w+(?:'s)?(?:\s+\w+)?)\s*[,.]?\s*(\d+)\s*(?:lbs?|pounds?|lb)?\s*(?:of\s+)?(.+)/i;
+    const simplePattern = /^(\w+(?:'s)?(?:\s+\w+)?)\s+(\d+)\s*(?:lbs?|pounds?|lb)?\s*(.+)$/i;
+    
+    let fallbackData = null;
+    const match = text.match(invoicePattern) || text.match(simplePattern);
+    if (match) {
+      const customerInput = match[1].trim();
+      const quantity = parseInt(match[2]);
+      const product = match[3].trim();
+      
+      // Match customer
+      const matchedCustomer = knownCustomers.find(c => 
+        c.toLowerCase() === customerInput.toLowerCase() ||
+        customerInput.toLowerCase().includes(c.toLowerCase()) ||
+        c.toLowerCase().includes(customerInput.toLowerCase())
+      );
+      
+      fallbackData = {
+        intent: 'create_invoice',
+        customer: matchedCustomer || customerInput,
+        quantity,
+        product,
+        isKnownCustomer: !!matchedCustomer
+      };
+    }
+    
+    // Try Gemini with retry
+    let intentData = null;
+    try {
+      const intentPrompt = `${SYSTEM_PROMPT}
 
 KNOWN CUSTOMERS: ${knownCustomers.join(', ')}
+
+CUSTOMER MATCHING RULES:
+- "Dex", "Dex's Coffee", "deks", "dex coffee" → matches "Dex" (isKnownCustomer: true)
+- "CED", "ced coffee" → matches "CED" (isKnownCustomer: true)
+- "Archives of Us", "AOU", "archives", "aou coffee" → matches "Archives of Us" (isKnownCustomer: true)
+- "Junia", "junia coffee", "juna" → matches "Junia" (isKnownCustomer: true)
 
 CONVERSATION CONTEXT: ${conversationState || 'none'}
 
 User said: "${text}"
 
-Analyze this input and determine the intent. Also detect if the conversation has reached an endpoint where the user might want to do something else.
-
-ENDPOINT DETECTION - Set conversationComplete to true if:
-- User declines an offer (says "no", "cancel", "never mind", "not now")
-- User confirms something is done ("thanks", "that's all", "perfect", "got it")
-- A question has been fully answered
-- User indicates they're finished ("I'm done", "that's it")
-- A task has been completed or cancelled
-- The conversation hits a dead end
-
 Respond ONLY with valid JSON:
 {
-  "intent": "create_invoice" | "update_inventory" | "check_inventory" | "send_email" | "decline" | "confirm" | "general_question" | "unknown",
-  "customer": "<customer name if mentioned, or null>",
+  "intent": "create_invoice" | "update_inventory" | "check_inventory" | "decline" | "confirm" | "general_question",
+  "customer": "<matched customer name or original if new>",
   "quantity": <number or null>,
-  "unit": "<lbs, bags, cases, etc. or null>",
-  "product": "<product name if mentioned, or null>",
-  "isKnownCustomer": <true if customer matches known list, false if new, null if no customer>,
-  "confidence": "high" | "medium" | "low",
-  "friendlyResponse": "<a brief, friendly response to show the user>",
-  "conversationComplete": <true if this is an endpoint and we should offer the menu, false if conversation should continue>
-}
+  "unit": "<lbs, bags, etc. or null>",
+  "product": "<product name or null>",
+  "isKnownCustomer": <true/false>,
+  "friendlyResponse": "<brief response>",
+  "conversationComplete": <true/false>
+}`;
 
-Examples:
-- "CED 100 lbs Archives Blend" → intent: create_invoice, conversationComplete: false
-- "no" or "cancel" or "never mind" → intent: decline, conversationComplete: true, friendlyResponse: "No problem!"
-- "yes, add them" → intent: confirm, conversationComplete: false (because we still need to do the action)
-- "thanks" or "that's all" → intent: confirm, conversationComplete: true
-- "what's in stock?" → intent: check_inventory, conversationComplete: false`;
-
-    const intentResult = await model.generateContent(intentPrompt);
-    const intentText = intentResult.response.text().trim();
-    console.log(`🤖 Intent detection: ${intentText}`);
-    
-    let intentData;
-    try {
+      const intentText = await callGeminiWithRetry(intentPrompt, { temperature: 0.1, maxRetries: 2 });
+      console.log(`🤖 Intent detection: ${intentText}`);
+      
       const cleanJson = intentText.replace(/```json\n?|\n?```/g, '').trim();
       intentData = JSON.parse(cleanJson);
-    } catch (parseError) {
-      // If JSON parsing fails, return a general response
+      
+    } catch (error) {
+      if (error.message === 'RATE_LIMITED') {
+        console.log('⚠️ Rate limited, using fallback pattern matching');
+        if (fallbackData) {
+          intentData = fallbackData;
+        } else {
+          return res.json({
+            response: "I'm a bit busy right now. Please try again in a moment, or use the quick action buttons below.",
+            action: 'rate_limited',
+            showFollowUp: true
+          });
+        }
+      } else {
+        throw error;
+      }
+    }
+    
+    if (!intentData) {
       return res.json({ 
-        response: intentText,
+        response: "I didn't quite catch that. Could you rephrase?",
         action: null,
         showFollowUp: false
       });
@@ -947,11 +1153,32 @@ Examples:
       });
     }
     
+    // Handle confirm (when user types "yes" to add new customer)
+    if (intentData.intent === 'confirm' && conversationState === 'waiting_for_new_customer_confirmation') {
+      return res.json({
+        response: "Great! Adding them now...",
+        action: 'confirm_add_customer',
+        showFollowUp: false
+      });
+    }
+    
     // Handle different intents
     if (intentData.intent === 'create_invoice') {
       if (intentData.customer && intentData.quantity && intentData.product) {
-        // We have enough info to create an invoice
-        if (intentData.isKnownCustomer === false) {
+        // Do our own customer matching (don't rely on Gemini's isKnownCustomer)
+        const customerLower = intentData.customer.toLowerCase();
+        const matchedKnownCustomer = knownCustomers.find(c => 
+          c.toLowerCase() === customerLower ||
+          customerLower.includes(c.toLowerCase()) ||
+          c.toLowerCase().includes(customerLower)
+        );
+        
+        const isActuallyKnown = !!matchedKnownCustomer;
+        const customerToUse = matchedKnownCustomer || intentData.customer;
+        
+        console.log(`📋 Customer check: "${intentData.customer}" → matched: "${matchedKnownCustomer}", isKnown: ${isActuallyKnown}`);
+        
+        if (!isActuallyKnown) {
           // Unknown customer - ask to add
           return res.json({
             response: `I don't recognize "${intentData.customer}" as a current wholesale client. Would you like me to add them as a new customer?`,
@@ -967,9 +1194,9 @@ Examples:
         } else {
           // Known customer - proceed with invoice
           return res.json({
-            response: `Got it! Creating an invoice for ${intentData.customer} - ${intentData.quantity} ${intentData.unit || 'lbs'} of ${intentData.product}. Processing now...`,
+            response: `Got it! Creating an invoice for ${customerToUse} - ${intentData.quantity} ${intentData.unit || 'lbs'} of ${intentData.product}. Processing now...`,
             action: 'create_invoice',
-            invoiceDetails: `${intentData.customer} ${intentData.quantity} ${intentData.unit || 'lbs'} ${intentData.product}`,
+            invoiceDetails: `${customerToUse} ${intentData.quantity} ${intentData.unit || 'lbs'} ${intentData.product}`,
             showFollowUp: false  // Follow-up will be added after invoice is generated
           });
         }

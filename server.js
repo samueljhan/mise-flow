@@ -605,112 +605,57 @@ app.post('/api/invoice/generate', async (req, res) => {
       return res.status(400).json({ error: 'Invoice details required' });
     }
 
-    // Try pattern matching first (fast, no API call)
-    let customer = null, quantity = null, product = null;
-    
-    // Common patterns
-    const patterns = [
-      /(?:for\s+)?(\w+(?:'s)?(?:\s+\w+)?)\s*[,.]?\s*(\d+)\s*(?:lbs?|pounds?|lb)?\s*(?:of\s+)?(.+)/i,
-      /^(\w+(?:'s)?(?:\s+\w+)?)\s+(\d+)\s*(?:lbs?|pounds?|lb)?\s*(.+)$/i,
-      /(.+?)\s+(\d+)\s*(?:lbs?|pounds?|lb)?\s*(?:for\s+)?(\w+(?:'s)?(?:\s+\w+)?)$/i
-    ];
-    
+    // Use Gemini to parse multiple items from natural language
     const knownProducts = ['Archives Blend', 'Ethiopia Gera Natural', 'Colombia Excelso', 'Colombia Decaf'];
     const productAliases = {
       'archives': 'Archives Blend', 'archive': 'Archives Blend', 'house': 'Archives Blend', 'blend': 'Archives Blend',
-      'ethiopia': 'Ethiopia Gera Natural', 'ethiopian': 'Ethiopia Gera Natural',
+      'ethiopia': 'Ethiopia Gera Natural', 'ethiopian': 'Ethiopia Gera Natural', 'ethiopia gera': 'Ethiopia Gera Natural',
       'colombia': 'Colombia Excelso', 'colombian': 'Colombia Excelso',
       'decaf': 'Colombia Decaf', 'decaffeinated': 'Colombia Decaf'
     };
     
-    for (const pattern of patterns) {
-      const match = details.match(pattern);
-      if (match) {
-        const [_, part1, qty, part3] = match;
-        quantity = parseInt(qty);
-        
-        // Figure out which is customer and which is product
-        const part1Lower = part1.toLowerCase().trim();
-        const part3Lower = part3.toLowerCase().trim();
-        
-        // Check if part1 is a customer
-        const customerFromPart1 = getKnownCustomers().find(c => 
-          c.toLowerCase() === part1Lower ||
-          part1Lower.includes(c.toLowerCase()) ||
-          c.toLowerCase().includes(part1Lower)
-        );
-        
-        // Check if part3 contains a product
-        const productFromPart3 = knownProducts.find(p => part3Lower.includes(p.toLowerCase().split(' ')[0])) ||
-          Object.entries(productAliases).find(([alias]) => part3Lower.includes(alias))?.[1];
-        
-        if (customerFromPart1 && productFromPart3) {
-          customer = customerFromPart1;
-          product = productFromPart3;
-          console.log(`✅ Pattern matched: customer="${customer}", quantity=${quantity}, product="${product}"`);
-          break;
-        }
-        
-        // Try reverse (product first, customer last)
-        const productFromPart1 = knownProducts.find(p => part1Lower.includes(p.toLowerCase().split(' ')[0])) ||
-          Object.entries(productAliases).find(([alias]) => part1Lower.includes(alias))?.[1];
-        const customerFromPart3 = getKnownCustomers().find(c => 
-          c.toLowerCase() === part3Lower ||
-          part3Lower.includes(c.toLowerCase()) ||
-          c.toLowerCase().includes(part3Lower)
-        );
-        
-        if (productFromPart1 && customerFromPart3) {
-          customer = customerFromPart3;
-          product = productFromPart1;
-          console.log(`✅ Pattern matched (reversed): customer="${customer}", quantity=${quantity}, product="${product}"`);
-          break;
-        }
-        
-        // Partial match - keep trying other patterns
-        if (customerFromPart1) customer = customerFromPart1;
-        if (productFromPart3) product = productFromPart3;
-        if (productFromPart1) product = productFromPart1;
-        if (customerFromPart3) customer = customerFromPart3;
-      }
-    }
-    
-    // If pattern matching didn't get everything, try Gemini
-    if (!customer || !quantity || !product) {
-      console.log(`⚡ Pattern matching incomplete, trying Gemini...`);
-      
-      const parsePrompt = `Parse this invoice request. Input: "${details}"
+    const parsePrompt = `Parse this invoice request into customer and line items.
+Input: "${details}"
+
 KNOWN CUSTOMERS: ${getKnownCustomers().join(', ')}
 KNOWN PRODUCTS: Archives Blend, Ethiopia Gera Natural, Colombia Excelso, Colombia Decaf
+PRODUCT ALIASES: archives/archive/blend = "Archives Blend", ethiopia/ethiopian = "Ethiopia Gera Natural", colombia/colombian = "Colombia Excelso", decaf = "Colombia Decaf"
 
-Respond ONLY with JSON: {"customer": "name", "quantity": number, "product": "name"}`;
+Respond ONLY with valid JSON (no markdown):
+{
+  "customer": "customer name from known customers list",
+  "items": [
+    {"quantity": 100, "product": "exact product name from known products"},
+    {"quantity": 40, "product": "exact product name from known products"}
+  ]
+}
 
-      try {
-        const parseText = await callGeminiWithRetry(parsePrompt, { maxRetries: 2 });
-        console.log(`🤖 Gemini parse: ${parseText}`);
-        
-        const cleanJson = parseText.replace(/```json\n?|\n?```/g, '').trim();
-        const parsed = JSON.parse(cleanJson);
-        
-        customer = customer || parsed.customer;
-        quantity = quantity || parseInt(parsed.quantity);
-        product = product || parsed.product;
-      } catch (parseError) {
-        if (parseError.message === 'RATE_LIMITED') {
-          console.log('⚠️ Rate limited during parsing');
-          if (!customer || !quantity || !product) {
-            return res.status(429).json({ 
-              error: 'System is busy. Please try again in a moment or use format: "CustomerName 100 lbs Product"' 
-            });
-          }
-        } else {
-          console.error('⚠️ Gemini parsing failed:', parseError.message);
-        }
-      }
+Examples:
+- "AOU 100lb Archives blend and 40lb Ethiopia" → {"customer": "Archives of Us", "items": [{"quantity": 100, "product": "Archives Blend"}, {"quantity": 40, "product": "Ethiopia Gera Natural"}]}
+- "CED 50 lbs archives" → {"customer": "CED", "items": [{"quantity": 50, "product": "Archives Blend"}]}
+- "Dex 20lb ethiopia, 30lb decaf" → {"customer": "Dex", "items": [{"quantity": 20, "product": "Ethiopia Gera Natural"}, {"quantity": 30, "product": "Colombia Decaf"}]}`;
+
+    let customer = null;
+    let items = [];
+    
+    try {
+      const parseText = await callGeminiWithRetry(parsePrompt, { maxRetries: 2 });
+      console.log(`🤖 Gemini parse: ${parseText}`);
+      
+      const cleanJson = parseText.replace(/```json\n?|\n?```/g, '').trim();
+      const parsed = JSON.parse(cleanJson);
+      
+      customer = parsed.customer;
+      items = parsed.items || [];
+    } catch (parseError) {
+      console.error('⚠️ Gemini parsing failed:', parseError.message);
+      return res.status(400).json({ 
+        error: 'Could not parse invoice details. Please use format: "CustomerName 100 lbs Product and 50 lbs Product2"' 
+      });
     }
     
-    if (!customer || !quantity || !product) {
-      return res.status(400).json({ error: 'Could not parse invoice details. Please use format: "CustomerName 100 lbs Product"' });
+    if (!customer || !items || items.length === 0) {
+      return res.status(400).json({ error: 'Could not parse invoice details. Please include customer name and at least one product with quantity.' });
     }
     
     // Match customer to known list
@@ -719,9 +664,9 @@ Respond ONLY with JSON: {"customer": "name", "quantity": number, "product": "nam
       customer.toLowerCase().includes(c.toLowerCase()) ||
       c.toLowerCase().includes(customer.toLowerCase())
     );
-    if (normalizedCustomer) customer = normalizedCustomer;
+    const finalCustomer = normalizedCustomer || customer;
 
-    console.log(`📝 Generating invoice for: ${customer}, ${quantity} lbs ${product}`);
+    console.log(`📝 Generating invoice for: ${finalCustomer}, ${items.length} item(s)`);
 
     oauth2Client.setCredentials(userTokens);
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
@@ -734,252 +679,71 @@ Respond ONLY with JSON: {"customer": "name", "quantity": number, "product": "nam
     
     const pricingRows = pricingResponse.data.values || [];
     
-    // Extract all table headers (customers) and products from the sheet
-    const tableHeaders = [];
-    const allProducts = [];
+    // Determine which price column to use
+    const isArchives = finalCustomer.toLowerCase() === 'archives of us';
+    const priceColumn = isArchives ? 7 : 3; // H (index 7) for At-Cost, D (index 3) for Wholesale Tier 1
     
+    // Find the correct table start row
+    let tableStartRow = -1;
     for (let i = 0; i < pricingRows.length; i++) {
-      const row = pricingRows[i];
-      const cellB = (row[1] || '').toString().trim();
+      const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
+      if (isArchives && cellB === 'at-cost') {
+        tableStartRow = i;
+        break;
+      } else if (!isArchives && cellB.includes('wholesale tier 1')) {
+        tableStartRow = i;
+        break;
+      }
+    }
+    
+    // Build pricing lookup map from the table
+    const pricingMap = {};
+    if (tableStartRow !== -1) {
+      for (let i = tableStartRow + 1; i < pricingRows.length; i++) {
+        const row = pricingRows[i];
+        const productName = (row[1] || '').toString().trim();
+        const priceCell = row[priceColumn];
+        
+        // Stop if we hit another table or empty row
+        if (!productName || productName.toLowerCase().includes('wholesale') || productName.toLowerCase() === 'at-cost') break;
+        if (productName.toLowerCase() === 'coffee') continue; // Skip header
+        
+        const price = parseFloat((priceCell || '').toString().replace(/[$,]/g, ''));
+        if (price > 0) {
+          pricingMap[productName.toLowerCase()] = { name: productName, price };
+        }
+      }
+    }
+    
+    console.log(`📋 Pricing map:`, pricingMap);
+    
+    // Process each item and get pricing
+    const processedItems = [];
+    for (const item of items) {
+      const productLower = item.product.toLowerCase();
+      const pricing = pricingMap[productLower];
       
-      if (cellB.toLowerCase().includes('wholesale') || cellB.toLowerCase().includes('at-cost')) {
-        tableHeaders.push({ name: cellB, row: i });
-      } else if (cellB && cellB.toLowerCase() !== 'coffee' && !cellB.toLowerCase().includes('price')) {
-        allProducts.push(cellB);
+      if (!pricing) {
+        return res.status(400).json({ 
+          error: `Could not find pricing for "${item.product}" for customer "${finalCustomer}". Please check the pricing sheet.`
+        });
       }
-    }
-    
-    // Remove duplicate products
-    const uniqueProducts = [...new Set(allProducts)];
-    
-    console.log(`📋 Available tables: ${tableHeaders.map(t => t.name).join(', ')}`);
-    console.log(`📋 Available products: ${uniqueProducts.join(', ')}`);
-    console.log(`📋 Known customers: ${getKnownCustomers().join(', ')}`);
-    
-    // Prepare Gemini matching prompt (used if direct matching fails)
-    const matchPrompt = `You are a matching assistant. Match the user input to the closest option from the available lists.
-
-Known customers:
-${getKnownCustomers().map(c => `- ${c}`).join('\n')}
-
-Available products:
-${uniqueProducts.map(p => `- ${p}`).join('\n')}
-
-User entered:
-- Customer: "${customer}"
-- Product: "${product}"
-
-Respond ONLY with valid JSON (no markdown, no explanation):
-{
-  "matchedCustomer": "exact name from known customers list or null if no close match",
-  "matchedProduct": "exact name from product list or null if no close match",
-  "customerConfidence": "high/medium/low/none",
-  "productConfidence": "high/medium/low"
-}
-
-Rules:
-- Match even with typos, abbreviations, or partial names
-- "CED" should match "CED"
-- "Dex" or "deks" should match "Dex"
-- "Archives" or "AOU" should match "Archives of Us"
-- "junia" or "juna" should match "Junia"
-- "Archives" or "archive blend" for PRODUCT should match "Archives Blend"
-- "Ethiopia" should match "Ethiopia Gera Natural"
-- If the customer doesn't closely match any known customer, set matchedCustomer to null and customerConfidence to "none"`;
-
-    let matchedCustomer = null;
-    let matchedProduct = null;
-    let customerConfidence = 'none';
-    
-    // First, check for direct customer match (case-insensitive)
-    const directCustomerMatch = getKnownCustomers().find(c => 
-      c.toLowerCase() === customer.toLowerCase() ||
-      customer.toLowerCase().includes(c.toLowerCase()) ||
-      c.toLowerCase().includes(customer.toLowerCase())
-    );
-    
-    if (directCustomerMatch) {
-      matchedCustomer = directCustomerMatch;
-      customerConfidence = 'high';
-      console.log(`✅ Direct customer match: "${matchedCustomer}"`);
-    }
-    
-    // Check for direct product match
-    const directProductMatch = uniqueProducts.find(p =>
-      p.toLowerCase() === product.toLowerCase() ||
-      product.toLowerCase().includes(p.toLowerCase().split(' ')[0]) ||
-      p.toLowerCase().includes(product.toLowerCase())
-    );
-    
-    if (directProductMatch) {
-      matchedProduct = directProductMatch;
-      console.log(`✅ Direct product match: "${matchedProduct}"`);
-    }
-    
-    // Only use Gemini if we don't have direct matches
-    if (!matchedCustomer || !matchedProduct) {
-      try {
-        const matchText = await callGeminiWithRetry(matchPrompt, { maxRetries: 1 });
-        console.log(`🤖 Gemini match response: ${matchText}`);
-        
-        // Parse JSON response
-        const cleanJson = matchText.replace(/```json\n?|\n?```/g, '').trim();
-        const matchData = JSON.parse(cleanJson);
-        
-        if (!matchedCustomer) {
-          matchedCustomer = matchData.matchedCustomer;
-          customerConfidence = matchData.customerConfidence;
-        }
-        if (!matchedProduct) {
-          matchedProduct = matchData.matchedProduct;
-        }
-        
-        console.log(`✅ Final customer: "${matchedCustomer}" (${customerConfidence})`);
-        console.log(`✅ Final product: "${matchedProduct}"`);
-      } catch (matchError) {
-        console.log('⚠️ Gemini matching failed, using direct matches only:', matchError.message);
-        // Use customer as-is if Gemini failed but we have direct match attempt
-        if (!matchedCustomer) matchedCustomer = customer;
-        if (!matchedProduct) matchedProduct = product;
-      }
-    }
-    
-    // If customer not recognized, ask for clarification
-    if (!matchedCustomer || customerConfidence === 'none' || customerConfidence === 'low') {
-      return res.status(400).json({ 
-        error: `Customer "${customer}" is not recognized. Should I add them as a new wholesale client?`,
-        clarification: true,
-        originalDetails: details,
-        originalCustomer: customer,
-        customers: getKnownCustomers()
+      
+      processedItems.push({
+        description: `${pricing.name} (units in lbs)`,
+        quantity: item.quantity,
+        unitPrice: pricing.price,
+        total: item.quantity * pricing.price
       });
+      
+      console.log(`💰 ${item.quantity} lbs ${pricing.name}: $${pricing.price}/lb = $${(item.quantity * pricing.price).toFixed(2)}`);
     }
     
-    if (!matchedProduct) {
-      return res.status(400).json({ error: `Could not find a product matching "${product}". Available: ${uniqueProducts.join(', ')}` });
-    }
-    
-    // Use matched customer name
-    let finalCustomer = matchedCustomer;
-    console.log(`✅ Using customer: "${finalCustomer}"`);
-    
-    // Use Gemini to find the correct price from the sheet
-    const pricingPrompt = `You are a pricing lookup assistant. Given the spreadsheet data below, find the correct per-pound price.
+    // Calculate grand total
+    const subtotal = processedItems.reduce((sum, item) => sum + item.total, 0);
+    const grandTotal = subtotal;
 
-SPREADSHEET DATA (columns A through H):
-${pricingRows.map((row, i) => `Row ${i + 1}: ${row.map((cell, j) => `${String.fromCharCode(65 + j)}="${cell || ''}"`).join(', ')}`).join('\n')}
-
-PRICING RULES:
-1. IMPORTANT: If customer is "Archives of Us" (or AOU), you MUST use the "At-Cost" table (around row 2) and get the price from column H ("Per lb"). For example, "Archives Blend" at-cost per lb is in cell H4.
-2. For customer "CED", use "Wholesale CED" table and get price from column D
-3. For customer "Dex", use "Wholesale Dex" table and get price from column D  
-4. For customer "Junia", use "Wholesale Junia" table and get price from column D
-5. For any new/unknown customer, use "Wholesale Tier 1" pricing from column D
-
-LOOKUP REQUEST:
-- Customer: "${finalCustomer}"
-- Product: "${matchedProduct}"
-
-The price should be a number like 10.22, 11.50, 14.00, etc. NOT zero.
-
-Respond ONLY with valid JSON (no markdown, no explanation):
-{
-  "price": <number - this should NOT be zero or null>,
-  "table": "<name of table used>",
-  "row": <row number where product was found>,
-  "column": "<H for At-Cost, D for Wholesale>",
-  "explanation": "<brief explanation of how you found it>"
-}`;
-
-    let unitPrice = null;
-    let pricingSource = null;
-    
-    // Try Gemini pricing lookup with retry
-    try {
-      const pricingText = await callGeminiWithRetry(pricingPrompt, { maxRetries: 2 });
-      console.log(`🤖 Gemini pricing response: ${pricingText}`);
-      
-      const cleanJson = pricingText.replace(/```json\n?|\n?```/g, '').trim();
-      const pricingData = JSON.parse(cleanJson);
-      
-      if (pricingData.price !== null && pricingData.price > 0) {
-        unitPrice = parseFloat(pricingData.price);
-        pricingSource = pricingData.table;
-        console.log(`✅ Found price: $${unitPrice}/lb from ${pricingSource}`);
-      }
-    } catch (pricingError) {
-      console.log('⚠️ Gemini pricing failed, using direct lookup:', pricingError.message);
-    }
-    
-    // Fallback: Direct sheet parsing if Gemini failed
-    if (!unitPrice || unitPrice <= 0) {
-      console.log(`📋 Falling back to direct sheet lookup...`);
-      
-      // Determine which table and column to use
-      const isArchives = finalCustomer.toLowerCase() === 'archives of us';
-      const priceColumn = isArchives ? 7 : 3; // H (index 7) for At-Cost, D (index 3) for Wholesale
-      
-      // Find the correct table
-      let targetTable = isArchives ? 'At-Cost' : `Wholesale ${finalCustomer}`;
-      let tableStartRow = -1;
-      
-      for (let i = 0; i < pricingRows.length; i++) {
-        const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
-        if (isArchives && cellB === 'at-cost') {
-          tableStartRow = i;
-          break;
-        } else if (!isArchives && cellB.includes('wholesale') && cellB.includes(finalCustomer.toLowerCase())) {
-          tableStartRow = i;
-          break;
-        }
-      }
-      
-      // Fallback to Tier 1 if no specific table found
-      if (tableStartRow === -1 && !isArchives) {
-        for (let i = 0; i < pricingRows.length; i++) {
-          const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
-          if (cellB.includes('wholesale tier 1')) {
-            tableStartRow = i;
-            targetTable = 'Wholesale Tier 1';
-            break;
-          }
-        }
-      }
-      
-      // Search for product in the table
-      if (tableStartRow !== -1) {
-        for (let i = tableStartRow + 1; i < pricingRows.length; i++) {
-          const row = pricingRows[i];
-          const cellB = (row[1] || '').toString().trim().toLowerCase();
-          const priceCell = row[priceColumn];
-          
-          // Stop if we hit another table or empty row
-          if (!cellB || cellB.includes('wholesale') || cellB === 'at-cost') break;
-          if (cellB === 'coffee') continue; // Skip header
-          
-          if (cellB === matchedProduct.toLowerCase()) {
-            unitPrice = parseFloat((priceCell || '').toString().replace(/[$,]/g, ''));
-            pricingSource = targetTable + ' (direct lookup)';
-            console.log(`✅ Direct lookup found: $${unitPrice}/lb from ${targetTable}`);
-            break;
-          }
-        }
-      }
-    }
-    
-    if (!unitPrice || unitPrice <= 0) {
-      return res.status(400).json({ 
-        error: `Could not find valid pricing for "${matchedProduct}" for customer "${finalCustomer}". Please check the pricing sheet.`,
-        debug: { customer: finalCustomer, product: matchedProduct, pricingSource }
-      });
-    }
-    
-    // Update product name to the matched version for the invoice
-    const finalProduct = matchedProduct;
-
-    console.log(`💰 Unit price for ${finalProduct}: $${unitPrice}/lb (from ${pricingSource})`);
-
-    // Step 2: Get last invoice number from Invoices sheet using Gemini
+    // Step 2: Get last invoice number from Invoices sheet
     const invoicesResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Invoices!A:E'
@@ -988,62 +752,29 @@ Respond ONLY with valid JSON (no markdown, no explanation):
     const invoiceRows = invoicesResponse.data.values || [];
     const customerPrefix = getCustomerCode(finalCustomer);
     
-    // Use Gemini to find the last invoice number for this customer
-    const invoicePrompt = `You are an invoice number lookup assistant. Given the spreadsheet data below, find the highest invoice number for customer prefix "${customerPrefix}".
-
-SPREADSHEET DATA (Invoices sheet):
-${invoiceRows.map((row, i) => `Row ${i + 1}: ${row.map((cell, j) => `${String.fromCharCode(65 + j)}="${cell || ''}"`).join(', ')}`).join('\n')}
-
-RULES:
-1. Invoice numbers are in column C and follow the format: C-XXX-#### (e.g., C-CED-1000, C-AOU-1001)
-2. Find all invoices that match the prefix "C-${customerPrefix}-"
-3. Return the highest number found, or 999 if no invoices exist for this customer (so next one will be 1000)
-
-Respond ONLY with valid JSON (no markdown, no explanation):
-{
-  "lastNumber": <highest invoice number found or 999 if none>,
-  "invoicesFound": <count of invoices found for this customer>,
-  "explanation": "<brief explanation>"
-}`;
-
     let lastNumber = 999;
-    
-    // Try Gemini first with retry
-    try {
-      const invoiceText = await callGeminiWithRetry(invoicePrompt, { maxRetries: 1 });
-      console.log(`🤖 Gemini invoice lookup: ${invoiceText}`);
-      
-      const cleanJson = invoiceText.replace(/```json\n?|\n?```/g, '').trim();
-      const invoiceData = JSON.parse(cleanJson);
-      
-      lastNumber = invoiceData.lastNumber;
-      console.log(`✅ Last invoice for ${customerPrefix}: ${lastNumber}`);
-    } catch (invoiceError) {
-      console.log('⚠️ Gemini invoice lookup failed, using direct search:', invoiceError.message);
-      // Direct search in column C
-      for (const row of invoiceRows) {
-        if (row[2] && row[2].startsWith(`C-${customerPrefix}-`)) {
-          const num = parseInt(row[2].split('-')[2]);
-          if (!isNaN(num) && num > lastNumber) {
-            lastNumber = num;
-          }
+    // Direct search in column C for invoice numbers
+    for (const row of invoiceRows) {
+      if (row[2] && row[2].startsWith(`C-${customerPrefix}-`)) {
+        const num = parseInt(row[2].split('-')[2]);
+        if (!isNaN(num) && num > lastNumber) {
+          lastNumber = num;
         }
       }
-      console.log(`✅ Direct search found last number: ${lastNumber}`);
     }
+    console.log(`✅ Last invoice for ${customerPrefix}: ${lastNumber}`);
     
     const invoiceNumber = `C-${customerPrefix}-${lastNumber + 1}`;
     console.log(`🧾 Generated invoice number: ${invoiceNumber}`);
 
-    // Step 3: Calculate totals
-    const total = quantity * unitPrice;
+    // Step 3: Generate dates
     const today = new Date();
     const dateStr = today.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
     const dueDateObj = new Date(today);
-    dueDateObj.setDate(dueDateObj.getDate() + 2); // Due in 2 days like your example
+    dueDateObj.setDate(dueDateObj.getDate() + 2); // Due in 2 days
     const dueDateStr = dueDateObj.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
 
-    // Step 4: Generate PDF
+    // Step 4: Generate PDF with all items
     const pdfFilename = `${invoiceNumber}.pdf`;
     const pdfPath = path.join(invoicesDir, pdfFilename);
     
@@ -1052,27 +783,21 @@ Respond ONLY with valid JSON (no markdown, no explanation):
       customer: finalCustomer,
       date: dateStr,
       dueDate: dueDateStr,
-      items: [{
-        description: `${finalProduct} (units in lbs)`,
-        quantity,
-        unitPrice,
-        total
-      }],
-      subtotal: total,
-      total
+      items: processedItems,
+      subtotal: subtotal,
+      total: grandTotal
     }, pdfPath);
 
     console.log(`📄 PDF generated: ${pdfPath}`);
 
     // Step 5: Record in Invoices sheet
-    // Format: Column B = Date, Column C = Invoice #, Column D = Price, Column E = (blank for Paid)
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Invoices!B:E',
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
-        values: [[dateStr, invoiceNumber, `$${total.toFixed(2)}`, '']]
+        values: [[dateStr, invoiceNumber, `$${grandTotal.toFixed(2)}`, '']]
       }
     });
 
@@ -1085,10 +810,8 @@ Respond ONLY with valid JSON (no markdown, no explanation):
       customer: finalCustomer,
       date: dateStr,
       dueDate: dueDateStr,
-      quantity,
-      product: finalProduct,
-      unitPrice,
-      total,
+      items: processedItems,
+      total: grandTotal,
       pdfUrl: `/invoices/${pdfFilename}`
     });
 
@@ -1097,6 +820,7 @@ Respond ONLY with valid JSON (no markdown, no explanation):
     res.status(500).json({ error: 'Failed to generate invoice', details: error.message });
   }
 });
+
 
 // Parse invoice details from natural language
 function parseInvoiceDetails(details) {

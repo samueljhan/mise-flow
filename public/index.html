@@ -160,23 +160,8 @@
 
         .message.user { flex-direction: row-reverse; }
 
-        .avatar {
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: 600;
-            font-size: 14px;
-            flex-shrink: 0;
-        }
-
-        .user .avatar { background: #404040; color: #e0e0e0; }
-        .assistant .avatar { background: #353535; color: #b0b0b0; }
-
         .message-content {
-            max-width: 70%;
+            max-width: 85%;
             padding: 12px 18px;
             border-radius: 18px;
             line-height: 1.5;
@@ -587,12 +572,6 @@
                 font-size: 13px;
                 padding: 8px 12px;
             }
-            
-            .avatar {
-                width: 28px;
-                height: 28px;
-                font-size: 11px;
-            }
         }
     </style>
 </head>
@@ -864,15 +843,10 @@
             const messageDiv = document.createElement('div');
             messageDiv.className = 'message ' + (isUser ? 'user' : 'assistant');
             
-            const avatar = document.createElement('div');
-            avatar.className = 'avatar';
-            avatar.textContent = isUser ? 'Y' : 'MF';
-            
             const content = document.createElement('div');
             content.className = 'message-content';
             content.innerHTML = text;
             
-            messageDiv.appendChild(avatar);
             messageDiv.appendChild(content);
             chatContainer.appendChild(messageDiv);
             chatContainer.scrollTop = chatContainer.scrollHeight;

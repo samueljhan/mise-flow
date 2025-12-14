@@ -580,6 +580,41 @@ If no valid emails found, return: {"emails": []}`;
   }
 });
 
+// Interpret yes/no confirmation using Gemini
+app.post('/api/interpret-confirmation', async (req, res) => {
+  const { message } = req.body;
+  
+  if (!message) {
+    return res.status(400).json({ error: 'Message required' });
+  }
+  
+  const prompt = `Interpret if the user is saying YES or NO to a question.
+User's response: "${message}"
+
+Respond ONLY with valid JSON (no markdown):
+{"confirmed": true} if the user is agreeing/confirming (e.g., yes, sure, ok, yeah, yep, absolutely, go ahead, do it, sounds good, please, definitely)
+{"confirmed": false} if the user is declining/canceling (e.g., no, nope, cancel, never mind, don't, nah, skip)
+{"confirmed": null} if unclear`;
+
+  try {
+    const responseText = await callGeminiWithRetry(prompt, { maxRetries: 1 });
+    const cleanJson = responseText.replace(/```json\n?|\n?```/g, '').trim();
+    const parsed = JSON.parse(cleanJson);
+    res.json(parsed);
+  } catch (error) {
+    console.error('Error interpreting confirmation:', error);
+    // Fallback
+    const lower = message.toLowerCase();
+    if (lower.includes('yes') || lower.includes('sure') || lower.includes('ok') || lower.includes('yep') || lower.includes('yeah')) {
+      res.json({ confirmed: true });
+    } else if (lower.includes('no') || lower.includes('nope') || lower.includes('cancel')) {
+      res.json({ confirmed: false });
+    } else {
+      res.json({ confirmed: null });
+    }
+  }
+});
+
 // ============ Invoice Generation ============
 
 app.post('/api/invoice/generate', async (req, res) => {
@@ -1021,8 +1056,7 @@ app.post('/api/process', async (req, res) => {
       fallbackData = {
         intent: 'create_invoice',
         customer: matchedCustomer || customerInput,
-        quantity,
-        product,
+        items: [{ quantity, product }],
         isKnownCustomer: !!matchedCustomer
       };
     }
@@ -1044,17 +1078,21 @@ CONVERSATION CONTEXT: ${conversationState || 'none'}
 
 User said: "${text}"
 
+IMPORTANT: For invoice requests with multiple products (e.g., "100lb blend, 20lb decaf"), capture ALL items in the items array.
+
 Respond ONLY with valid JSON:
 {
   "intent": "create_invoice" | "update_inventory" | "check_inventory" | "decline" | "confirm" | "general_question",
   "customer": "<matched customer name or original if new>",
-  "quantity": <number or null>,
-  "unit": "<lbs, bags, etc. or null>",
-  "product": "<product name or null>",
+  "items": [{"quantity": <number>, "product": "<product name>"}],
   "isKnownCustomer": <true/false>,
   "friendlyResponse": "<brief response>",
   "conversationComplete": <true/false>
-}`;
+}
+
+Examples:
+- "dex 100lb blend, 20lb decaf" → {"intent": "create_invoice", "customer": "Dex", "items": [{"quantity": 100, "product": "Archives Blend"}, {"quantity": 20, "product": "Colombia Decaf"}], "isKnownCustomer": true, ...}
+- "CED 50 lbs archives" → {"intent": "create_invoice", "customer": "CED", "items": [{"quantity": 50, "product": "Archives Blend"}], "isKnownCustomer": true, ...}`;
 
       const intentText = await callGeminiWithRetry(intentPrompt, { temperature: 0.1, maxRetries: 2 });
       console.log(`🤖 Intent detection: ${intentText}`);
@@ -1107,7 +1145,11 @@ Respond ONLY with valid JSON:
     
     // Handle different intents
     if (intentData.intent === 'create_invoice') {
-      if (intentData.customer && intentData.quantity && intentData.product) {
+      // Check if we have customer and at least one item
+      const hasItems = intentData.items && intentData.items.length > 0;
+      const hasLegacyFormat = intentData.quantity && intentData.product;
+      
+      if (intentData.customer && (hasItems || hasLegacyFormat)) {
         // Do our own customer matching (don't rely on Gemini's isKnownCustomer)
         const customerLower = intentData.customer.toLowerCase();
         const matchedKnownCustomer = getKnownCustomers().find(c => 
@@ -1121,6 +1163,14 @@ Respond ONLY with valid JSON:
         
         console.log(`📋 Customer check: "${intentData.customer}" → matched: "${matchedKnownCustomer}", isKnown: ${isActuallyKnown}`);
         
+        // Build items description for response
+        let itemsDesc = '';
+        if (hasItems) {
+          itemsDesc = intentData.items.map(item => `${item.quantity} lbs ${item.product}`).join(', ');
+        } else {
+          itemsDesc = `${intentData.quantity} ${intentData.unit || 'lbs'} of ${intentData.product}`;
+        }
+        
         if (!isActuallyKnown) {
           // Unknown customer - ask to add
           return res.json({
@@ -1128,19 +1178,17 @@ Respond ONLY with valid JSON:
             action: 'confirm_new_customer',
             pendingInvoice: {
               customer: intentData.customer,
-              quantity: intentData.quantity,
-              unit: intentData.unit || 'lbs',
-              product: intentData.product
+              originalText: text
             },
             showFollowUp: false
           });
         } else {
-          // Known customer - proceed with invoice
+          // Known customer - proceed with invoice, pass original text for accurate parsing
           return res.json({
-            response: `Got it! Creating an invoice for ${customerToUse} - ${intentData.quantity} ${intentData.unit || 'lbs'} of ${intentData.product}. Processing now...`,
+            response: `Got it! Creating an invoice for ${customerToUse}: ${itemsDesc}. Processing now...`,
             action: 'create_invoice',
-            invoiceDetails: `${customerToUse} ${intentData.quantity} ${intentData.unit || 'lbs'} ${intentData.product}`,
-            showFollowUp: false  // Follow-up will be added after invoice is generated
+            invoiceDetails: text,  // Pass original text for multi-item parsing
+            showFollowUp: false
           });
         }
       } else {

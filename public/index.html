@@ -1087,24 +1087,52 @@
             // Get attachment info if available
             const pdfUrl = modal.dataset.pdfUrl || null;
             const invoiceNumber = modal.dataset.invoiceNumber || null;
+            const customerName = modal.dataset.customerName || null;
+            const originalEmails = modal.dataset.originalEmails || '';
             
             if (!to) {
                 alert('Please enter a recipient email.');
                 return;
             }
             
+            // Create the draft first
+            const success = await proceedWithEmailDraft({ to, subject, body, pdfUrl, invoiceNumber });
+            
+            // If draft was created and emails have changed, ask about saving
+            if (success && customerName && to !== originalEmails) {
+                // Parse the new emails
+                const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+                const newEmails = to.match(emailRegex) || [];
+                const emailCount = newEmails.length;
+                
+                const emailText = emailCount > 1 ? 'these emails' : 'this email';
+                addMessage(`Do you want to save ${emailText} for future ${customerName} invoices? (${to})`, false);
+                
+                // Store pending email update info
+                window.pendingEmailUpdate = {
+                    customerName,
+                    newEmails: to
+                };
+                window.waitingForEmailUpdateConfirmation = true;
+            }
+        }
+        
+        async function proceedWithEmailDraft(emailData) {
+            const btn = document.getElementById('sendEmailBtn');
+            const modal = document.getElementById('emailModal');
+            
             btn.disabled = true;
             btn.textContent = 'Creating...';
             
             try {
                 // Build request body
-                const requestBody = { to, subject, body };
+                const requestBody = { to: emailData.to, subject: emailData.subject, body: emailData.body };
                 
                 // If this is an invoice email, include the PDF path
-                if (pdfUrl && invoiceNumber) {
+                if (emailData.pdfUrl && emailData.invoiceNumber) {
                     // Convert URL to file path (e.g., /invoices/C-ARC-1000.pdf -> public/invoices/C-ARC-1000.pdf)
-                    requestBody.attachmentPath = 'public' + pdfUrl;
-                    requestBody.attachmentName = invoiceNumber + '.pdf';
+                    requestBody.attachmentPath = 'public' + emailData.pdfUrl;
+                    requestBody.attachmentName = emailData.invoiceNumber + '.pdf';
                 }
                 
                 const response = await fetch('/api/gmail/send', {
@@ -1115,21 +1143,97 @@
                 
                 if (response.ok) {
                     const data = await response.json();
-                    alert(data.message || 'Draft created! Check your Gmail drafts folder.');
+                    addMessage('✅ ' + (data.message || 'Draft created! Check your Gmail drafts folder.'), false);
                     closeEmailModal();
                     // Clear the attachment data
                     delete modal.dataset.pdfUrl;
                     delete modal.dataset.invoiceNumber;
+                    delete modal.dataset.customerName;
+                    delete modal.dataset.originalEmails;
+                    return true;
                 } else {
                     const data = await response.json();
-                    alert('Failed: ' + (data.error || 'Unknown error'));
+                    addMessage('⚠️ Failed: ' + (data.error || 'Unknown error'), false);
+                    return false;
                 }
             } catch (error) {
-                alert('Error creating draft');
+                addMessage('⚠️ Error creating draft', false);
+                return false;
             } finally {
                 btn.disabled = false;
                 btn.textContent = 'Create Draft';
             }
+        }
+        
+        async function handleEmailUpdateResponse(userMessage) {
+            // Use Gemini to interpret the response
+            try {
+                const response = await fetch('/api/interpret-confirmation', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: userMessage })
+                });
+                
+                const data = await response.json();
+                
+                if (data.confirmed === true) {
+                    handleEmailUpdateConfirmation(true);
+                } else if (data.confirmed === false) {
+                    handleEmailUpdateConfirmation(false);
+                } else {
+                    addMessage('I didn\'t quite catch that. Do you want to save this email for future invoices? (yes/no)', false);
+                }
+            } catch (error) {
+                console.error('Error interpreting response:', error);
+                // Fallback to simple check
+                const lowerMsg = userMessage.toLowerCase();
+                if (lowerMsg.includes('yes') || lowerMsg.includes('sure') || lowerMsg.includes('ok') || lowerMsg.includes('yep') || lowerMsg.includes('yeah')) {
+                    handleEmailUpdateConfirmation(true);
+                } else if (lowerMsg.includes('no') || lowerMsg.includes('nope') || lowerMsg.includes('cancel')) {
+                    handleEmailUpdateConfirmation(false);
+                } else {
+                    addMessage('I didn\'t quite catch that. Do you want to save this email for future invoices? (yes/no)', false);
+                }
+            }
+        }
+        
+        async function handleEmailUpdateConfirmation(confirmed) {
+            window.waitingForEmailUpdateConfirmation = false;
+            const pending = window.pendingEmailUpdate;
+            
+            if (!pending) return;
+            
+            if (confirmed) {
+                // Update the customer's email in the directory
+                try {
+                    const response = await fetch('/api/customers/emails', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            customerName: pending.customerName,
+                            emailsInput: pending.newEmails
+                        })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        addMessage(`✅ Updated email(s) for ${pending.customerName}: ${data.emails.join(', ')}`, false);
+                    }
+                } catch (error) {
+                    console.error('Error updating emails:', error);
+                    addMessage('⚠️ Error saving emails.', false);
+                }
+            } else {
+                addMessage('No problem, email not saved to directory.', false);
+            }
+            
+            window.pendingEmailUpdate = null;
+            
+            // Add follow-up
+            setTimeout(() => {
+                addFollowUpMessage();
+            }, 500);
         }
 
         async function updateSheet() {
@@ -1167,6 +1271,12 @@
             // Check if we're waiting for customer email
             if (window.waitingForCustomerEmail) {
                 processCustomerEmail(message);
+                return;
+            }
+            
+            // Check if we're waiting for email update confirmation
+            if (window.waitingForEmailUpdateConfirmation) {
+                handleEmailUpdateResponse(message);
                 return;
             }
 
@@ -1331,16 +1441,20 @@
                 .then(response => response.json())
                 .then(data => {
                     if (data.emails && data.emails.length > 0) {
+                        // Store original emails for comparison
+                        modal.dataset.originalEmails = data.emails.join(', ');
                         // Auto-populate with customer emails
                         document.getElementById('emailTo').value = data.emails.join(', ');
                         showEmailModal(invoiceNumber);
                     } else {
+                        modal.dataset.originalEmails = '';
                         // No emails on file - prompt for email
                         promptForCustomerEmail(customerName, invoiceNumber);
                     }
                 })
                 .catch(error => {
                     console.error('Error fetching customer:', error);
+                    modal.dataset.originalEmails = '';
                     // Customer not found - prompt for email
                     promptForCustomerEmail(customerName, invoiceNumber);
                 });

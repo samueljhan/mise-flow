@@ -141,25 +141,62 @@ For unknown customers, respond like:
 
 Be concise, friendly, and action-oriented. Don't ask unnecessary questions - if the intent is clear, proceed with the action.`;
 
-// Known wholesale customers (shared with invoice generation)
-let knownCustomers = ['Archives of Us', 'CED', 'Dex', 'Junia'];
-
-// Customer 3-letter codes for invoices
-let customerCodes = {
-  'archives of us': 'AOU',
-  'ced': 'CED',
-  'dex': 'DEX',
-  'junia': 'JUN'
+// Customer directory with codes and emails
+let customerDirectory = {
+  'archives of us': {
+    name: 'Archives of Us',
+    code: 'AOU',
+    emails: ['nick@archivesofus.com']
+  },
+  'ced': {
+    name: 'CED',
+    code: 'CED',
+    emails: ['songs0519@hotmail.com']
+  },
+  'dex': {
+    name: 'Dex',
+    code: 'DEX',
+    emails: ['dexcoffeeusa@gmail.com', 'lkusacorp@gmail.com']
+  },
+  'junia': {
+    name: 'Junia',
+    code: 'JUN',
+    emails: ['hello@juniacafe.com']
+  }
 };
+
+// Helper to get known customers list
+function getKnownCustomers() {
+  return Object.values(customerDirectory).map(c => c.name);
+}
 
 // Helper to get customer code
 function getCustomerCode(customerName) {
   const lower = customerName.toLowerCase();
-  if (customerCodes[lower]) {
-    return customerCodes[lower];
+  if (customerDirectory[lower]) {
+    return customerDirectory[lower].code;
   }
   // Default: first 3 letters uppercase
   return customerName.substring(0, 3).toUpperCase();
+}
+
+// Helper to get customer emails
+function getCustomerEmails(customerName) {
+  const lower = customerName.toLowerCase();
+  if (customerDirectory[lower]) {
+    return customerDirectory[lower].emails || [];
+  }
+  return [];
+}
+
+// Helper to add/update customer
+function addOrUpdateCustomer(name, code, emails = []) {
+  const lower = name.toLowerCase();
+  customerDirectory[lower] = {
+    name: name,
+    code: code.toUpperCase(),
+    emails: emails
+  };
 }
 
 // ============ Google OAuth Routes ============
@@ -442,12 +479,24 @@ app.post('/api/sheets/append', async (req, res) => {
 
 // Get list of known customers
 app.get('/api/customers', (req, res) => {
-  res.json({ customers: knownCustomers });
+  res.json({ customers: getKnownCustomers() });
+});
+
+// Get customer info (including emails)
+app.get('/api/customers/:name', (req, res) => {
+  const customerName = req.params.name;
+  const lower = customerName.toLowerCase();
+  
+  if (customerDirectory[lower]) {
+    res.json(customerDirectory[lower]);
+  } else {
+    res.status(404).json({ error: 'Customer not found' });
+  }
 });
 
 // Add a new customer
 app.post('/api/customers/add', (req, res) => {
-  const { name, code } = req.body;
+  const { name, code, emails } = req.body;
   
   if (!name) {
     return res.status(400).json({ error: 'Customer name required' });
@@ -459,20 +508,76 @@ app.post('/api/customers/add', (req, res) => {
   
   const trimmedName = name.trim();
   const trimmedCode = code.trim().toUpperCase();
+  const lower = trimmedName.toLowerCase();
   
-  if (knownCustomers.map(c => c.toLowerCase()).includes(trimmedName.toLowerCase())) {
+  if (customerDirectory[lower]) {
     return res.status(400).json({ error: `Customer "${trimmedName}" already exists` });
   }
   
-  knownCustomers.push(trimmedName);
-  customerCodes[trimmedName.toLowerCase()] = trimmedCode;
+  addOrUpdateCustomer(trimmedName, trimmedCode, emails || []);
   console.log(`✅ Added new customer: ${trimmedName} (code: ${trimmedCode})`);
   
   res.json({ 
     success: true, 
     message: `"${trimmedName}" (${trimmedCode}) has been added as a new customer. They will receive Wholesale Tier 1 pricing.`,
-    customers: knownCustomers 
+    customers: getKnownCustomers()
   });
+});
+
+// Update customer emails
+app.post('/api/customers/emails', async (req, res) => {
+  const { customerName, emailsInput } = req.body;
+  
+  if (!customerName || !emailsInput) {
+    return res.status(400).json({ error: 'Customer name and emails required' });
+  }
+  
+  // Use Gemini to parse the emails from natural language
+  const parsePrompt = `Extract all email addresses from this input: "${emailsInput}"
+  
+Respond ONLY with valid JSON (no markdown):
+{
+  "emails": ["email1@example.com", "email2@example.com"]
+}
+
+If no valid emails found, return: {"emails": []}`;
+
+  try {
+    const parseText = await callGeminiWithRetry(parsePrompt, { maxRetries: 2 });
+    const cleanJson = parseText.replace(/```json\n?|\n?```/g, '').trim();
+    const parsed = JSON.parse(cleanJson);
+    
+    if (!parsed.emails || parsed.emails.length === 0) {
+      return res.status(400).json({ error: 'No valid email addresses found' });
+    }
+    
+    const lower = customerName.toLowerCase();
+    if (customerDirectory[lower]) {
+      customerDirectory[lower].emails = parsed.emails;
+      console.log(`✅ Updated emails for ${customerName}: ${parsed.emails.join(', ')}`);
+      res.json({ success: true, emails: parsed.emails });
+    } else {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+  } catch (error) {
+    console.error('Email parsing error:', error);
+    // Fallback: try simple regex extraction
+    const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+    const emails = emailsInput.match(emailRegex) || [];
+    
+    if (emails.length === 0) {
+      return res.status(400).json({ error: 'No valid email addresses found' });
+    }
+    
+    const lower = customerName.toLowerCase();
+    if (customerDirectory[lower]) {
+      customerDirectory[lower].emails = emails;
+      console.log(`✅ Updated emails for ${customerName}: ${emails.join(', ')}`);
+      res.json({ success: true, emails: emails });
+    } else {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+  }
 });
 
 // ============ Invoice Generation ============
@@ -483,13 +588,15 @@ app.post('/api/invoice/generate', async (req, res) => {
   }
 
   try {
-    const { details, confirmNewCustomer, newCustomerName } = req.body;
+    const { details, confirmNewCustomer, newCustomerName, newCustomerCode } = req.body;
     
     // Handle adding a new customer
     if (confirmNewCustomer && newCustomerName) {
-      if (!knownCustomers.map(c => c.toLowerCase()).includes(newCustomerName.toLowerCase())) {
-        knownCustomers.push(newCustomerName);
-        console.log(`✅ Added new customer: ${newCustomerName}`);
+      const lower = newCustomerName.toLowerCase();
+      if (!customerDirectory[lower]) {
+        const code = newCustomerCode || newCustomerName.substring(0, 3).toUpperCase();
+        addOrUpdateCustomer(newCustomerName, code, []);
+        console.log(`✅ Added new customer: ${newCustomerName} (${code})`);
       }
       // Continue processing with the new customer name
     }
@@ -527,7 +634,7 @@ app.post('/api/invoice/generate', async (req, res) => {
         const part3Lower = part3.toLowerCase().trim();
         
         // Check if part1 is a customer
-        const customerFromPart1 = knownCustomers.find(c => 
+        const customerFromPart1 = getKnownCustomers().find(c => 
           c.toLowerCase() === part1Lower ||
           part1Lower.includes(c.toLowerCase()) ||
           c.toLowerCase().includes(part1Lower)
@@ -547,7 +654,7 @@ app.post('/api/invoice/generate', async (req, res) => {
         // Try reverse (product first, customer last)
         const productFromPart1 = knownProducts.find(p => part1Lower.includes(p.toLowerCase().split(' ')[0])) ||
           Object.entries(productAliases).find(([alias]) => part1Lower.includes(alias))?.[1];
-        const customerFromPart3 = knownCustomers.find(c => 
+        const customerFromPart3 = getKnownCustomers().find(c => 
           c.toLowerCase() === part3Lower ||
           part3Lower.includes(c.toLowerCase()) ||
           c.toLowerCase().includes(part3Lower)
@@ -573,7 +680,7 @@ app.post('/api/invoice/generate', async (req, res) => {
       console.log(`⚡ Pattern matching incomplete, trying Gemini...`);
       
       const parsePrompt = `Parse this invoice request. Input: "${details}"
-KNOWN CUSTOMERS: ${knownCustomers.join(', ')}
+KNOWN CUSTOMERS: ${getKnownCustomers().join(', ')}
 KNOWN PRODUCTS: Archives Blend, Ethiopia Gera Natural, Colombia Excelso, Colombia Decaf
 
 Respond ONLY with JSON: {"customer": "name", "quantity": number, "product": "name"}`;
@@ -607,7 +714,7 @@ Respond ONLY with JSON: {"customer": "name", "quantity": number, "product": "nam
     }
     
     // Match customer to known list
-    const normalizedCustomer = knownCustomers.find(c => 
+    const normalizedCustomer = getKnownCustomers().find(c => 
       c.toLowerCase() === customer.toLowerCase() ||
       customer.toLowerCase().includes(c.toLowerCase()) ||
       c.toLowerCase().includes(customer.toLowerCase())
@@ -647,13 +754,13 @@ Respond ONLY with JSON: {"customer": "name", "quantity": number, "product": "nam
     
     console.log(`📋 Available tables: ${tableHeaders.map(t => t.name).join(', ')}`);
     console.log(`📋 Available products: ${uniqueProducts.join(', ')}`);
-    console.log(`📋 Known customers: ${knownCustomers.join(', ')}`);
+    console.log(`📋 Known customers: ${getKnownCustomers().join(', ')}`);
     
     // Prepare Gemini matching prompt (used if direct matching fails)
     const matchPrompt = `You are a matching assistant. Match the user input to the closest option from the available lists.
 
 Known customers:
-${knownCustomers.map(c => `- ${c}`).join('\n')}
+${getKnownCustomers().map(c => `- ${c}`).join('\n')}
 
 Available products:
 ${uniqueProducts.map(p => `- ${p}`).join('\n')}
@@ -685,7 +792,7 @@ Rules:
     let customerConfidence = 'none';
     
     // First, check for direct customer match (case-insensitive)
-    const directCustomerMatch = knownCustomers.find(c => 
+    const directCustomerMatch = getKnownCustomers().find(c => 
       c.toLowerCase() === customer.toLowerCase() ||
       customer.toLowerCase().includes(c.toLowerCase()) ||
       c.toLowerCase().includes(customer.toLowerCase())
@@ -744,7 +851,7 @@ Rules:
         clarification: true,
         originalDetails: details,
         originalCustomer: customer,
-        knownCustomers: knownCustomers
+        customers: getKnownCustomers()
       });
     }
     
@@ -1154,7 +1261,7 @@ app.post('/api/process', async (req, res) => {
       const product = match[3].trim();
       
       // Match customer
-      const matchedCustomer = knownCustomers.find(c => 
+      const matchedCustomer = getKnownCustomers().find(c => 
         c.toLowerCase() === customerInput.toLowerCase() ||
         customerInput.toLowerCase().includes(c.toLowerCase()) ||
         c.toLowerCase().includes(customerInput.toLowerCase())
@@ -1174,7 +1281,7 @@ app.post('/api/process', async (req, res) => {
     try {
       const intentPrompt = `${SYSTEM_PROMPT}
 
-KNOWN CUSTOMERS: ${knownCustomers.join(', ')}
+KNOWN CUSTOMERS: ${getKnownCustomers().join(', ')}
 
 CUSTOMER MATCHING RULES:
 - "Dex", "Dex's Coffee", "deks", "dex coffee" → matches "Dex" (isKnownCustomer: true)
@@ -1252,7 +1359,7 @@ Respond ONLY with valid JSON:
       if (intentData.customer && intentData.quantity && intentData.product) {
         // Do our own customer matching (don't rely on Gemini's isKnownCustomer)
         const customerLower = intentData.customer.toLowerCase();
-        const matchedKnownCustomer = knownCustomers.find(c => 
+        const matchedKnownCustomer = getKnownCustomers().find(c => 
           c.toLowerCase() === customerLower ||
           customerLower.includes(c.toLowerCase()) ||
           c.toLowerCase().includes(customerLower)

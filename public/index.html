@@ -1189,6 +1189,12 @@
                 addCustomerWithCode(code);
                 return;
             }
+            
+            // Check if we're waiting for customer email
+            if (window.waitingForCustomerEmail) {
+                processCustomerEmail(message);
+                return;
+            }
 
             addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
 
@@ -1242,7 +1248,7 @@
             
             html += '<div class="response-buttons">';
             html += '<a href="' + data.pdfUrl + '" download="' + data.invoiceNumber + '.pdf" class="action-btn" style="text-decoration:none;">📥 Download PDF</a>';
-            html += '<button class="action-btn" onclick="openEmailModalWithInvoice(\'' + data.pdfUrl + '\', \'' + data.invoiceNumber + '\')">📧 Draft Invoice Email</button>';
+            html += '<button class="action-btn" onclick="openEmailModalWithInvoice(\'' + data.pdfUrl + '\', \'' + data.invoiceNumber + '\', \'' + data.customer.replace(/'/g, "\\'") + '\')">📧 Draft Invoice Email</button>';
             html += '</div>';
             
             // Add follow-up message after a short delay
@@ -1277,11 +1283,84 @@
             });
         }
 
-        function openEmailModalWithInvoice(pdfUrl, invoiceNumber) {
+        function openEmailModalWithInvoice(pdfUrl, invoiceNumber, customerName) {
             if (!googleConnected) {
                 alert('Please connect Google first.');
                 return;
             }
+            
+            // Store invoice info for later
+            const modal = document.getElementById('emailModal');
+            modal.dataset.pdfUrl = pdfUrl;
+            modal.dataset.invoiceNumber = invoiceNumber;
+            modal.dataset.customerName = customerName;
+            
+            // Fetch customer emails
+            fetch('/api/customers/' + encodeURIComponent(customerName))
+                .then(response => response.json())
+                .then(data => {
+                    if (data.emails && data.emails.length > 0) {
+                        // Auto-populate with customer emails
+                        document.getElementById('emailTo').value = data.emails.join(', ');
+                        showEmailModal(invoiceNumber);
+                    } else {
+                        // No emails on file - prompt for email
+                        promptForCustomerEmail(customerName, invoiceNumber);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching customer:', error);
+                    // Customer not found - prompt for email
+                    promptForCustomerEmail(customerName, invoiceNumber);
+                });
+        }
+        
+        function promptForCustomerEmail(customerName, invoiceNumber) {
+            // Ask user for email in chat
+            addMessage(`What is the email for ${customerName}? (You can enter multiple emails separated by "and" or commas)`, false);
+            
+            // Set state to wait for email input
+            window.waitingForCustomerEmail = true;
+            window.pendingEmailInvoice = { customerName, invoiceNumber };
+        }
+        
+        async function processCustomerEmail(emailInput) {
+            const pending = window.pendingEmailInvoice;
+            if (!pending) return;
+            
+            window.waitingForCustomerEmail = false;
+            
+            // Send to backend to parse and save emails
+            try {
+                const response = await fetch('/api/customers/emails', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        customerName: pending.customerName,
+                        emailsInput: emailInput
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success && data.emails) {
+                    addMessage(`✅ Saved email(s) for ${pending.customerName}: ${data.emails.join(', ')}`, false);
+                    
+                    // Now open the email modal with the emails
+                    document.getElementById('emailTo').value = data.emails.join(', ');
+                    showEmailModal(pending.invoiceNumber);
+                } else {
+                    addMessage(`⚠️ ${data.error || 'Could not process email. Please try again.'}`, false);
+                }
+            } catch (error) {
+                console.error('Error saving email:', error);
+                addMessage('⚠️ Error saving email. Please try again.', false);
+            }
+            
+            window.pendingEmailInvoice = null;
+        }
+        
+        function showEmailModal(invoiceNumber) {
             document.getElementById('emailSubject').value = 'Invoice ' + invoiceNumber + ' - Archives of Us Coffee';
             document.getElementById('emailBody').value = `Hi,
 
@@ -1299,9 +1378,6 @@ Archives of Us Coffee`;
             document.getElementById('attachmentName').textContent = invoiceNumber + '.pdf';
             
             document.getElementById('emailModal').classList.add('active');
-            // Store PDF info for sending
-            document.getElementById('emailModal').dataset.pdfUrl = pdfUrl;
-            document.getElementById('emailModal').dataset.invoiceNumber = invoiceNumber;
         }
 
         sendBtn.addEventListener('click', sendMessage);

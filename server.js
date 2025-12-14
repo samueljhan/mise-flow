@@ -189,7 +189,7 @@ app.post('/api/gmail/send', async (req, res) => {
   }
   
   try {
-    const { to, subject, body } = req.body;
+    const { to, subject, body, attachmentPath, attachmentName } = req.body;
     
     if (!to || !subject || !body) {
       return res.status(400).json({ error: 'Missing required fields: to, subject, body' });
@@ -198,13 +198,47 @@ app.post('/api/gmail/send', async (req, res) => {
     oauth2Client.setCredentials(userTokens);
     const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
     
-    const emailContent = [
-      `To: ${to}`,
-      `Subject: ${subject}`,
-      'Content-Type: text/plain; charset=utf-8',
-      '',
-      body
-    ].join('\n');
+    let emailContent;
+    
+    if (attachmentPath && fs.existsSync(attachmentPath)) {
+      // Email with PDF attachment
+      const boundary = 'boundary_' + Date.now();
+      const pdfData = fs.readFileSync(attachmentPath);
+      const pdfBase64 = pdfData.toString('base64');
+      const filename = attachmentName || path.basename(attachmentPath);
+      
+      emailContent = [
+        `To: ${to}`,
+        `Subject: ${subject}`,
+        'MIME-Version: 1.0',
+        `Content-Type: multipart/mixed; boundary="${boundary}"`,
+        '',
+        `--${boundary}`,
+        'Content-Type: text/plain; charset=utf-8',
+        '',
+        body,
+        '',
+        `--${boundary}`,
+        `Content-Type: application/pdf; name="${filename}"`,
+        'Content-Transfer-Encoding: base64',
+        `Content-Disposition: attachment; filename="${filename}"`,
+        '',
+        pdfBase64,
+        '',
+        `--${boundary}--`
+      ].join('\r\n');
+      
+      console.log(`📎 Attaching PDF: ${filename}`);
+    } else {
+      // Plain text email
+      emailContent = [
+        `To: ${to}`,
+        `Subject: ${subject}`,
+        'Content-Type: text/plain; charset=utf-8',
+        '',
+        body
+      ].join('\n');
+    }
     
     const encodedEmail = Buffer.from(emailContent)
       .toString('base64')
@@ -212,17 +246,24 @@ app.post('/api/gmail/send', async (req, res) => {
       .replace(/\//g, '_')
       .replace(/=+$/, '');
     
-    await gmail.users.messages.send({
+    // Create draft instead of sending
+    const draft = await gmail.users.drafts.create({
       userId: 'me',
-      requestBody: { raw: encodedEmail }
+      requestBody: {
+        message: { raw: encodedEmail }
+      }
     });
     
-    console.log(`✅ Email sent to ${to}`);
-    res.json({ success: true, message: `Email sent to ${to}` });
+    console.log(`📝 Draft created for ${to}${attachmentPath ? ' with attachment' : ''}`);
+    res.json({ 
+      success: true, 
+      message: `Draft created! Check your Gmail drafts folder.`,
+      draftId: draft.data.id
+    });
     
   } catch (error) {
-    console.error('Email send error:', error);
-    res.status(500).json({ error: 'Failed to send email', details: error.message });
+    console.error('Email draft error:', error);
+    res.status(500).json({ error: 'Failed to create draft', details: error.message });
   }
 });
 

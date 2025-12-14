@@ -665,13 +665,16 @@
     <!-- Email Modal -->
     <div class="modal-overlay" id="emailModal">
         <div class="modal">
-            <h3>📧 Send Email</h3>
+            <h3>📧 Create Email Draft</h3>
             <input type="email" id="emailTo" placeholder="Recipient email">
             <input type="text" id="emailSubject" placeholder="Subject" value="Inventory Update">
             <textarea id="emailBody" placeholder="Email content..."></textarea>
+            <div id="attachmentIndicator" style="display: none; padding: 10px; margin-bottom: 12px; background: #2d3a2d; border-radius: 8px; color: #90EE90; font-size: 13px;">
+                📎 <span id="attachmentName"></span> will be attached
+            </div>
             <div class="modal-buttons">
                 <button class="modal-btn cancel" onclick="closeEmailModal()">Cancel</button>
-                <button class="modal-btn send" id="sendEmailBtn" onclick="sendEmail()">Send</button>
+                <button class="modal-btn send" id="sendEmailBtn" onclick="sendEmail()">Create Draft</button>
             </div>
         </div>
     </div>
@@ -1071,11 +1074,18 @@
                 return;
             }
             document.getElementById('emailBody').value = currentResponseText;
+            // Hide attachment indicator for non-invoice emails
+            document.getElementById('attachmentIndicator').style.display = 'none';
             document.getElementById('emailModal').classList.add('active');
         }
 
         function closeEmailModal() {
             document.getElementById('emailModal').classList.remove('active');
+            // Clear attachment data
+            document.getElementById('attachmentIndicator').style.display = 'none';
+            const modal = document.getElementById('emailModal');
+            delete modal.dataset.pdfUrl;
+            delete modal.dataset.invoiceNumber;
         }
 
         async function sendEmail() {
@@ -1083,6 +1093,11 @@
             const subject = document.getElementById('emailSubject').value.trim();
             const body = document.getElementById('emailBody').value;
             const btn = document.getElementById('sendEmailBtn');
+            const modal = document.getElementById('emailModal');
+            
+            // Get attachment info if available
+            const pdfUrl = modal.dataset.pdfUrl || null;
+            const invoiceNumber = modal.dataset.invoiceNumber || null;
             
             if (!to) {
                 alert('Please enter a recipient email.');
@@ -1090,27 +1105,41 @@
             }
             
             btn.disabled = true;
-            btn.textContent = 'Sending...';
+            btn.textContent = 'Creating...';
             
             try {
+                // Build request body
+                const requestBody = { to, subject, body };
+                
+                // If this is an invoice email, include the PDF path
+                if (pdfUrl && invoiceNumber) {
+                    // Convert URL to file path (e.g., /invoices/C-ARC-1000.pdf -> public/invoices/C-ARC-1000.pdf)
+                    requestBody.attachmentPath = 'public' + pdfUrl;
+                    requestBody.attachmentName = invoiceNumber + '.pdf';
+                }
+                
                 const response = await fetch('/api/gmail/send', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ to, subject, body })
+                    body: JSON.stringify(requestBody)
                 });
                 
                 if (response.ok) {
-                    alert('Email sent!');
+                    const data = await response.json();
+                    alert(data.message || 'Draft created! Check your Gmail drafts folder.');
                     closeEmailModal();
+                    // Clear the attachment data
+                    delete modal.dataset.pdfUrl;
+                    delete modal.dataset.invoiceNumber;
                 } else {
                     const data = await response.json();
                     alert('Failed: ' + (data.error || 'Unknown error'));
                 }
             } catch (error) {
-                alert('Error sending email');
+                alert('Error creating draft');
             } finally {
                 btn.disabled = false;
-                btn.textContent = 'Send';
+                btn.textContent = 'Create Draft';
             }
         }
 
@@ -1227,9 +1256,23 @@
                 return;
             }
             document.getElementById('emailSubject').value = 'Invoice ' + invoiceNumber + ' - Archives of Us Coffee';
-            document.getElementById('emailBody').value = 'Please find attached invoice ' + invoiceNumber + '.\\n\\nThank you for your business!\\n\\nArchives of Us Coffee';
+            document.getElementById('emailBody').value = `Hi,
+
+Please find attached invoice ${invoiceNumber}.
+
+If you have any questions about this invoice, please don't hesitate to reach out.
+
+Thank you for your business!
+
+Best regards,
+Archives of Us Coffee`;
+            
+            // Show attachment indicator
+            document.getElementById('attachmentIndicator').style.display = 'block';
+            document.getElementById('attachmentName').textContent = invoiceNumber + '.pdf';
+            
             document.getElementById('emailModal').classList.add('active');
-            // Store PDF URL for sending
+            // Store PDF info for sending
             document.getElementById('emailModal').dataset.pdfUrl = pdfUrl;
             document.getElementById('emailModal').dataset.invoiceNumber = invoiceNumber;
         }

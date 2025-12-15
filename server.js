@@ -797,7 +797,8 @@ Examples:
       return res.json({ 
         success: false,
         error: "Sorry, I didn't get that. What can I help you with?",
-        showFollowUp: true
+        showFollowUp: false,
+        action: 'unclear'
       });
     }
     
@@ -805,7 +806,8 @@ Examples:
       return res.json({ 
         success: false,
         error: "Sorry, I didn't get that. What can I help you with?",
-        showFollowUp: true
+        showFollowUp: false,
+        action: 'unclear'
       });
     }
     
@@ -1291,8 +1293,8 @@ Respond with JSON only:
         console.error('Gemini error:', error);
         return res.json({
           response: "Sorry, I didn't get that. What can I help you with?",
-          action: null,
-          showFollowUp: true
+          action: 'unclear',
+          showFollowUp: false
         });
       }
     }
@@ -1300,8 +1302,8 @@ Respond with JSON only:
     if (!intentData) {
       return res.json({ 
         response: "Sorry, I didn't get that. What can I help you with?",
-        action: null,
-        showFollowUp: true
+        action: 'unclear',
+        showFollowUp: false
       });
     }
     

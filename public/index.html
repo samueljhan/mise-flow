@@ -2004,7 +2004,7 @@
                     setTimeout(() => {
                         addConversationalFollowUp('unclear_request');
                     }, 300);
-                    return "Sorry, I didn't get that. What can I help you with?";
+                    return "Sorry, I didn't get that.";
                 }
                 
                 // Check if this is an invoice action
@@ -2080,6 +2080,14 @@
                     }, 300);
                 }
                 
+                // For unclear responses, just show buttons (no additional message)
+                if (data.action === 'unclear') {
+                    window.currentConversationState = 'none';
+                    setTimeout(() => {
+                        addFollowUpButtons();
+                    }, 300);
+                }
+                
                 return html;
                 
             } catch (error) {
@@ -2088,7 +2096,7 @@
                 setTimeout(() => {
                     addConversationalFollowUp('unclear_request');
                 }, 300);
-                return "Sorry, I didn't get that. What can I help you with?";
+                return "Sorry, I didn't get that.";
             }
         }
         
@@ -2571,11 +2579,13 @@
                 const data = await response.json();
                 
                 // Handle conversational fallback when parsing fails
-                if (data.success === false && data.showFollowUp) {
-                    setTimeout(() => {
-                        addConversationalFollowUp('unclear_request');
-                    }, 300);
-                    return data.error || "Sorry, I didn't get that. What can I help you with?";
+                if (data.success === false) {
+                    if (data.action === 'unclear') {
+                        setTimeout(() => {
+                            addFollowUpButtons();
+                        }, 300);
+                    }
+                    return data.error || "Sorry, I didn't get that.";
                 }
                 
                 if (!response.ok) {
@@ -2586,7 +2596,10 @@
                 
             } catch (error) {
                 console.error('Error:', error);
-                return "Sorry, I didn't get that. What can I help you with?";
+                setTimeout(() => {
+                    addFollowUpButtons();
+                }, 300);
+                return "Sorry, I didn't get that.";
             }
         }
 
@@ -2672,6 +2685,12 @@
 
         // Gemini-powered conversational follow-up
         async function addConversationalFollowUp(context) {
+            // For unclear requests, just show buttons without another message
+            if (context === 'unclear_request') {
+                addFollowUpButtons();
+                return;
+            }
+            
             try {
                 const response = await fetch('/api/chat/respond', {
                     method: 'POST',
@@ -2706,6 +2725,20 @@
                 addFollowUpMessage();
             }
         }
+        
+        function addFollowUpButtons() {
+            // Just buttons, no message
+            let html = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
+            html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
+            html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
+            html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
+            html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
+            html += '<button class="action-btn" onclick="openManageInventory()">Manage Inventory</button>';
+            html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
+            html += '</div>';
+            
+            addMessage(html, false);
+        }
 
         function addFollowUpMessage() {
             let html = '<div style="margin-bottom: 12px;">What else can I help with?</div>';
@@ -2723,6 +2756,7 @@
         
         function manageRetailPlaceholder() {
             addMessage('Manage Retail feature coming soon! This will allow you to update retail coffee bag sales.', false);
+            addFollowUpMessage();
         }
 
         function useQuickAction(prompt) {

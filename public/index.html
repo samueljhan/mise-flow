@@ -826,6 +826,14 @@
             const welcomeMsg = chatContainer.querySelector('.welcome-message');
             if (welcomeMsg) welcomeMsg.remove();
 
+            // Check if Google is connected first
+            if (!googleConnected) {
+                addMessage(`<div style="color: #dc3545;">⚠️ Google account not connected</div>
+                    <div style="margin-top: 8px;">Invoice generation requires a connected Google account to create PDFs and access pricing data.</div>
+                    <button class="action-btn" style="margin-top: 12px;" onclick="window.location.href='/auth/google'">Connect Google Account</button>`, false);
+                return;
+            }
+
             // Add assistant message asking for details
             addMessage('<strong>Generate Invoice</strong><br><br>Customer and order details?<br><br><em style="color:#707070;">Example: "CED, 100 lbs Archives Blend"</em>', false);
             
@@ -1236,6 +1244,19 @@
                 });
                 
                 const data = await response.json();
+                
+                // Handle Google not connected
+                if (response.status === 401) {
+                    const messages = chatContainer.querySelectorAll('.message');
+                    const lastMsg = messages[messages.length - 1];
+                    if (lastMsg) {
+                        const content = lastMsg.querySelector('.message-content') || lastMsg;
+                        content.innerHTML = `<div style="color: #dc3545;">⚠️ ${data.error || 'Google account not connected.'}</div>
+                            <div style="margin-top: 8px;">Please connect your Google account to create email drafts.</div>
+                            <button class="action-btn" style="margin-top: 12px;" onclick="window.location.href='/auth/google'">Connect Google Account</button>`;
+                    }
+                    return;
+                }
                 
                 // Show confirmation message
                 let confirmHtml = '<strong>Roast Order Confirmed</strong><br><br>';
@@ -2299,6 +2320,13 @@
                     delete modal.dataset.customerName;
                     delete modal.dataset.originalEmails;
                     return true;
+                } else if (response.status === 401) {
+                    const data = await response.json();
+                    addMessage(`<div style="color: #dc3545;">⚠️ ${data.error || 'Google account not connected.'}</div>
+                        <div style="margin-top: 8px;">Please connect your Google account to send emails.</div>
+                        <button class="action-btn" style="margin-top: 12px;" onclick="window.location.href='/auth/google'">Connect Google Account</button>`, false);
+                    closeEmailModal();
+                    return false;
                 } else {
                     const data = await response.json();
                     addMessage('Failed: ' + (data.error || 'Unknown error'), false);
@@ -2578,6 +2606,13 @@
 
                 const data = await response.json();
                 
+                // Handle Google not connected - show specific message
+                if (response.status === 401) {
+                    return `<div style="color: #dc3545;">⚠️ ${data.error || 'Google account not connected.'}</div>
+                            <div style="margin-top: 8px;">Please connect your Google account to generate invoices.</div>
+                            <button class="action-btn" style="margin-top: 12px;" onclick="window.location.href='/auth/google'">Connect Google Account</button>`;
+                }
+                
                 // Handle conversational fallback when parsing fails
                 if (data.success === false) {
                     if (data.action === 'unclear') {
@@ -2596,6 +2631,11 @@
                 
             } catch (error) {
                 console.error('Error:', error);
+                // Check if it's a connection error
+                if (error.message && error.message.includes('Google')) {
+                    return `<div style="color: #dc3545;">⚠️ ${error.message}</div>
+                            <button class="action-btn" style="margin-top: 12px;" onclick="window.location.href='/auth/google'">Connect Google Account</button>`;
+                }
                 setTimeout(() => {
                     addFollowUpButtons();
                 }, 300);
@@ -2656,6 +2696,14 @@
                 });
                 
                 const result = await response.json();
+                
+                // Handle Google not connected
+                if (response.status === 401) {
+                    addMessage(`<div style="color: #dc3545;">⚠️ ${result.error || 'Google account not connected.'}</div>
+                        <div style="margin-top: 8px;">Please connect your Google account to confirm invoices.</div>
+                        <button class="action-btn" style="margin-top: 12px;" onclick="window.location.href='/auth/google'">Connect Google Account</button>`, false);
+                    return;
+                }
                 
                 if (result.success) {
                     // Update buttons to show PDF and Email options

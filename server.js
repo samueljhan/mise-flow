@@ -199,6 +199,116 @@ function addOrUpdateCustomer(name, code, emails = []) {
   };
 }
 
+// ============ Coffee Inventory Data ============
+
+// Green Coffee Inventory (unroasted beans)
+let greenCoffeeInventory = [
+  {
+    id: 'colombia-antioquia',
+    name: 'Colombia Antioquia',
+    weight: 100,
+    roastProfile: '122302',
+    dropTemp: 410
+  },
+  {
+    id: 'ethiopia-gera',
+    name: 'Ethiopia Gera',
+    weight: 100,
+    roastProfile: '061901',
+    dropTemp: 414
+  },
+  {
+    id: 'brazil-mogiano',
+    name: 'Brazil Mogiano',
+    weight: 400,
+    roastProfile: '199503',
+    dropTemp: 419
+  },
+  {
+    id: 'ethiopia-yirgacheffe',
+    name: 'Ethiopia Yirgacheffe',
+    weight: 100,
+    roastProfile: '141402',
+    dropTemp: 415
+  }
+];
+
+// Roasted Coffee Inventory
+let roastedCoffeeInventory = [
+  {
+    id: 'archives-blend',
+    name: 'Archives Blend',
+    weight: 150,
+    type: 'Blend',
+    recipe: [
+      { greenCoffeeId: 'brazil-mogiano', name: 'Brazil Mogiano', percentage: 33 },
+      { greenCoffeeId: 'ethiopia-yirgacheffe', name: 'Ethiopia Yirgacheffe', percentage: 67 }
+    ]
+  },
+  {
+    id: 'ethiopia-gera-roasted',
+    name: 'Ethiopia Gera',
+    weight: 40,
+    type: 'Single Origin',
+    recipe: [
+      { greenCoffeeId: 'ethiopia-gera', name: 'Ethiopia Gera', percentage: 100 }
+    ]
+  },
+  {
+    id: 'colombia-decaf',
+    name: 'Colombia Decaf',
+    weight: 30,
+    type: 'Private Label',
+    recipe: null // N/A - no green coffee inventory for private label
+  }
+];
+
+// En Route Coffee Inventory (ordered but not yet received)
+let enRouteCoffeeInventory = [];
+
+// Helper to get green coffee by ID
+function getGreenCoffee(id) {
+  return greenCoffeeInventory.find(c => c.id === id);
+}
+
+// Helper to get roasted coffee by ID
+function getRoastedCoffee(id) {
+  return roastedCoffeeInventory.find(c => c.id === id);
+}
+
+// Helper to format inventory summary
+function formatInventorySummary() {
+  let summary = '**☕ Current Coffee Inventory**\n\n';
+  
+  summary += '**🌿 Green Coffee (Unroasted):**\n';
+  greenCoffeeInventory.forEach(coffee => {
+    summary += `• ${coffee.name}: ${coffee.weight}lb (Profile: ${coffee.roastProfile}, Drop: ${coffee.dropTemp}°F)\n`;
+  });
+  
+  summary += '\n**🔥 Roasted Coffee:**\n';
+  roastedCoffeeInventory.forEach(coffee => {
+    let recipeStr = '';
+    if (coffee.recipe) {
+      recipeStr = coffee.recipe.map(r => `${r.percentage}% ${r.name}`).join(' + ');
+    } else {
+      recipeStr = 'N/A';
+    }
+    summary += `• ${coffee.name}: ${coffee.weight}lb [${coffee.type}] - Recipe: ${recipeStr}\n`;
+  });
+  
+  if (enRouteCoffeeInventory.length > 0) {
+    summary += '\n**🚚 En Route (Ordered):**\n';
+    enRouteCoffeeInventory.forEach(coffee => {
+      const tracking = coffee.trackingNumber || 'No tracking yet';
+      summary += `• ${coffee.name}: ${coffee.weight}lb [${coffee.type}] - Tracking: ${tracking}\n`;
+    });
+  } else {
+    summary += '\n**🚚 En Route:** None\n';
+  }
+  
+  return summary;
+}
+
 // ============ Google OAuth Routes ============
 
 app.get('/auth/google', (req, res) => {
@@ -1387,6 +1497,387 @@ wss.on('connection', async (clientWs) => {
       audioStream = null;
     }
     transcribeStream = null;
+  });
+});
+
+// ============ Coffee Inventory API Endpoints ============
+
+// Get all inventory
+app.get('/api/inventory', (req, res) => {
+  res.json({
+    green: greenCoffeeInventory,
+    roasted: roastedCoffeeInventory,
+    enRoute: enRouteCoffeeInventory
+  });
+});
+
+// Get inventory summary formatted
+app.get('/api/inventory/summary', (req, res) => {
+  res.json({ summary: formatInventorySummary() });
+});
+
+// Get green coffee inventory
+app.get('/api/inventory/green', (req, res) => {
+  res.json(greenCoffeeInventory);
+});
+
+// Update green coffee inventory
+app.post('/api/inventory/green/update', (req, res) => {
+  const { id, weight, roastProfile, dropTemp } = req.body;
+  const coffee = greenCoffeeInventory.find(c => c.id === id);
+  if (!coffee) {
+    return res.status(404).json({ error: 'Green coffee not found' });
+  }
+  if (weight !== undefined) coffee.weight = weight;
+  if (roastProfile !== undefined) coffee.roastProfile = roastProfile;
+  if (dropTemp !== undefined) coffee.dropTemp = dropTemp;
+  res.json({ success: true, coffee });
+});
+
+// Add new green coffee
+app.post('/api/inventory/green/add', (req, res) => {
+  const { name, weight, roastProfile, dropTemp } = req.body;
+  const id = name.toLowerCase().replace(/\s+/g, '-');
+  if (greenCoffeeInventory.find(c => c.id === id)) {
+    return res.status(400).json({ error: 'Coffee already exists' });
+  }
+  const newCoffee = { id, name, weight, roastProfile, dropTemp };
+  greenCoffeeInventory.push(newCoffee);
+  res.json({ success: true, coffee: newCoffee });
+});
+
+// Remove green coffee
+app.post('/api/inventory/green/remove', (req, res) => {
+  const { id } = req.body;
+  const index = greenCoffeeInventory.findIndex(c => c.id === id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Green coffee not found' });
+  }
+  greenCoffeeInventory.splice(index, 1);
+  res.json({ success: true });
+});
+
+// Get roasted coffee inventory
+app.get('/api/inventory/roasted', (req, res) => {
+  res.json(roastedCoffeeInventory);
+});
+
+// Update roasted coffee inventory
+app.post('/api/inventory/roasted/update', (req, res) => {
+  const { id, weight, type, recipe } = req.body;
+  const coffee = roastedCoffeeInventory.find(c => c.id === id);
+  if (!coffee) {
+    return res.status(404).json({ error: 'Roasted coffee not found' });
+  }
+  if (weight !== undefined) coffee.weight = weight;
+  if (type !== undefined) coffee.type = type;
+  if (recipe !== undefined) coffee.recipe = recipe;
+  res.json({ success: true, coffee });
+});
+
+// Add new roasted coffee
+app.post('/api/inventory/roasted/add', (req, res) => {
+  const { name, weight, type, recipe } = req.body;
+  const id = name.toLowerCase().replace(/\s+/g, '-') + '-roasted';
+  const newCoffee = { id, name, weight, type, recipe };
+  roastedCoffeeInventory.push(newCoffee);
+  res.json({ success: true, coffee: newCoffee });
+});
+
+// Remove roasted coffee
+app.post('/api/inventory/roasted/remove', (req, res) => {
+  const { id } = req.body;
+  const index = roastedCoffeeInventory.findIndex(c => c.id === id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'Roasted coffee not found' });
+  }
+  roastedCoffeeInventory.splice(index, 1);
+  res.json({ success: true });
+});
+
+// Get en route inventory
+app.get('/api/inventory/enroute', (req, res) => {
+  res.json(enRouteCoffeeInventory);
+});
+
+// Add to en route inventory
+app.post('/api/inventory/enroute/add', (req, res) => {
+  const { name, weight, type, recipe, orderDate } = req.body;
+  const id = `enroute-${Date.now()}`;
+  const newItem = {
+    id,
+    name,
+    weight,
+    type,
+    recipe,
+    trackingNumber: '',
+    orderDate: orderDate || new Date().toISOString(),
+    status: 'ordered'
+  };
+  enRouteCoffeeInventory.push(newItem);
+  res.json({ success: true, item: newItem });
+});
+
+// Update tracking number
+app.post('/api/inventory/enroute/tracking', (req, res) => {
+  const { id, trackingNumber } = req.body;
+  const item = enRouteCoffeeInventory.find(c => c.id === id);
+  if (!item) {
+    return res.status(404).json({ error: 'En route item not found' });
+  }
+  item.trackingNumber = trackingNumber;
+  item.status = 'shipped';
+  res.json({ success: true, item });
+});
+
+// Mark en route item as delivered (moves to roasted inventory)
+app.post('/api/inventory/enroute/deliver', (req, res) => {
+  const { id } = req.body;
+  const index = enRouteCoffeeInventory.findIndex(c => c.id === id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'En route item not found' });
+  }
+  
+  const item = enRouteCoffeeInventory[index];
+  
+  // Check if this roasted coffee already exists
+  const existingRoasted = roastedCoffeeInventory.find(c => c.name === item.name);
+  if (existingRoasted) {
+    // Add weight to existing
+    existingRoasted.weight += item.weight;
+  } else {
+    // Create new roasted coffee entry
+    const newRoasted = {
+      id: item.name.toLowerCase().replace(/\s+/g, '-') + '-roasted',
+      name: item.name,
+      weight: item.weight,
+      type: item.type,
+      recipe: item.recipe
+    };
+    roastedCoffeeInventory.push(newRoasted);
+  }
+  
+  // Remove from en route
+  enRouteCoffeeInventory.splice(index, 1);
+  
+  res.json({ success: true, message: `${item.name} (${item.weight}lb) added to roasted inventory` });
+});
+
+// ============ Roast Order API Endpoints ============
+
+// Parse roast order request
+app.post('/api/roast-order/parse', async (req, res) => {
+  const { userInput } = req.body;
+  
+  const roastedCoffeeNames = roastedCoffeeInventory.map(c => c.name);
+  
+  const prompt = `You are parsing a coffee roast order request for Archives of Us Coffee.
+
+Available roasted coffees: ${JSON.stringify(roastedCoffeeNames)}
+
+User request: "${userInput}"
+
+IMPORTANT DISAMBIGUATION RULES:
+- If user says "Ethiopia" without specifying, ask if they mean "Ethiopia Gera" or check if "Ethiopia Yirgacheffe" is in the roasted list
+- If user says "Colombia" without specifying, ask if they mean "Colombia Decaf" (private label) or "Colombia Antioquia" (single origin)
+- Be careful to match exact names from the available list
+
+Respond with JSON only:
+{
+  "understood": true/false,
+  "needsClarification": true/false,
+  "clarificationQuestion": "string if needs clarification",
+  "coffees": [
+    {
+      "name": "exact name from available list",
+      "matched": true/false
+    }
+  ]
+}`;
+
+  try {
+    const response = await callGeminiWithRetry(prompt);
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      res.json(parsed);
+    } else {
+      res.json({ understood: false, error: 'Could not parse response' });
+    }
+  } catch (error) {
+    console.error('Parse roast order error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Generate roast order email
+app.post('/api/roast-order/generate-email', async (req, res) => {
+  const { orderItems } = req.body;
+  
+  // orderItems: array of { name, type, recipe, batches, weight, batchWeight }
+  
+  const today = new Date().toLocaleDateString('en-US', { 
+    month: 'long', day: 'numeric', year: 'numeric' 
+  });
+  
+  let emailBody = `Hi Shared Team,\n\nHope all is well! Would like to place a toll roast order for the following:\n\n`;
+  
+  let totalRoastedWeight = 0;
+  let blendWeights = [];
+  let privateLabels = [];
+  
+  orderItems.forEach(item => {
+    const roastedCoffee = roastedCoffeeInventory.find(c => c.name === item.name);
+    
+    if (roastedCoffee && roastedCoffee.type === 'Blend' && roastedCoffee.recipe) {
+      // Blend - show component breakdown
+      let blendDesc = '';
+      roastedCoffee.recipe.forEach((comp, idx) => {
+        const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
+        const compWeight = Math.round(item.weight * comp.percentage / 100);
+        const batches = Math.ceil(compWeight / 30.5); // ~30.5lb per batch
+        if (greenCoffee) {
+          if (idx > 0) blendDesc += ' blended with ';
+          blendDesc += `${batches} batch${batches > 1 ? 'es' : ''} of ${comp.name} (${compWeight}lb - profile ${greenCoffee.roastProfile} - drop temp ${greenCoffee.dropTemp})`;
+        }
+      });
+      emailBody += `• ${blendDesc}\n`;
+      blendWeights.push({ name: item.name, weight: item.weight });
+      totalRoastedWeight += item.weight;
+      
+    } else if (roastedCoffee && roastedCoffee.type === 'Single Origin' && roastedCoffee.recipe) {
+      // Single Origin
+      const comp = roastedCoffee.recipe[0];
+      const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
+      if (greenCoffee) {
+        emailBody += `• ${item.batches} batch${item.batches > 1 ? 'es' : ''} of ${item.name} (${item.weight}lb - profile ${greenCoffee.roastProfile} - drop temp ${greenCoffee.dropTemp})\n`;
+      }
+      totalRoastedWeight += item.weight;
+      
+    } else if (roastedCoffee && roastedCoffee.type === 'Private Label') {
+      // Private Label
+      emailBody += `• ${item.weight}lb private label ${item.name}\n`;
+      privateLabels.push({ name: item.name, weight: item.weight });
+    }
+  });
+  
+  // Packaging instructions
+  let packagingNote = '\nCan we have the ';
+  const packagingParts = [];
+  if (blendWeights.length > 0) {
+    const blendTotal = blendWeights.reduce((sum, b) => sum + b.weight, 0);
+    const blendNames = blendWeights.map(b => b.name).join('/');
+    packagingParts.push(`~${blendTotal}lb roasted ${blendNames}`);
+  }
+  if (privateLabels.length > 0) {
+    privateLabels.forEach(pl => {
+      packagingParts.push(`~${pl.weight}lb ${pl.name}`);
+    });
+  }
+  if (packagingParts.length > 0) {
+    packagingNote += packagingParts.join(' and ') + ' packed in our stamped/labeled bags and shipped using your labels to:\n';
+  } else {
+    packagingNote += 'order packed in our stamped/labeled bags and shipped using your labels to:\n';
+  }
+  
+  emailBody += packagingNote;
+  emailBody += '\nRay Park\n869 Estepona Way\nBuena Park, CA 90621\n';
+  emailBody += '\nPlease send us tracking info for this order and reach out with any questions. Thanks so much!\n\nBest,\nRay';
+  
+  res.json({
+    to: 'samueljhan@gmail.com',
+    subject: `AOU Toll Roast Order ${today}`,
+    body: emailBody,
+    orderItems: orderItems
+  });
+});
+
+// Confirm roast order (deduct green inventory, add to en route)
+app.post('/api/roast-order/confirm', async (req, res) => {
+  const { orderItems, emailData } = req.body;
+  
+  const deductions = [];
+  const enRouteItems = [];
+  
+  // Calculate green coffee deductions (roasted weight / 0.85 for weight loss)
+  orderItems.forEach(item => {
+    const roastedCoffee = roastedCoffeeInventory.find(c => c.name === item.name);
+    
+    if (roastedCoffee && roastedCoffee.recipe) {
+      // Calculate green coffee needed for each component
+      roastedCoffee.recipe.forEach(comp => {
+        const compRoastedWeight = item.weight * comp.percentage / 100;
+        const greenWeight = Math.round(compRoastedWeight / 0.85); // Account for 15% weight loss
+        
+        const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
+        if (greenCoffee) {
+          greenCoffee.weight -= greenWeight;
+          deductions.push({
+            name: greenCoffee.name,
+            deducted: greenWeight,
+            remaining: greenCoffee.weight
+          });
+        }
+      });
+    }
+    
+    // Add to en route inventory
+    enRouteItems.push({
+      id: `enroute-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      name: item.name,
+      weight: item.weight,
+      type: roastedCoffee ? roastedCoffee.type : 'Unknown',
+      recipe: roastedCoffee ? roastedCoffee.recipe : null,
+      trackingNumber: '',
+      orderDate: new Date().toISOString(),
+      status: 'ordered'
+    });
+  });
+  
+  // Add items to en route inventory
+  enRouteCoffeeInventory.push(...enRouteItems);
+  
+  // Create Gmail draft if connected
+  let draftCreated = false;
+  if (userTokens && emailData) {
+    try {
+      oauth2Client.setCredentials(userTokens);
+      const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+      
+      const emailContent = [
+        `To: ${emailData.to}`,
+        `Subject: ${emailData.subject}`,
+        'Content-Type: text/plain; charset=utf-8',
+        '',
+        emailData.body
+      ].join('\n');
+      
+      const encodedEmail = Buffer.from(emailContent)
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/, '');
+      
+      await gmail.users.drafts.create({
+        userId: 'me',
+        requestBody: {
+          message: { raw: encodedEmail }
+        }
+      });
+      
+      draftCreated = true;
+      console.log('📝 Roast order draft created');
+    } catch (error) {
+      console.error('Failed to create draft:', error);
+    }
+  }
+  
+  res.json({
+    success: true,
+    deductions,
+    enRouteItems,
+    draftCreated,
+    message: `Order confirmed! ${deductions.length > 0 ? 'Green coffee inventory updated.' : ''} ${enRouteItems.length} item(s) added to en route.${draftCreated ? ' Email draft created in Gmail.' : ''}`
   });
 });
 

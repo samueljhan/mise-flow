@@ -1184,68 +1184,17 @@ app.post('/api/process', async (req, res) => {
       return res.status(400).json({ error: 'Text is required' });
     }
     
-    // Quick pattern matching for common phrases (fallback when rate limited)
     const textLower = text.toLowerCase().trim();
     
-    // Handle simple yes/no without AI
-    if (textLower === 'no' || textLower === 'cancel' || textLower === 'nope') {
-      return res.json({
-        response: "No problem!",
-        action: 'declined',
-        showFollowUp: true
-      });
-    }
-    
-    // Handle "never mind" with topic change detection
-    if (textLower.includes('never mind') || textLower.includes('nevermind')) {
-      // Check if they're also asking for something else
-      if (textLower.includes('inventory') || textLower.includes('help me with')) {
-        // They want to switch to inventory
-        let summary = 'No problem! Here\'s your current inventory:\n\n';
-        summary += 'ROASTED COFFEE:\n';
-        roastedCoffeeInventory.forEach(c => { summary += `• ${c.name}: ${c.weight} lb\n`; });
-        summary += '\nGREEN COFFEE:\n';
-        greenCoffeeInventory.forEach(c => { summary += `• ${c.name}: ${c.weight} lb\n`; });
-        if (enRouteCoffeeInventory.length > 0) {
-          summary += `\nEN ROUTE: ${enRouteCoffeeInventory.length} item(s)`;
-        }
+    // Only handle simple yes/no/thanks without AI (for speed)
+    if (textLower === 'yes' || textLower === 'yeah' || textLower === 'yep') {
+      if (conversationState === 'waiting_for_new_customer_confirmation') {
         return res.json({
-          response: summary,
-          action: 'check_inventory',
-          showFollowUp: true
+          response: "Great! Adding them now...",
+          action: 'confirm_add_customer',
+          showFollowUp: false
         });
       }
-      return res.json({
-        response: "No problem! What else can I help you with?",
-        action: 'declined',
-        showFollowUp: true
-      });
-    }
-    
-    // Handle help with inventory requests
-    if (textLower.includes('help') && textLower.includes('inventory')) {
-      let summary = 'Sure! Here\'s your current inventory:\n\n';
-      summary += 'ROASTED COFFEE:\n';
-      roastedCoffeeInventory.forEach(c => { summary += `• ${c.name}: ${c.weight} lb\n`; });
-      summary += '\nGREEN COFFEE:\n';
-      greenCoffeeInventory.forEach(c => { summary += `• ${c.name}: ${c.weight} lb\n`; });
-      if (enRouteCoffeeInventory.length > 0) {
-        summary += `\nEN ROUTE: ${enRouteCoffeeInventory.length} item(s)`;
-      }
-      return res.json({
-        response: summary,
-        action: 'check_inventory',
-        showFollowUp: true
-      });
-    }
-    
-    if ((textLower === 'yes' || textLower === 'yeah' || textLower === 'yep' || textLower.includes('yes, add')) && 
-        conversationState === 'waiting_for_new_customer_confirmation') {
-      return res.json({
-        response: "Great! Adding them now...",
-        action: 'confirm_add_customer',
-        showFollowUp: false
-      });
     }
     
     if (textLower === 'thanks' || textLower === 'thank you' || textLower === "that's all") {
@@ -1256,191 +1205,95 @@ app.post('/api/process', async (req, res) => {
       });
     }
     
-    // Quick inventory check patterns - handle without AI
-    const inventoryPatterns = [
-      /how much (.+) do (?:we|i) have/i,
-      /what(?:'s| is) (?:the|our) (.+) (?:inventory|stock|level)/i,
-      /check (.+) (?:inventory|stock|level)/i,
-      /(.+) (?:inventory|stock|level)/i,
-      /do we have (?:any )?(.+)/i,
-      /how many (?:lbs?|pounds?) of (.+)/i
-    ];
+    // Build comprehensive context for Gemini - let it handle everything else
+    const customerDetails = Object.entries(customers).map(([name, data]) => 
+      `${name} (${data.code}): ${data.email || 'no email'}`
+    ).join('\n');
     
-    // Check for green coffee category request first
-    if (textLower.includes('green coffee') || textLower.includes('green inventory') || textLower.includes('unroasted')) {
-      let summary = 'GREEN COFFEE INVENTORY:\n';
-      if (greenCoffeeInventory.length > 0) {
-        greenCoffeeInventory.forEach(c => {
-          summary += `• ${c.name}: ${c.weight} lb\n`;
-        });
-      } else {
-        summary += '• None in stock\n';
-      }
-      return res.json({
-        response: summary,
-        action: 'check_inventory',
-        showFollowUp: true
-      });
-    }
-    
-    // Check for roasted coffee category request
-    if (textLower.includes('roasted coffee') || textLower.includes('roasted inventory')) {
-      let summary = 'ROASTED COFFEE INVENTORY:\n';
-      if (roastedCoffeeInventory.length > 0) {
-        roastedCoffeeInventory.forEach(c => {
-          summary += `• ${c.name}: ${c.weight} lb\n`;
-        });
-      } else {
-        summary += '• None in stock\n';
-      }
-      return res.json({
-        response: summary,
-        action: 'check_inventory',
-        showFollowUp: true
-      });
-    }
-    
-    for (const pattern of inventoryPatterns) {
-      const match = textLower.match(pattern);
-      if (match) {
-        const searchTerm = match[1].trim().replace(/\?$/, '');
-        
-        // Skip if it's just "green" or "roasted" alone - handled above
-        if (searchTerm === 'green' || searchTerm === 'roasted' || searchTerm === 'green coffee' || searchTerm === 'roasted coffee') {
-          continue;
-        }
-        
-        // Search in roasted coffee inventory
-        const roastedMatch = roastedCoffeeInventory.find(c => 
-          c.name.toLowerCase().includes(searchTerm) ||
-          searchTerm.includes(c.name.toLowerCase()) ||
-          (searchTerm.includes('blend') && c.name.toLowerCase().includes('blend')) ||
-          (searchTerm.includes('decaf') && c.name.toLowerCase().includes('decaf')) ||
-          (searchTerm.includes('ethiopia') && c.name.toLowerCase().includes('ethiopia')) ||
-          (searchTerm.includes('colombia') && c.name.toLowerCase().includes('colombia'))
-        );
-        
-        if (roastedMatch) {
-          return res.json({
-            response: `You have ${roastedMatch.weight} lb of ${roastedMatch.name} in roasted inventory.`,
-            action: 'check_inventory',
-            showFollowUp: true
-          });
-        }
-        
-        // Search in green coffee inventory
-        const greenMatch = greenCoffeeInventory.find(c => 
-          c.name.toLowerCase().includes(searchTerm) ||
-          searchTerm.includes(c.name.toLowerCase())
-        );
-        
-        if (greenMatch) {
-          return res.json({
-            response: `You have ${greenMatch.weight} lb of ${greenMatch.name} in green coffee inventory.`,
-            action: 'check_inventory',
-            showFollowUp: true
-          });
-        }
-        
-        // Not found - don't show follow-up since there's an unanswered question
-        return res.json({
-          response: `I couldn't find "${searchTerm}" in inventory. Would you like me to check the full inventory?`,
-          action: 'check_inventory',
-          showFollowUp: false
-        });
-      }
-    }
-
-    // Try to parse invoice pattern without AI first (for rate limit fallback)
-    const invoicePattern = /(?:invoice|order|bill)?\s*(?:for\s+)?(\w+(?:'s)?(?:\s+\w+)?)\s*[,.]?\s*(\d+)\s*(?:lbs?|pounds?|lb)?\s*(?:of\s+)?(.+)/i;
-    const simplePattern = /^(\w+(?:'s)?(?:\s+\w+)?)\s+(\d+)\s*(?:lbs?|pounds?|lb)?\s*(.+)$/i;
-    
-    let fallbackData = null;
-    const match = text.match(invoicePattern) || text.match(simplePattern);
-    if (match) {
-      const customerInput = match[1].trim();
-      const quantity = parseInt(match[2]);
-      const product = match[3].trim();
+    const roastedSummary = roastedCoffeeInventory.length > 0 
+      ? roastedCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb`).join('\n')
+      : '- None in stock';
       
-      // Match customer
-      const matchedCustomer = getKnownCustomers().find(c => 
-        c.toLowerCase() === customerInput.toLowerCase() ||
-        customerInput.toLowerCase().includes(c.toLowerCase()) ||
-        c.toLowerCase().includes(customerInput.toLowerCase())
-      );
+    const greenSummary = greenCoffeeInventory.length > 0
+      ? greenCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb`).join('\n')
+      : '- None in stock';
       
-      fallbackData = {
-        intent: 'create_invoice',
-        customer: matchedCustomer || customerInput,
-        items: [{ quantity, product }],
-        isKnownCustomer: !!matchedCustomer
-      };
-    }
+    const enRouteSummary = enRouteCoffeeInventory.length > 0
+      ? enRouteCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb (tracking: ${c.trackingNumber || 'none'})`).join('\n')
+      : '- Nothing en route';
     
-    // Try Gemini with retry
+    // Gemini-first approach - let it handle everything with full context
     let intentData = null;
     try {
-      const intentPrompt = `You are Mise, an AI assistant for Archives of Us Coffee inventory management.
+      const intentPrompt = `You are Mise, an AI assistant for Archives of Us Coffee inventory and invoicing.
 
-AVAILABLE INTENTS:
-- "check_inventory": User is asking about current stock levels, how much of something they have, inventory questions, or wants help with inventory
-- "create_invoice": User wants to create an invoice for a customer (must mention customer name AND quantity)
-- "order_roast": User wants to order roasted coffee
-- "view_en_route": User wants to check shipped orders or tracking
-- "general_question": Other questions or conversation
-- "decline": User is declining, canceling, saying "never mind", or changing topics away from a previous request
-
-KNOWN CUSTOMERS: ${getKnownCustomers().join(', ')}
+=== CURRENT DATA ===
 
 ROASTED COFFEE INVENTORY:
-${roastedCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb`).join('\n')}
+${roastedSummary}
 
-GREEN COFFEE INVENTORY:
-${greenCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb`).join('\n')}
+GREEN COFFEE INVENTORY (unroasted beans):
+${greenSummary}
 
-CONVERSATION CONTEXT: ${conversationState || 'none'}
+EN ROUTE (shipped, not yet delivered):
+${enRouteSummary}
 
-User said: "${text}"
+CUSTOMERS:
+${customerDetails}
 
-IMPORTANT RULES:
-1. If user says "never mind", "cancel", "actually", "wait", or changes topic → intent is "decline"
-2. If user asks "can you help me with inventory" or "help with inventory" → intent is "check_inventory"  
-3. If user asks "how much X do I have" or anything about inventory levels → intent is "check_inventory"
-4. Only use "create_invoice" if user clearly mentions a customer name AND a quantity
-5. Be flexible - understand natural conversation and topic changes
-6. For inventory checks, include the actual inventory data in friendlyResponse
+CONVERSATION STATE: ${conversationState || 'none'}
 
-Respond ONLY with valid JSON:
+=== USER MESSAGE ===
+"${text}"
+
+=== YOUR TASK ===
+Understand what the user wants and respond helpfully.
+
+AVAILABLE ACTIONS:
+- "check_inventory": User asking about stock levels, inventory, how much of something
+- "create_invoice": User wants to invoice a customer (needs customer + quantity + product)
+- "order_roast": User wants to place a roast order
+- "view_en_route": User asking about shipments or tracking
+- "decline": User canceling, saying never mind, changing topics, or saying no/cancel/nope
+- "general": Conversation, questions, or unclear requests
+
+GUIDELINES:
+1. If user asks about inventory, provide the ACTUAL DATA from above
+2. If user asks about "green coffee" or "unroasted", show GREEN COFFEE data
+3. If unclear, ask a clarifying question - don't say you don't understand
+4. If you ask a question, set needsFollowUp to true
+
+Respond with JSON only:
 {
-  "intent": "<one of the intents above>",
-  "customer": "<customer name if invoice>",
-  "items": [{"quantity": <number>, "product": "<product name>"}],
+  "intent": "<action>",
+  "response": "<your helpful response with actual data>",
+  "customer": "<customer name or null>",
+  "items": [{"quantity": <number>, "product": "<product>"}],
   "isKnownCustomer": <true/false>,
-  "friendlyResponse": "<conversational response with actual data if inventory check>",
-  "conversationComplete": <true/false>,
-  "coffeeAskedAbout": "<coffee name if inventory check>"
+  "needsFollowUp": <true if you asked a question>
 }`;
 
-      const intentText = await callGeminiWithRetry(intentPrompt, { temperature: 0.1, maxRetries: 2 });
-      console.log(`🤖 Intent detection: ${intentText}`);
+      const intentText = await callGeminiWithRetry(intentPrompt, { temperature: 0.2, maxRetries: 2 });
+      console.log('🤖 Gemini response:', intentText);
       
       const cleanJson = intentText.replace(/```json\n?|\n?```/g, '').trim();
       intentData = JSON.parse(cleanJson);
       
     } catch (error) {
       if (error.message === 'RATE_LIMITED') {
-        console.log('⚠️ Rate limited, using fallback pattern matching');
-        if (fallbackData) {
-          intentData = fallbackData;
-        } else {
-          return res.json({
-            response: "I'm a bit busy right now. Please try again in a moment, or use the quick action buttons below.",
-            action: 'rate_limited',
-            showFollowUp: true
-          });
-        }
+        console.log('⚠️ Rate limited');
+        return res.json({
+          response: "I'm a bit busy right now. Please try again in a moment.",
+          action: 'rate_limited',
+          showFollowUp: true
+        });
       } else {
-        throw error;
+        console.error('Gemini error:', error);
+        return res.json({
+          response: "Sorry, I didn't get that. What can I help you with?",
+          action: null,
+          showFollowUp: true
+        });
       }
     }
     
@@ -1448,104 +1301,62 @@ Respond ONLY with valid JSON:
       return res.json({ 
         response: "Sorry, I didn't get that. What can I help you with?",
         action: null,
-        showFollowUp: false
+        showFollowUp: true
       });
     }
     
-    // Handle check_inventory intent
-    if (intentData.intent === 'check_inventory') {
-      // Build a full inventory summary
-      let summary = 'Here\'s your current inventory:\n\n';
-      
-      summary += 'ROASTED COFFEE:\n';
-      if (roastedCoffeeInventory.length > 0) {
-        roastedCoffeeInventory.forEach(c => {
-          summary += `• ${c.name}: ${c.weight} lb\n`;
-        });
-      } else {
-        summary += '• None\n';
-      }
-      
-      summary += '\nGREEN COFFEE:\n';
-      if (greenCoffeeInventory.length > 0) {
-        greenCoffeeInventory.forEach(c => {
-          summary += `• ${c.name}: ${c.weight} lb\n`;
-        });
-      } else {
-        summary += '• None\n';
-      }
-      
-      if (enRouteCoffeeInventory.length > 0) {
-        summary += `\nEN ROUTE: ${enRouteCoffeeInventory.length} item(s)`;
-      }
-      
-      // If asking about specific coffee, just answer that
-      if (intentData.coffeeAskedAbout) {
-        const searchTerm = intentData.coffeeAskedAbout.toLowerCase();
-        const roastedMatch = roastedCoffeeInventory.find(c => 
-          c.name.toLowerCase().includes(searchTerm) ||
-          searchTerm.includes(c.name.toLowerCase())
-        );
-        
-        if (roastedMatch) {
-          return res.json({
-            response: `You have ${roastedMatch.weight} lb of ${roastedMatch.name} in roasted inventory.`,
-            action: 'check_inventory',
-            showFollowUp: true
-          });
-        }
-        
-        const greenMatch = greenCoffeeInventory.find(c => 
-          c.name.toLowerCase().includes(searchTerm) ||
-          searchTerm.includes(c.name.toLowerCase())
-        );
-        
-        if (greenMatch) {
-          return res.json({
-            response: `You have ${greenMatch.weight} lb of ${greenMatch.name} in green coffee inventory.`,
-            action: 'check_inventory',
-            showFollowUp: true
-          });
-        }
-      }
-      
-      // Return full summary
+    // Use Gemini's response directly - it has all the data
+    const intent = intentData.intent;
+    const geminiResponse = intentData.response;
+    const needsFollowUp = intentData.needsFollowUp;
+    
+    // Handle check_inventory - use Gemini's response
+    if (intent === 'check_inventory') {
       return res.json({
-        response: summary,
+        response: geminiResponse,
         action: 'check_inventory',
-        showFollowUp: true
+        showFollowUp: !needsFollowUp
       });
     }
     
-    // Handle order_roast intent
-    if (intentData.intent === 'order_roast') {
+    // Handle decline
+    if (intent === 'decline') {
       return res.json({
-        response: "I can help you order roasts. Use the 'Order Roast' button to get started, or tell me which coffee you'd like to order.",
-        action: 'order_roast',
-        showFollowUp: true
-      });
-    }
-    
-    // Handle view_en_route intent
-    if (intentData.intent === 'view_en_route') {
-      return res.json({
-        response: "Use the 'En Route' button to view your shipped orders and tracking information.",
-        action: 'view_en_route',
-        showFollowUp: true
-      });
-    }
-    
-    // Handle decline/cancel
-    if (intentData.intent === 'decline') {
-      return res.json({
-        response: intentData.friendlyResponse || "No problem!",
+        response: geminiResponse || "No problem!",
         action: 'declined',
         showFollowUp: true
       });
     }
     
+    // Handle general questions
+    if (intent === 'general') {
+      return res.json({
+        response: geminiResponse,
+        action: 'general',
+        showFollowUp: !needsFollowUp
+      });
+    }
+    
+    // Handle order_roast intent
+    if (intent === 'order_roast') {
+      return res.json({
+        response: geminiResponse || "I can help you order roasts. Use the 'Order Roast' button to get started, or tell me which coffee you'd like to order.",
+        action: 'order_roast',
+        showFollowUp: !needsFollowUp
+      });
+    }
+    
+    // Handle view_en_route intent
+    if (intent === 'view_en_route') {
+      return res.json({
+        response: geminiResponse || "Use the 'En Route' button to view your shipped orders and tracking information.",
+        action: 'view_en_route',
+        showFollowUp: !needsFollowUp
+      });
+    }
+    
     // Handle confirm (when user types "yes" to add new customer)
-    if (intentData.intent === 'confirm' && conversationState === 'waiting_for_new_customer_confirmation') {
+    if (intent === 'confirm' && conversationState === 'waiting_for_new_customer_confirmation') {
       return res.json({
         response: "Great! Adding them now...",
         action: 'confirm_add_customer',
@@ -1604,19 +1415,19 @@ Respond ONLY with valid JSON:
       } else {
         // Missing info for invoice
         return res.json({
-          response: intentData.friendlyResponse || "I'd be happy to create an invoice! Could you provide the customer name, quantity, and product?",
+          response: geminiResponse || "I'd be happy to create an invoice! Could you provide the customer name, quantity, and product?",
           action: 'need_more_info',
           showFollowUp: false
         });
       }
     }
     
-    // For other intents, return the friendly response with conversation state
+    // For other intents, return Gemini's response
     res.json({ 
-      response: intentData.friendlyResponse || "How can I help you today?",
-      action: intentData.intent,
+      response: geminiResponse || "How can I help you today?",
+      action: intent,
       data: intentData,
-      showFollowUp: intentData.conversationComplete === true
+      showFollowUp: !needsFollowUp
     });
   } catch (error) {
     console.error('AI processing error:', error);

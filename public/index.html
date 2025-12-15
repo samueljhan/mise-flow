@@ -619,7 +619,7 @@
                         <strong>🧾 Generate Invoice</strong>
                         <span>Create a new invoice for a wholesale customer</span>
                     </div>
-                    <div class="example-prompt" onclick="manageRetailPlaceholder()" style="opacity:0.7;">
+                    <div class="example-prompt" onclick="manageRetailPlaceholder()">
                         <strong>🛒 Manage Retail</strong>
                         <span>Update retail coffee bag sales</span>
                     </div>
@@ -2495,27 +2495,15 @@
                 
                 const data = await response.json();
                 
-                // Add the conversational message with compact card options
+                // Add the conversational message with simple button options
                 let html = `<div style="margin-bottom: 12px;">${data.message || 'What else can I help with?'}</div>`;
-                html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">';
-                html += `<div onclick="checkCurrentInventory()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
-                    <div style="color:#90EE90; font-size:13px;">☕ Check Inventory</div>
-                </div>`;
-                html += `<div onclick="startRoastOrder()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
-                    <div style="color:#90EE90; font-size:13px;">🔥 Order Roast</div>
-                </div>`;
-                html += `<div onclick="startInvoice()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
-                    <div style="color:#90EE90; font-size:13px;">🧾 Generate Invoice</div>
-                </div>`;
-                html += `<div onclick="viewEnRoute()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
-                    <div style="color:#90EE90; font-size:13px;">🚚 En Route</div>
-                </div>`;
-                html += `<div onclick="openManageInventory()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
-                    <div style="color:#90EE90; font-size:13px;">📦 Manage Inventory</div>
-                </div>`;
-                html += `<div onclick="manageRetailPlaceholder()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333; opacity:0.7;">
-                    <div style="color:#90EE90; font-size:13px;">🛒 Manage Retail</div>
-                </div>`;
+                html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
+                html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
+                html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
+                html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
+                html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
+                html += '<button class="action-btn" onclick="openManageInventory()">Manage Inventory</button>';
+                html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
                 html += '</div>';
                 
                 addMessage(html, false);
@@ -2528,25 +2516,13 @@
 
         function addFollowUpMessage() {
             let html = '<div style="margin-bottom: 12px;">What else can I help with?</div>';
-            html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">';
-            html += `<div onclick="checkCurrentInventory()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
-                <div style="color:#90EE90; font-size:13px;">☕ Check Inventory</div>
-            </div>`;
-            html += `<div onclick="startRoastOrder()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
-                <div style="color:#90EE90; font-size:13px;">🔥 Order Roast</div>
-            </div>`;
-            html += `<div onclick="startInvoice()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
-                <div style="color:#90EE90; font-size:13px;">🧾 Generate Invoice</div>
-            </div>`;
-            html += `<div onclick="viewEnRoute()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
-                <div style="color:#90EE90; font-size:13px;">🚚 En Route</div>
-            </div>`;
-            html += `<div onclick="openManageInventory()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
-                <div style="color:#90EE90; font-size:13px;">📦 Manage Inventory</div>
-            </div>`;
-            html += `<div onclick="manageRetailPlaceholder()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333; opacity:0.7;">
-                <div style="color:#90EE90; font-size:13px;">🛒 Manage Retail</div>
-            </div>`;
+            html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
+            html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
+            html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
+            html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
+            html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
+            html += '<button class="action-btn" onclick="openManageInventory()">Manage Inventory</button>';
+            html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
             html += '</div>';
             
             addMessage(html, false);

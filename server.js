@@ -794,13 +794,19 @@ Examples:
       items = parsed.items || [];
     } catch (parseError) {
       console.error('⚠️ Gemini parsing failed:', parseError.message);
-      return res.status(400).json({ 
-        error: 'Could not parse invoice details. Please use format: "CustomerName 100 lbs Product and 50 lbs Product2"' 
+      return res.json({ 
+        success: false,
+        error: "Sorry, I didn't get that. What can I help you with?",
+        showFollowUp: true
       });
     }
     
     if (!customer || !items || items.length === 0) {
-      return res.status(400).json({ error: 'Could not parse invoice details. Please include customer name and at least one product with quantity.' });
+      return res.json({ 
+        success: false,
+        error: "Sorry, I didn't get that. What can I help you with?",
+        showFollowUp: true
+      });
     }
     
     // Match customer to known list
@@ -1182,10 +1188,53 @@ app.post('/api/process', async (req, res) => {
     const textLower = text.toLowerCase().trim();
     
     // Handle simple yes/no without AI
-    if (textLower === 'no' || textLower === 'cancel' || textLower === 'never mind' || textLower === 'nope') {
+    if (textLower === 'no' || textLower === 'cancel' || textLower === 'nope') {
       return res.json({
         response: "No problem!",
         action: 'declined',
+        showFollowUp: true
+      });
+    }
+    
+    // Handle "never mind" with topic change detection
+    if (textLower.includes('never mind') || textLower.includes('nevermind')) {
+      // Check if they're also asking for something else
+      if (textLower.includes('inventory') || textLower.includes('help me with')) {
+        // They want to switch to inventory
+        let summary = 'No problem! Here\'s your current inventory:\n\n';
+        summary += 'ROASTED COFFEE:\n';
+        roastedCoffeeInventory.forEach(c => { summary += `• ${c.name}: ${c.weight} lb\n`; });
+        summary += '\nGREEN COFFEE:\n';
+        greenCoffeeInventory.forEach(c => { summary += `• ${c.name}: ${c.weight} lb\n`; });
+        if (enRouteCoffeeInventory.length > 0) {
+          summary += `\nEN ROUTE: ${enRouteCoffeeInventory.length} item(s)`;
+        }
+        return res.json({
+          response: summary,
+          action: 'check_inventory',
+          showFollowUp: true
+        });
+      }
+      return res.json({
+        response: "No problem! What else can I help you with?",
+        action: 'declined',
+        showFollowUp: true
+      });
+    }
+    
+    // Handle help with inventory requests
+    if (textLower.includes('help') && textLower.includes('inventory')) {
+      let summary = 'Sure! Here\'s your current inventory:\n\n';
+      summary += 'ROASTED COFFEE:\n';
+      roastedCoffeeInventory.forEach(c => { summary += `• ${c.name}: ${c.weight} lb\n`; });
+      summary += '\nGREEN COFFEE:\n';
+      greenCoffeeInventory.forEach(c => { summary += `• ${c.name}: ${c.weight} lb\n`; });
+      if (enRouteCoffeeInventory.length > 0) {
+        summary += `\nEN ROUTE: ${enRouteCoffeeInventory.length} item(s)`;
+      }
+      return res.json({
+        response: summary,
+        action: 'check_inventory',
         showFollowUp: true
       });
     }
@@ -1295,12 +1344,12 @@ app.post('/api/process', async (req, res) => {
       const intentPrompt = `You are Mise, an AI assistant for Archives of Us Coffee inventory management.
 
 AVAILABLE INTENTS:
-- "check_inventory": User is asking about current stock levels, how much of something they have, inventory questions
+- "check_inventory": User is asking about current stock levels, how much of something they have, inventory questions, or wants help with inventory
 - "create_invoice": User wants to create an invoice for a customer (must mention customer name AND quantity)
 - "order_roast": User wants to order roasted coffee
 - "view_en_route": User wants to check shipped orders or tracking
 - "general_question": Other questions or conversation
-- "decline": User is declining or canceling something
+- "decline": User is declining, canceling, saying "never mind", or changing topics away from a previous request
 
 KNOWN CUSTOMERS: ${getKnownCustomers().join(', ')}
 
@@ -1315,9 +1364,12 @@ CONVERSATION CONTEXT: ${conversationState || 'none'}
 User said: "${text}"
 
 IMPORTANT RULES:
-1. If user asks "how much X do I have" or anything about inventory levels → intent is "check_inventory"
-2. Only use "create_invoice" if user clearly mentions a customer name AND a quantity
-3. For inventory checks, include the actual inventory data in friendlyResponse
+1. If user says "never mind", "cancel", "actually", "wait", or changes topic → intent is "decline"
+2. If user asks "can you help me with inventory" or "help with inventory" → intent is "check_inventory"  
+3. If user asks "how much X do I have" or anything about inventory levels → intent is "check_inventory"
+4. Only use "create_invoice" if user clearly mentions a customer name AND a quantity
+5. Be flexible - understand natural conversation and topic changes
+6. For inventory checks, include the actual inventory data in friendlyResponse
 
 Respond ONLY with valid JSON:
 {
@@ -1355,7 +1407,7 @@ Respond ONLY with valid JSON:
     
     if (!intentData) {
       return res.json({ 
-        response: "I didn't quite catch that. Could you rephrase?",
+        response: "Sorry, I didn't get that. What can I help you with?",
         action: null,
         showFollowUp: false
       });
@@ -1363,16 +1415,32 @@ Respond ONLY with valid JSON:
     
     // Handle check_inventory intent
     if (intentData.intent === 'check_inventory') {
-      // If Gemini provided a good response, use it
-      if (intentData.friendlyResponse && !intentData.friendlyResponse.includes('Processing') && !intentData.friendlyResponse.includes('invoice')) {
-        return res.json({
-          response: intentData.friendlyResponse,
-          action: 'check_inventory',
-          showFollowUp: true
+      // Build a full inventory summary
+      let summary = 'Here\'s your current inventory:\n\n';
+      
+      summary += 'ROASTED COFFEE:\n';
+      if (roastedCoffeeInventory.length > 0) {
+        roastedCoffeeInventory.forEach(c => {
+          summary += `• ${c.name}: ${c.weight} lb\n`;
         });
+      } else {
+        summary += '• None\n';
       }
       
-      // Otherwise, try to find the coffee they asked about
+      summary += '\nGREEN COFFEE:\n';
+      if (greenCoffeeInventory.length > 0) {
+        greenCoffeeInventory.forEach(c => {
+          summary += `• ${c.name}: ${c.weight} lb\n`;
+        });
+      } else {
+        summary += '• None\n';
+      }
+      
+      if (enRouteCoffeeInventory.length > 0) {
+        summary += `\nEN ROUTE: ${enRouteCoffeeInventory.length} item(s)`;
+      }
+      
+      // If asking about specific coffee, just answer that
       if (intentData.coffeeAskedAbout) {
         const searchTerm = intentData.coffeeAskedAbout.toLowerCase();
         const roastedMatch = roastedCoffeeInventory.find(c => 
@@ -1382,16 +1450,29 @@ Respond ONLY with valid JSON:
         
         if (roastedMatch) {
           return res.json({
-            response: `You have ${roastedMatch.weight} lb of ${roastedMatch.name} in stock.`,
+            response: `You have ${roastedMatch.weight} lb of ${roastedMatch.name} in roasted inventory.`,
+            action: 'check_inventory',
+            showFollowUp: true
+          });
+        }
+        
+        const greenMatch = greenCoffeeInventory.find(c => 
+          c.name.toLowerCase().includes(searchTerm) ||
+          searchTerm.includes(c.name.toLowerCase())
+        );
+        
+        if (greenMatch) {
+          return res.json({
+            response: `You have ${greenMatch.weight} lb of ${greenMatch.name} in green coffee inventory.`,
             action: 'check_inventory',
             showFollowUp: true
           });
         }
       }
       
-      // Default inventory response
+      // Return full summary
       return res.json({
-        response: "I can check that for you. Use the 'Check Inventory' button for a full breakdown, or ask about a specific coffee.",
+        response: summary,
         action: 'check_inventory',
         showFollowUp: true
       });
@@ -1904,7 +1985,7 @@ Determine what the user wants. Respond with JSON:
     if (jsonMatch) {
       res.json(JSON.parse(jsonMatch[0]));
     } else {
-      res.json({ action: 'chat', chatResponse: "I'm not sure what you'd like to do. You can check inventory, order roasts, generate invoices, or view en route coffee." });
+      res.json({ action: 'chat', chatResponse: "Sorry, I didn't get that. What can I help you with?" });
     }
   } catch (error) {
     console.error('Chat process error:', error);
@@ -1979,11 +2060,11 @@ Respond with JSON only:
       const parsed = JSON.parse(jsonMatch[0]);
       res.json(parsed);
     } else {
-      res.json({ understood: false, error: 'Could not parse response' });
+      res.json({ understood: false, needsClarification: true, clarificationQuestion: "Sorry, I didn't get that. What can I help you with?" });
     }
   } catch (error) {
     console.error('Parse roast order error:', error);
-    res.status(500).json({ error: error.message });
+    res.json({ understood: false, needsClarification: true, clarificationQuestion: "Sorry, I didn't get that. What can I help you with?" });
   }
 });
 

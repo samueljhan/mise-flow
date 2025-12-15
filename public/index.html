@@ -1906,7 +1906,10 @@
                 
                 if (!response.ok) {
                     console.error('API error:', data);
-                    return '<p style="color: #ff6b6b;">Error: ' + (data.error || 'Processing failed') + '</p>';
+                    setTimeout(() => {
+                        addConversationalFollowUp('unclear_request');
+                    }, 300);
+                    return "Sorry, I didn't get that. What can I help you with?";
                 }
                 
                 // Check if this is an invoice action
@@ -1967,7 +1970,7 @@
                 
                 // Format the response - use simple format for short/completed responses
                 let html;
-                if (data.showFollowUp || data.action === 'declined') {
+                if (data.showFollowUp || data.action === 'declined' || data.action === 'check_inventory') {
                     html = formatSimpleResponse(data.response);
                 } else {
                     html = formatResponseHTML(data.response);
@@ -1978,7 +1981,7 @@
                     window.currentConversationState = 'none';
                     // Add follow-up after a short delay
                     setTimeout(() => {
-                        addConversationalFollowUp('invoice_generated');
+                        addConversationalFollowUp(data.action || 'completed');
                     }, 300);
                 }
                 
@@ -1986,7 +1989,11 @@
                 
             } catch (error) {
                 console.error('Error:', error);
-                return '<p style="color: #ff6b6b;">Error processing request.</p>';
+                // Trigger follow-up on next tick
+                setTimeout(() => {
+                    addConversationalFollowUp('unclear_request');
+                }, 300);
+                return "Sorry, I didn't get that. What can I help you with?";
             }
         }
         
@@ -2293,9 +2300,29 @@
             userInput.value = '';
             userInput.style.height = 'auto';
             userInput.placeholder = 'Speak or type your request...';
+            
+            // Check for cancel/topic change phrases
+            const lowerMsg = message.toLowerCase();
+            const cancelPhrases = ['never mind', 'nevermind', 'cancel', 'nope', 'forget it', 'stop', 'actually', 'wait', 'hold on'];
+            const topicChangePhrases = ['inventory', 'invoice', 'en route', 'check', 'help me', 'what can you', 'show me', 'can you help'];
+            const isCanceling = cancelPhrases.some(p => lowerMsg.includes(p));
+            const isChangingTopic = topicChangePhrases.some(p => lowerMsg.includes(p));
+            const wantsToSwitch = isCanceling || isChangingTopic;
 
             // Check if we're waiting for roast order input
             if (waitingForRoastOrder) {
+                if (wantsToSwitch) {
+                    waitingForRoastOrder = false;
+                    window.pendingClarification = null;
+                    // Route to normal processing
+                    addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
+                    processMessage(message).then(response => {
+                        const messages = chatContainer.querySelectorAll('.message');
+                        messages[messages.length - 1].remove();
+                        addMessage(response, false);
+                    });
+                    return;
+                }
                 waitingForRoastOrder = false;
                 parseRoastOrder(message);
                 return;
@@ -2303,12 +2330,32 @@
             
             // Check if we're waiting for delivery confirmation initials
             if (window.pendingDeliveryConfirm) {
+                if (wantsToSwitch) {
+                    window.pendingDeliveryConfirm = null;
+                    addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
+                    processMessage(message).then(response => {
+                        const messages = chatContainer.querySelectorAll('.message');
+                        messages[messages.length - 1].remove();
+                        addMessage(response, false);
+                    });
+                    return;
+                }
                 confirmDeliveryWithInitials(message);
                 return;
             }
             
             // Check if we're waiting for en route tracking edit
             if (window.pendingEnRouteEdit) {
+                if (wantsToSwitch) {
+                    window.pendingEnRouteEdit = null;
+                    addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
+                    processMessage(message).then(response => {
+                        const messages = chatContainer.querySelectorAll('.message');
+                        messages[messages.length - 1].remove();
+                        addMessage(response, false);
+                    });
+                    return;
+                }
                 const itemId = window.pendingEnRouteEdit;
                 window.pendingEnRouteEdit = null;
                 updateTrackingChat(itemId, message);
@@ -2317,6 +2364,17 @@
 
             // Check if we're waiting for customer code
             if (window.waitingForCustomerCode) {
+                if (wantsToSwitch) {
+                    window.waitingForCustomerCode = false;
+                    window.pendingNewCustomerName = null;
+                    addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
+                    processMessage(message).then(response => {
+                        const messages = chatContainer.querySelectorAll('.message');
+                        messages[messages.length - 1].remove();
+                        addMessage(response, false);
+                    });
+                    return;
+                }
                 // Validate and process the 3-letter code
                 const code = message.toUpperCase().replace(/[^A-Z]/g, '');
                 if (code.length !== 3) {
@@ -2329,12 +2387,33 @@
             
             // Check if we're waiting for customer email
             if (window.waitingForCustomerEmail) {
+                if (wantsToSwitch) {
+                    window.waitingForCustomerEmail = false;
+                    addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
+                    processMessage(message).then(response => {
+                        const messages = chatContainer.querySelectorAll('.message');
+                        messages[messages.length - 1].remove();
+                        addMessage(response, false);
+                    });
+                    return;
+                }
                 processCustomerEmail(message);
                 return;
             }
             
             // Check if we're waiting for email update confirmation
             if (window.waitingForEmailUpdateConfirmation) {
+                if (wantsToSwitch) {
+                    window.waitingForEmailUpdateConfirmation = false;
+                    window.pendingEmailUpdate = null;
+                    addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
+                    processMessage(message).then(response => {
+                        const messages = chatContainer.querySelectorAll('.message');
+                        messages[messages.length - 1].remove();
+                        addMessage(response, false);
+                    });
+                    return;
+                }
                 handleEmailUpdateResponse(message);
                 return;
             }
@@ -2342,12 +2421,24 @@
             addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
 
             if (pendingInvoice) {
-                pendingInvoice = false;
-                generateInvoice(message).then(response => {
-                    const messages = chatContainer.querySelectorAll('.message');
-                    messages[messages.length - 1].remove();
-                    addMessage(response, false);
-                });
+                // Already checked wantsToSwitch above
+                if (wantsToSwitch) {
+                    pendingInvoice = false;
+                    // Route to normal processing
+                    processMessage(message).then(response => {
+                        const messages = chatContainer.querySelectorAll('.message');
+                        messages[messages.length - 1].remove();
+                        addMessage(response, false);
+                    });
+                    });
+                } else {
+                    pendingInvoice = false;
+                    generateInvoice(message).then(response => {
+                        const messages = chatContainer.querySelectorAll('.message');
+                        messages[messages.length - 1].remove();
+                        addMessage(response, false);
+                    });
+                }
             } else {
                 processMessage(message).then(response => {
                     const messages = chatContainer.querySelectorAll('.message');
@@ -2383,17 +2474,25 @@
                     body: JSON.stringify({ details })
                 });
 
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.error || 'Invoice generation failed');
+                const data = await response.json();
+                
+                // Handle conversational fallback when parsing fails
+                if (data.success === false && data.showFollowUp) {
+                    setTimeout(() => {
+                        addConversationalFollowUp('unclear_request');
+                    }, 300);
+                    return data.error || "Sorry, I didn't get that. What can I help you with?";
                 }
                 
-                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Invoice generation failed');
+                }
+                
                 return formatInvoiceResponse(data);
                 
             } catch (error) {
                 console.error('Error:', error);
-                return '<p style="color: #ff6b6b;">Error: ' + error.message + '</p>';
+                return "Sorry, I didn't get that. What can I help you with?";
             }
         }
 

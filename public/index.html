@@ -596,7 +596,7 @@
         <div class="chat-container" id="chatContainer">
             <div class="welcome-message">
                 <h2>Welcome AOU Coffee</h2>
-                <p>What can I help you manage?</p>
+                <p>How can I help?</p>
                 
                 <div class="example-prompts">
                     <div class="example-prompt" onclick="checkCurrentInventory()">
@@ -629,7 +629,7 @@
 
         <div class="input-container">
             <div class="input-wrapper">
-                <textarea id="userInput" placeholder="Speak or type your inventory request..." rows="1"></textarea>
+                <textarea id="userInput" placeholder="Speak or type your reply..." rows="1"></textarea>
                 <button class="voice-btn" id="voiceBtn" title="Start recording">
                     <svg viewBox="0 0 24 24">
                         <path d="M12 1a4 4 0 0 1 4 4v7a4 4 0 1 1-8 0V5a4 4 0 0 1 4-4z"/>
@@ -745,6 +745,8 @@
         let isRecording = false;
         let googleConnected = false;
         let currentResponseText = '';
+        let partialTranscript = '';
+        let savedTextBeforePartial = '';
         
         // Inventory state
         let greenCoffeeInventory = [];
@@ -1215,7 +1217,7 @@
             window.waitingForOrderConfirmation = false;
             window.pendingClarification = null;
             addMessage('Order cancelled.', false);
-            userInput.placeholder = 'Speak or type your request...';
+            userInput.placeholder = 'Speak or type your reply...';
             addConversationalFollowUp('order_cancelled');
         }
 
@@ -1267,7 +1269,7 @@
                 pendingRoastEmail = null;
                 waitingForRoastOrder = false;
                 window.waitingForOrderConfirmation = false;
-                userInput.placeholder = 'Speak or type your request...';
+                userInput.placeholder = 'Speak or type your reply...';
                 
                 // Add conversational follow-up
                 addConversationalFollowUp('roast_order_confirmed');
@@ -1353,7 +1355,7 @@
             document.getElementById('roastOrderModal').style.display = 'none';
             pendingRoastOrder = [];
             waitingForRoastOrder = false;
-            userInput.placeholder = 'Speak or type your request...';
+            userInput.placeholder = 'Speak or type your reply...';
         }
 
         // Generate Roast Order Email (from modal)
@@ -1841,11 +1843,23 @@
 
                 ws.onmessage = (event) => {
                     const data = JSON.parse(event.data);
-                    if (data.type === 'transcript' && data.is_final) {
-                        const currentText = userInput.value;
-                        userInput.value = currentText + (currentText ? ' ' : '') + data.text;
-                        userInput.style.height = 'auto';
-                        userInput.style.height = Math.min(userInput.scrollHeight, 240) + 'px';
+                    if (data.type === 'transcript') {
+                        if (data.is_final) {
+                            // Clear partial indicator
+                            micStatus.textContent = '🔴 Recording...';
+                            partialTranscript = '';
+                            insertTranscriptAtCursor(data.text);
+                        } else {
+                            // Show partial transcript in mic status and inline
+                            partialTranscript = data.text;
+                            const partialText = data.text.length > 30 
+                                ? '...' + data.text.slice(-30) 
+                                : data.text;
+                            micStatus.textContent = '🎤 ' + partialText;
+                            
+                            // Show partial inline (grayed out) at cursor position
+                            showPartialInline(data.text);
+                        }
                     }
                 };
 
@@ -1856,12 +1870,93 @@
                 alert('Could not access microphone');
             }
         }
+        
+        // Track cursor position and selection for dictation editing
+        let lastCursorPosition = null;
+        let lastSelectionStart = null;
+        let lastSelectionEnd = null;
+        
+        userInput.addEventListener('click', updateCursorPosition);
+        userInput.addEventListener('keyup', updateCursorPosition);
+        userInput.addEventListener('select', updateCursorPosition);
+        userInput.addEventListener('mouseup', updateCursorPosition);
+        
+        function updateCursorPosition() {
+            lastCursorPosition = userInput.selectionStart;
+            lastSelectionStart = userInput.selectionStart;
+            lastSelectionEnd = userInput.selectionEnd;
+        }
+        
+        function insertTranscriptAtCursor(text) {
+            const currentText = userInput.value;
+            const hasSelection = lastSelectionStart !== null && 
+                                 lastSelectionEnd !== null && 
+                                 lastSelectionStart !== lastSelectionEnd;
+            
+            if (hasSelection) {
+                // Replace selected text with spoken text
+                const before = currentText.substring(0, lastSelectionStart);
+                const after = currentText.substring(lastSelectionEnd);
+                userInput.value = before + text + after;
+                
+                // Move cursor to end of inserted text
+                const newPosition = lastSelectionStart + text.length;
+                userInput.setSelectionRange(newPosition, newPosition);
+                lastCursorPosition = newPosition;
+                lastSelectionStart = newPosition;
+                lastSelectionEnd = newPosition;
+                
+            } else if (lastCursorPosition !== null && lastCursorPosition < currentText.length) {
+                // Insert at cursor position (middle of text)
+                const before = currentText.substring(0, lastCursorPosition);
+                const after = currentText.substring(lastCursorPosition);
+                
+                // Add space before if needed
+                const needsSpaceBefore = before.length > 0 && !before.endsWith(' ') && !before.endsWith('\n');
+                // Add space after if needed  
+                const needsSpaceAfter = after.length > 0 && !after.startsWith(' ') && !after.startsWith('\n');
+                
+                const insertText = (needsSpaceBefore ? ' ' : '') + text + (needsSpaceAfter ? ' ' : '');
+                userInput.value = before + insertText + after;
+                
+                // Move cursor to end of inserted text
+                const newPosition = before.length + insertText.length;
+                userInput.setSelectionRange(newPosition, newPosition);
+                lastCursorPosition = newPosition;
+                lastSelectionStart = newPosition;
+                lastSelectionEnd = newPosition;
+                
+            } else {
+                // Append to end (default behavior)
+                userInput.value = currentText + (currentText ? ' ' : '') + text;
+                lastCursorPosition = userInput.value.length;
+                lastSelectionStart = lastCursorPosition;
+                lastSelectionEnd = lastCursorPosition;
+            }
+            
+            // Adjust textarea height
+            userInput.style.height = 'auto';
+            userInput.style.height = Math.min(userInput.scrollHeight, 240) + 'px';
+            
+            // Focus the input to show cursor position
+            userInput.focus();
+        }
+        
+        function showPartialInline(partialText) {
+            // For now, partial is shown in mic status bar
+            // Could enhance with overlay display in future
+            // The textarea keeps the saved text, partial shows in status
+        }
 
         function stopRecording() {
             isRecording = false;
             voiceBtn.classList.remove('recording');
             micIndicator.classList.remove('recording');
             micStatus.textContent = 'Ready';
+            
+            // Clear partial transcript state
+            partialTranscript = '';
+            savedTextBeforePartial = '';
 
             if (processor) processor.disconnect();
             if (audioContext) audioContext.close();
@@ -2299,7 +2394,7 @@
             
             userInput.value = '';
             userInput.style.height = 'auto';
-            userInput.placeholder = 'Speak or type your request...';
+            userInput.placeholder = 'Speak or type your reply...';
             
             // Check for cancel/topic change phrases
             const lowerMsg = message.toLowerCase();

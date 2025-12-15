@@ -1266,10 +1266,49 @@ app.post('/api/process', async (req, res) => {
       /how many (?:lbs?|pounds?) of (.+)/i
     ];
     
+    // Check for green coffee category request first
+    if (textLower.includes('green coffee') || textLower.includes('green inventory') || textLower.includes('unroasted')) {
+      let summary = 'GREEN COFFEE INVENTORY:\n';
+      if (greenCoffeeInventory.length > 0) {
+        greenCoffeeInventory.forEach(c => {
+          summary += `• ${c.name}: ${c.weight} lb\n`;
+        });
+      } else {
+        summary += '• None in stock\n';
+      }
+      return res.json({
+        response: summary,
+        action: 'check_inventory',
+        showFollowUp: true
+      });
+    }
+    
+    // Check for roasted coffee category request
+    if (textLower.includes('roasted coffee') || textLower.includes('roasted inventory')) {
+      let summary = 'ROASTED COFFEE INVENTORY:\n';
+      if (roastedCoffeeInventory.length > 0) {
+        roastedCoffeeInventory.forEach(c => {
+          summary += `• ${c.name}: ${c.weight} lb\n`;
+        });
+      } else {
+        summary += '• None in stock\n';
+      }
+      return res.json({
+        response: summary,
+        action: 'check_inventory',
+        showFollowUp: true
+      });
+    }
+    
     for (const pattern of inventoryPatterns) {
       const match = textLower.match(pattern);
       if (match) {
         const searchTerm = match[1].trim().replace(/\?$/, '');
+        
+        // Skip if it's just "green" or "roasted" alone - handled above
+        if (searchTerm === 'green' || searchTerm === 'roasted' || searchTerm === 'green coffee' || searchTerm === 'roasted coffee') {
+          continue;
+        }
         
         // Search in roasted coffee inventory
         const roastedMatch = roastedCoffeeInventory.find(c => 
@@ -1303,11 +1342,11 @@ app.post('/api/process', async (req, res) => {
           });
         }
         
-        // Not found
+        // Not found - don't show follow-up since there's an unanswered question
         return res.json({
           response: `I couldn't find "${searchTerm}" in inventory. Would you like me to check the full inventory?`,
           action: 'check_inventory',
-          showFollowUp: true
+          showFollowUp: false
         });
       }
     }

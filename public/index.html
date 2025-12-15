@@ -596,7 +596,7 @@
         <div class="chat-container" id="chatContainer">
             <div class="welcome-message">
                 <h2>Welcome AOU Coffee</h2>
-                <p>How can I help?</p>
+                <p>What would you like to do right now?</p>
                 
                 <div class="example-prompts">
                     <div class="example-prompt" onclick="checkCurrentInventory()">
@@ -629,7 +629,7 @@
 
         <div class="input-container">
             <div class="input-wrapper">
-                <textarea id="userInput" placeholder="Speak or type your reply..." rows="1"></textarea>
+                <textarea id="userInput" placeholder="Describe what you want to do…" rows="1"></textarea>
                 <button class="voice-btn" id="voiceBtn" title="Start recording">
                     <svg viewBox="0 0 24 24">
                         <path d="M12 1a4 4 0 0 1 4 4v7a4 4 0 1 1-8 0V5a4 4 0 0 1 4-4z"/>
@@ -1217,7 +1217,7 @@
             window.waitingForOrderConfirmation = false;
             window.pendingClarification = null;
             addMessage('Order cancelled.', false);
-            userInput.placeholder = 'Speak or type your reply...';
+            userInput.placeholder = 'Describe what you want to do…';
             addConversationalFollowUp('order_cancelled');
         }
 
@@ -1269,7 +1269,7 @@
                 pendingRoastEmail = null;
                 waitingForRoastOrder = false;
                 window.waitingForOrderConfirmation = false;
-                userInput.placeholder = 'Speak or type your reply...';
+                userInput.placeholder = 'Describe what you want to do…';
                 
                 // Add conversational follow-up
                 addConversationalFollowUp('roast_order_confirmed');
@@ -1355,7 +1355,7 @@
             document.getElementById('roastOrderModal').style.display = 'none';
             pendingRoastOrder = [];
             waitingForRoastOrder = false;
-            userInput.placeholder = 'Speak or type your reply...';
+            userInput.placeholder = 'Describe what you want to do…';
         }
 
         // Generate Roast Order Email (from modal)
@@ -2394,7 +2394,7 @@
             
             userInput.value = '';
             userInput.style.height = 'auto';
-            userInput.placeholder = 'Speak or type your reply...';
+            userInput.placeholder = 'Describe what you want to do…';
             
             // Check for cancel/topic change phrases
             const lowerMsg = message.toLowerCase();

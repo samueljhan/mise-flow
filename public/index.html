@@ -844,6 +844,38 @@
             }
         }
 
+        // Typing effect helper
+        async function typeText(element, text, speed = 15) {
+            return new Promise((resolve) => {
+                let i = 0;
+                element.innerHTML = '';
+                
+                function type() {
+                    if (i < text.length) {
+                        // Handle HTML tags - add them all at once
+                        if (text[i] === '<') {
+                            const closeIndex = text.indexOf('>', i);
+                            if (closeIndex !== -1) {
+                                element.innerHTML += text.substring(i, closeIndex + 1);
+                                i = closeIndex + 1;
+                            } else {
+                                element.innerHTML += text[i];
+                                i++;
+                            }
+                        } else {
+                            element.innerHTML += text[i];
+                            i++;
+                        }
+                        chatContainer.scrollTop = chatContainer.scrollHeight;
+                        setTimeout(type, speed);
+                    } else {
+                        resolve();
+                    }
+                }
+                type();
+            });
+        }
+
         // Check Current Inventory button
         async function checkCurrentInventory() {
             // Clear welcome message
@@ -853,12 +885,6 @@
             addMessage('☕ Checking current coffee inventory...', false);
             
             try {
-                const response = await fetch('/api/inventory/summary');
-                const data = await response.json();
-                
-                // Format the summary nicely for display
-                let html = '<strong>☕ Current Coffee Inventory</strong><br><br>';
-                
                 // Fetch full inventory data
                 const invResponse = await fetch('/api/inventory');
                 const inv = await invResponse.json();
@@ -866,12 +892,18 @@
                 roastedCoffeeInventory = inv.roasted;
                 enRouteCoffeeInventory = inv.enRoute;
                 
-                html += '<strong style="color:#90EE90;">🌿 Green Coffee (Unroasted):</strong><br>';
+                // Build the summary text
+                let summary = '☕ Current Coffee Inventory\n\n';
+                
+                summary += '🌿 GREEN COFFEE (Unroasted)\n';
+                summary += '─'.repeat(30) + '\n';
                 inv.green.forEach(coffee => {
-                    html += `• ${coffee.name}: <strong>${coffee.weight}lb</strong> (Profile: ${coffee.roastProfile}, Drop: ${coffee.dropTemp}°F)<br>`;
+                    summary += `${coffee.name}\n`;
+                    summary += `   ${coffee.weight} lb  •  Profile: ${coffee.roastProfile}  •  Drop: ${coffee.dropTemp}°F\n`;
                 });
                 
-                html += '<br><strong style="color:#90EE90;">🔥 Roasted Coffee:</strong><br>';
+                summary += '\n🔥 ROASTED COFFEE\n';
+                summary += '─'.repeat(30) + '\n';
                 inv.roasted.forEach(coffee => {
                     let recipeStr = '';
                     if (coffee.recipe) {
@@ -879,24 +911,31 @@
                     } else {
                         recipeStr = 'N/A';
                     }
-                    const typeBadge = `<span style="background:${coffee.type === 'Blend' ? '#4a6741' : coffee.type === 'Single Origin' ? '#41576a' : '#6a5741'}; padding:2px 6px; border-radius:4px; font-size:11px;">${coffee.type}</span>`;
-                    html += `• ${coffee.name}: <strong>${coffee.weight}lb</strong> ${typeBadge}<br>&nbsp;&nbsp;Recipe: ${recipeStr}<br>`;
+                    summary += `${coffee.name} [${coffee.type}]\n`;
+                    summary += `   ${coffee.weight} lb  •  Recipe: ${recipeStr}\n`;
                 });
                 
+                summary += '\n🚚 EN ROUTE\n';
+                summary += '─'.repeat(30) + '\n';
                 if (inv.enRoute && inv.enRoute.length > 0) {
-                    html += '<br><strong style="color:#90EE90;">🚚 En Route (Ordered):</strong><br>';
                     inv.enRoute.forEach(coffee => {
                         const tracking = coffee.trackingNumber || 'No tracking yet';
-                        html += `• ${coffee.name}: <strong>${coffee.weight}lb</strong> [${coffee.type}] - Tracking: ${tracking}<br>`;
+                        summary += `${coffee.name} [${coffee.type}]\n`;
+                        summary += `   ${coffee.weight} lb  •  Tracking: ${tracking}\n`;
                     });
                 } else {
-                    html += '<br><strong style="color:#90EE90;">🚚 En Route:</strong> None<br>';
+                    summary += 'None\n';
                 }
                 
-                // Update the last message
+                // Get the last message and type into it
                 const messages = chatContainer.querySelectorAll('.message');
                 const lastMsg = messages[messages.length - 1];
-                if (lastMsg) lastMsg.innerHTML = html;
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.style.whiteSpace = 'pre-wrap';
+                    content.style.fontFamily = 'monospace';
+                    await typeText(content, summary, 8);
+                }
                 
             } catch (error) {
                 console.error('Error:', error);

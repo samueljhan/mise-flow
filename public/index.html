@@ -619,6 +619,10 @@
                         <strong>🧾 Generate Invoice</strong>
                         <span>Create a new invoice for a wholesale customer</span>
                     </div>
+                    <div class="example-prompt" onclick="manageRetailPlaceholder()" style="opacity:0.7;">
+                        <strong>🛒 Manage Retail</strong>
+                        <span>Update retail coffee bag sales</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2491,28 +2495,26 @@
                 
                 const data = await response.json();
                 
-                // Add the conversational message with card-style options like welcome screen
-                let html = `<div style="margin-bottom: 16px;">${data.message || 'What else can I help with?'}</div>`;
-                html += '<div class="example-prompts" style="display: grid; gap: 10px;">';
-                html += `<div class="example-prompt" onclick="checkCurrentInventory()" style="background:#1a1a1a; padding:12px 16px; border-radius:8px; cursor:pointer; border:1px solid #333;">
-                    <strong style="color:#90EE90;">☕ Check Current Inventory</strong><br>
-                    <span style="color:#888; font-size:13px;">View all green, roasted, and en route coffee</span>
+                // Add the conversational message with compact card options
+                let html = `<div style="margin-bottom: 12px;">${data.message || 'What else can I help with?'}</div>`;
+                html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">';
+                html += `<div onclick="checkCurrentInventory()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
+                    <div style="color:#90EE90; font-size:13px;">☕ Check Inventory</div>
                 </div>`;
-                html += `<div class="example-prompt" onclick="startRoastOrder()" style="background:#1a1a1a; padding:12px 16px; border-radius:8px; cursor:pointer; border:1px solid #333;">
-                    <strong style="color:#90EE90;">🔥 Order Roast</strong><br>
-                    <span style="color:#888; font-size:13px;">Draft a new roasted coffee order</span>
+                html += `<div onclick="startRoastOrder()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
+                    <div style="color:#90EE90; font-size:13px;">🔥 Order Roast</div>
                 </div>`;
-                html += `<div class="example-prompt" onclick="startInvoice()" style="background:#1a1a1a; padding:12px 16px; border-radius:8px; cursor:pointer; border:1px solid #333;">
-                    <strong style="color:#90EE90;">🧾 Generate Invoice</strong><br>
-                    <span style="color:#888; font-size:13px;">Create an invoice for a wholesale customer</span>
+                html += `<div onclick="startInvoice()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
+                    <div style="color:#90EE90; font-size:13px;">🧾 Generate Invoice</div>
                 </div>`;
-                html += `<div class="example-prompt" onclick="viewEnRoute()" style="background:#1a1a1a; padding:12px 16px; border-radius:8px; cursor:pointer; border:1px solid #333;">
-                    <strong style="color:#90EE90;">🚚 En Route Coffee</strong><br>
-                    <span style="color:#888; font-size:13px;">View and manage shipped orders</span>
+                html += `<div onclick="viewEnRoute()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
+                    <div style="color:#90EE90; font-size:13px;">🚚 En Route</div>
                 </div>`;
-                html += `<div class="example-prompt" onclick="openManageInventory()" style="background:#1a1a1a; padding:12px 16px; border-radius:8px; cursor:pointer; border:1px solid #333;">
-                    <strong style="color:#90EE90;">📦 Manage Inventory</strong><br>
-                    <span style="color:#888; font-size:13px;">Edit green and roasted coffee inventory</span>
+                html += `<div onclick="openManageInventory()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
+                    <div style="color:#90EE90; font-size:13px;">📦 Manage Inventory</div>
+                </div>`;
+                html += `<div onclick="manageRetailPlaceholder()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333; opacity:0.7;">
+                    <div style="color:#90EE90; font-size:13px;">🛒 Manage Retail</div>
                 </div>`;
                 html += '</div>';
                 
@@ -2525,31 +2527,33 @@
         }
 
         function addFollowUpMessage() {
-            let html = '<div style="margin-bottom: 16px;">What else can I help with?</div>';
-            html += '<div class="example-prompts" style="display: grid; gap: 10px;">';
-            html += `<div class="example-prompt" onclick="checkCurrentInventory()" style="background:#1a1a1a; padding:12px 16px; border-radius:8px; cursor:pointer; border:1px solid #333;">
-                <strong style="color:#90EE90;">☕ Check Current Inventory</strong><br>
-                <span style="color:#888; font-size:13px;">View all green, roasted, and en route coffee</span>
+            let html = '<div style="margin-bottom: 12px;">What else can I help with?</div>';
+            html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">';
+            html += `<div onclick="checkCurrentInventory()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
+                <div style="color:#90EE90; font-size:13px;">☕ Check Inventory</div>
             </div>`;
-            html += `<div class="example-prompt" onclick="startRoastOrder()" style="background:#1a1a1a; padding:12px 16px; border-radius:8px; cursor:pointer; border:1px solid #333;">
-                <strong style="color:#90EE90;">🔥 Order Roast</strong><br>
-                <span style="color:#888; font-size:13px;">Draft a new roasted coffee order</span>
+            html += `<div onclick="startRoastOrder()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
+                <div style="color:#90EE90; font-size:13px;">🔥 Order Roast</div>
             </div>`;
-            html += `<div class="example-prompt" onclick="startInvoice()" style="background:#1a1a1a; padding:12px 16px; border-radius:8px; cursor:pointer; border:1px solid #333;">
-                <strong style="color:#90EE90;">🧾 Generate Invoice</strong><br>
-                <span style="color:#888; font-size:13px;">Create an invoice for a wholesale customer</span>
+            html += `<div onclick="startInvoice()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
+                <div style="color:#90EE90; font-size:13px;">🧾 Generate Invoice</div>
             </div>`;
-            html += `<div class="example-prompt" onclick="viewEnRoute()" style="background:#1a1a1a; padding:12px 16px; border-radius:8px; cursor:pointer; border:1px solid #333;">
-                <strong style="color:#90EE90;">🚚 En Route Coffee</strong><br>
-                <span style="color:#888; font-size:13px;">View and manage shipped orders</span>
+            html += `<div onclick="viewEnRoute()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
+                <div style="color:#90EE90; font-size:13px;">🚚 En Route</div>
             </div>`;
-            html += `<div class="example-prompt" onclick="openManageInventory()" style="background:#1a1a1a; padding:12px 16px; border-radius:8px; cursor:pointer; border:1px solid #333;">
-                <strong style="color:#90EE90;">📦 Manage Inventory</strong><br>
-                <span style="color:#888; font-size:13px;">Edit green and roasted coffee inventory</span>
+            html += `<div onclick="openManageInventory()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333;">
+                <div style="color:#90EE90; font-size:13px;">📦 Manage Inventory</div>
+            </div>`;
+            html += `<div onclick="manageRetailPlaceholder()" style="background:#1a1a1a; padding:10px 12px; border-radius:6px; cursor:pointer; border:1px solid #333; opacity:0.7;">
+                <div style="color:#90EE90; font-size:13px;">🛒 Manage Retail</div>
             </div>`;
             html += '</div>';
             
             addMessage(html, false);
+        }
+        
+        function manageRetailPlaceholder() {
+            addMessage('Manage Retail feature coming soon! This will allow you to update retail coffee bag sales.', false);
         }
 
         function useQuickAction(prompt) {

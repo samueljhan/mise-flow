@@ -892,39 +892,26 @@
                 roastedCoffeeInventory = inv.roasted;
                 enRouteCoffeeInventory = inv.enRoute;
                 
-                // Build the summary text
+                // Build the summary text - clean and simple
                 let summary = '☕ Current Coffee Inventory\n\n';
                 
-                summary += '🌿 GREEN COFFEE (Unroasted)\n';
-                summary += '─'.repeat(30) + '\n';
+                summary += '🌿 Green Coffee\n';
                 inv.green.forEach(coffee => {
-                    summary += `${coffee.name}\n`;
-                    summary += `   ${coffee.weight} lb  •  Profile: ${coffee.roastProfile}  •  Drop: ${coffee.dropTemp}°F\n`;
+                    summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
                 });
                 
-                summary += '\n🔥 ROASTED COFFEE\n';
-                summary += '─'.repeat(30) + '\n';
+                summary += '\n🔥 Roasted Coffee\n';
                 inv.roasted.forEach(coffee => {
-                    let recipeStr = '';
-                    if (coffee.recipe) {
-                        recipeStr = coffee.recipe.map(r => `${r.percentage}% ${r.name}`).join(' + ');
-                    } else {
-                        recipeStr = 'N/A';
-                    }
-                    summary += `${coffee.name} [${coffee.type}]\n`;
-                    summary += `   ${coffee.weight} lb  •  Recipe: ${recipeStr}\n`;
+                    summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
                 });
                 
-                summary += '\n🚚 EN ROUTE\n';
-                summary += '─'.repeat(30) + '\n';
+                summary += '\n🚚 En Route\n';
                 if (inv.enRoute && inv.enRoute.length > 0) {
                     inv.enRoute.forEach(coffee => {
-                        const tracking = coffee.trackingNumber || 'No tracking yet';
-                        summary += `${coffee.name} [${coffee.type}]\n`;
-                        summary += `   ${coffee.weight} lb  •  Tracking: ${tracking}\n`;
+                        summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
                     });
                 } else {
-                    summary += 'None\n';
+                    summary += '   None\n';
                 }
                 
                 // Get the last message and type into it

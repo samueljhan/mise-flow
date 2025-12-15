@@ -241,8 +241,8 @@ let roastedCoffeeInventory = [
     weight: 150,
     type: 'Blend',
     recipe: [
-      { greenCoffeeId: 'brazil-mogiano', name: 'Brazil Mogiano', percentage: 33 },
-      { greenCoffeeId: 'ethiopia-yirgacheffe', name: 'Ethiopia Yirgacheffe', percentage: 67 }
+      { greenCoffeeId: 'brazil-mogiano', name: 'Brazil Mogiano', percentage: 66.6667 },
+      { greenCoffeeId: 'ethiopia-yirgacheffe', name: 'Ethiopia Yirgacheffe', percentage: 33.3333 }
     ]
   },
   {
@@ -1663,30 +1663,132 @@ app.post('/api/inventory/enroute/deliver', (req, res) => {
   res.json({ success: true, message: `${item.name} (${item.weight}lb) added to roasted inventory` });
 });
 
+// ============ Conversational Chat API ============
+
+// Generate conversational response using Gemini
+app.post('/api/chat/respond', async (req, res) => {
+  const { context, completedAction, inventory } = req.body;
+  
+  const prompt = `You are Mise, a helpful assistant for Archives of Us Coffee inventory management. 
+You have a warm, professional tone - friendly but efficient. Keep responses concise (1-2 sentences max).
+
+${inventory ? `Current inventory summary:
+- Green Coffee: ${inventory.green?.map(c => c.name).join(', ') || 'None'}
+- Roasted Coffee: ${inventory.roasted?.map(c => c.name).join(', ') || 'None'}
+- En Route: ${inventory.enRoute?.length || 0} items` : ''}
+
+${context ? `Context: ${context}` : ''}
+${completedAction ? `Just completed: ${completedAction}` : ''}
+
+Generate a brief, natural follow-up message. If a task was just completed, acknowledge it and ask what else you can help with.
+Don't use emojis. Be conversational but professional.
+
+Respond with just the message text, no JSON or formatting.`;
+
+  try {
+    const response = await callGeminiWithRetry(prompt);
+    res.json({ message: response.trim() });
+  } catch (error) {
+    console.error('Chat respond error:', error);
+    res.json({ message: 'What else can I help you with?' });
+  }
+});
+
+// Process general chat input
+app.post('/api/chat/process', async (req, res) => {
+  const { userInput, currentState } = req.body;
+  
+  const roastedCoffeeNames = roastedCoffeeInventory.map(c => c.name);
+  const greenCoffeeNames = greenCoffeeInventory.map(c => c.name);
+  
+  const prompt = `You are Mise, parsing user input for Archives of Us Coffee inventory management.
+
+Available actions:
+- "inventory" or "check inventory" → Show current inventory
+- "order roast" or mentions roasted coffee names → Start roast order
+- "invoice" or "bill" → Generate invoice
+- "en route" or "shipped" or "tracking" → View en route coffee
+- "manage" or "edit inventory" → Open inventory manager
+
+Roasted coffees: ${JSON.stringify(roastedCoffeeNames)}
+Green coffees: ${JSON.stringify(greenCoffeeNames)}
+
+User said: "${userInput}"
+Current state: ${currentState || 'idle'}
+
+Determine what the user wants. Respond with JSON:
+{
+  "action": "inventory|roast_order|invoice|en_route|manage|chat|unclear",
+  "parameters": {},
+  "chatResponse": "brief response if action is 'chat' or 'unclear'"
+}`;
+
+  try {
+    const response = await callGeminiWithRetry(prompt);
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      res.json(JSON.parse(jsonMatch[0]));
+    } else {
+      res.json({ action: 'chat', chatResponse: "I'm not sure what you'd like to do. You can check inventory, order roasts, generate invoices, or view en route coffee." });
+    }
+  } catch (error) {
+    console.error('Chat process error:', error);
+    res.json({ action: 'chat', chatResponse: "I'm having trouble understanding. Could you try rephrasing?" });
+  }
+});
+
 // ============ Roast Order API Endpoints ============
 
 // Parse roast order request
 app.post('/api/roast-order/parse', async (req, res) => {
-  const { userInput } = req.body;
+  const { userInput, previousQuestion, previousSuggestion } = req.body;
   
   const roastedCoffeeNames = roastedCoffeeInventory.map(c => c.name);
+  const roastedCoffeeTypes = roastedCoffeeInventory.map(c => ({ name: c.name, type: c.type }));
+  
+  let contextInfo = '';
+  if (previousQuestion && previousSuggestion) {
+    contextInfo = `
+PREVIOUS CONTEXT:
+- Mise asked: "${previousQuestion}"
+- Suggested coffee: "${previousSuggestion}"
+- User now responded: "${userInput}"
+
+If the user says "yes", "yeah", "correct", "that's right", "yep", etc., they are confirming the suggested coffee "${previousSuggestion}".
+`;
+  }
   
   const prompt = `You are parsing a coffee roast order request for Archives of Us Coffee.
 
-Available roasted coffees: ${JSON.stringify(roastedCoffeeNames)}
+Available roasted coffees with types: ${JSON.stringify(roastedCoffeeTypes)}
 
 User request: "${userInput}"
+${contextInfo}
+NICKNAME/SHORTHAND RECOGNITION - BE SMART AND ASSUME INTENT:
+- "Blend" or "Archives" → Archives Blend (ONLY blend in inventory, no need to clarify)
+- "Ethiopia" alone → If only ONE Ethiopia coffee exists in roasted inventory, use it. Otherwise ask.
+- "Colombia" alone → If only ONE Colombia coffee exists in roasted inventory, use it. Otherwise ask.
+- "Gera" → Ethiopia Gera
+- "Yirgacheffe" or "Yirg" → Ethiopia Yirgacheffe  
+- "Decaf" → Colombia Decaf
+- "Antioquia" → Colombia Antioquia
+- "Brazil" or "Mogiano" → Note: Brazil Mogiano is green coffee only, not a roasted product
 
-IMPORTANT DISAMBIGUATION RULES:
-- If user says "Ethiopia" without specifying, ask if they mean "Ethiopia Gera" or check if "Ethiopia Yirgacheffe" is in the roasted list
-- If user says "Colombia" without specifying, ask if they mean "Colombia Decaf" (private label) or "Colombia Antioquia" (single origin)
-- Be careful to match exact names from the available list
+SMART MATCHING RULES:
+1. If user mentions a term that matches ONLY ONE coffee, use it without asking for clarification.
+2. Only ask for clarification when there are genuinely multiple options that could match.
+3. Be generous in interpretation - if the user says something close to a coffee name, match it.
+4. For partial matches or typos, match to the closest coffee name.
+
+CONFIRMATION HANDLING:
+- If user says "yes", "yeah", "yep", "correct", "that one", "sure", "ok", etc. AND there was a previous suggestion, confirm that suggestion.
 
 Respond with JSON only:
 {
   "understood": true/false,
   "needsClarification": true/false,
   "clarificationQuestion": "string if needs clarification",
+  "suggestedCoffee": "the coffee name being suggested if asking for clarification",
   "coffees": [
     {
       "name": "exact name from available list",
@@ -1714,75 +1816,100 @@ Respond with JSON only:
 app.post('/api/roast-order/generate-email', async (req, res) => {
   const { orderItems } = req.body;
   
-  // orderItems: array of { name, type, recipe, batches, weight, batchWeight }
-  
   const today = new Date().toLocaleDateString('en-US', { 
     month: 'long', day: 'numeric', year: 'numeric' 
   });
   
   let emailBody = `Hi Shared Team,\n\nHope all is well! Would like to place a toll roast order for the following:\n\n`;
   
-  let totalRoastedWeight = 0;
-  let blendWeights = [];
-  let privateLabels = [];
+  let packagingItems = [];
+  
+  // Nickname mapping for coffees
+  const getNickname = (name) => {
+    const nicknames = {
+      'Brazil Mogiano': 'Brazil',
+      'Colombia Decaf': 'Decaf',
+      'Colombia Antioquia': 'Colombia',
+      'Ethiopia Yirgacheffe': 'Yirgacheffe',
+      'Ethiopia Gera': 'Ethiopia'
+    };
+    return nicknames[name] || name;
+  };
+  
+  // Helper to calculate batches (max 65lb, min 25lb per batch)
+  // Maximize 65lb batches to save costs
+  const calcBatches = (totalWeight) => {
+    if (totalWeight <= 65) {
+      return { batches: 1, batchWeight: Math.round(totalWeight) };
+    }
+    const batches = Math.ceil(totalWeight / 65);
+    const batchWeight = Math.round(totalWeight / batches);
+    return { batches, batchWeight };
+  };
   
   orderItems.forEach(item => {
     const roastedCoffee = roastedCoffeeInventory.find(c => c.name === item.name);
     
     if (roastedCoffee && roastedCoffee.type === 'Blend' && roastedCoffee.recipe) {
-      // Blend - show component breakdown
-      let blendDesc = '';
-      roastedCoffee.recipe.forEach((comp, idx) => {
+      // Blend - calculate green weights and batches
+      const totalGreenWeight = Math.round(item.weight / 0.85);
+      const roastedOutput = item.weight;
+      
+      let blendParts = [];
+      roastedCoffee.recipe.forEach((comp) => {
         const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
-        const compWeight = Math.round(item.weight * comp.percentage / 100);
-        const batches = Math.ceil(compWeight / 30.5); // ~30.5lb per batch
+        const compGreenWeight = Math.round(totalGreenWeight * comp.percentage / 100);
+        const { batches, batchWeight } = calcBatches(compGreenWeight);
+        
         if (greenCoffee) {
-          if (idx > 0) blendDesc += ' blended with ';
-          blendDesc += `${batches} batch${batches > 1 ? 'es' : ''} of ${comp.name} (${compWeight}lb - profile ${greenCoffee.roastProfile} - drop temp ${greenCoffee.dropTemp})`;
+          const nickname = getNickname(comp.name);
+          blendParts.push(`${batches} batch${batches > 1 ? 'es' : ''} of ${nickname} (${batchWeight}lb - profile ${greenCoffee.roastProfile} - drop temp ${greenCoffee.dropTemp})`);
         }
       });
-      emailBody += `• ${blendDesc}\n`;
-      blendWeights.push({ name: item.name, weight: item.weight });
-      totalRoastedWeight += item.weight;
+      
+      emailBody += `- ${blendParts.join(' blended with ')}\n`;
+      
+      // Get component nicknames for packaging
+      const compNames = roastedCoffee.recipe.map(r => getNickname(r.name)).join('/');
+      packagingItems.push(`~${Math.round(roastedOutput)}lb roasted ${compNames}`);
       
     } else if (roastedCoffee && roastedCoffee.type === 'Single Origin' && roastedCoffee.recipe) {
       // Single Origin
       const comp = roastedCoffee.recipe[0];
       const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
+      const greenWeight = Math.round(item.weight / 0.85);
+      const { batches, batchWeight } = calcBatches(greenWeight);
+      const roastedOutput = item.weight;
+      const nickname = getNickname(item.name);
+      
       if (greenCoffee) {
-        emailBody += `• ${item.batches} batch${item.batches > 1 ? 'es' : ''} of ${item.name} (${item.weight}lb - profile ${greenCoffee.roastProfile} - drop temp ${greenCoffee.dropTemp})\n`;
+        emailBody += `- ${batches} batch${batches > 1 ? 'es' : ''} of ${nickname} (${batchWeight}lb - profile ${greenCoffee.roastProfile} - drop temp ${greenCoffee.dropTemp})\n`;
       }
-      totalRoastedWeight += item.weight;
+      
+      packagingItems.push(`~${Math.round(roastedOutput)}lb ${nickname}`);
       
     } else if (roastedCoffee && roastedCoffee.type === 'Private Label') {
-      // Private Label
-      emailBody += `• ${item.weight}lb private label ${item.name}\n`;
-      privateLabels.push({ name: item.name, weight: item.weight });
+      // Private Label - output = input (comes roasted)
+      const nickname = getNickname(item.name);
+      emailBody += `- ${Math.round(item.weight)}lb private label ${nickname}\n`;
+      packagingItems.push(`${Math.round(item.weight)}lb ${nickname}`);
     }
   });
   
-  // Packaging instructions
-  let packagingNote = '\nCan we have the ';
-  const packagingParts = [];
-  if (blendWeights.length > 0) {
-    const blendTotal = blendWeights.reduce((sum, b) => sum + b.weight, 0);
-    const blendNames = blendWeights.map(b => b.name).join('/');
-    packagingParts.push(`~${blendTotal}lb roasted ${blendNames}`);
-  }
-  if (privateLabels.length > 0) {
-    privateLabels.forEach(pl => {
-      packagingParts.push(`~${pl.weight}lb ${pl.name}`);
-    });
-  }
-  if (packagingParts.length > 0) {
-    packagingNote += packagingParts.join(' and ') + ' packed in our stamped/labeled bags and shipped using your labels to:\n';
+  // Packaging instructions - format list with 'and' before last item
+  emailBody += '\nCan we have the ';
+  if (packagingItems.length === 1) {
+    emailBody += packagingItems[0];
+  } else if (packagingItems.length === 2) {
+    emailBody += packagingItems.join(' and ');
   } else {
-    packagingNote += 'order packed in our stamped/labeled bags and shipped using your labels to:\n';
+    const lastItem = packagingItems.pop();
+    emailBody += packagingItems.join(', ') + ', and ' + lastItem;
   }
+  emailBody += ' packed in our stamped/labeled bags and shipped using your labels to:\n';
   
-  emailBody += packagingNote;
   emailBody += '\nRay Park\n869 Estepona Way\nBuena Park, CA 90621\n';
-  emailBody += '\nPlease send us tracking info for this order and reach out with any questions. Thanks so much!\n\nBest,\nRay';
+  emailBody += '\nThanks so much!\n\nBest,\nRay';
   
   res.json({
     to: 'samueljhan@gmail.com',

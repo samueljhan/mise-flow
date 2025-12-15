@@ -821,7 +821,7 @@
             if (welcomeMsg) welcomeMsg.remove();
 
             // Add assistant message asking for details
-            addMessage('🧾 <strong>Generate Invoice</strong><br><br>Customer and order details?<br><br><em style="color:#707070;">Example: "CED, 100 lbs Archives Blend"</em>', false);
+            addMessage('<strong>Generate Invoice</strong><br><br>Customer and order details?<br><br><em style="color:#707070;">Example: "CED, 100 lbs Archives Blend"</em>', false);
             
             // Set flag for next message
             pendingInvoice = true;
@@ -882,7 +882,7 @@
             const welcomeMsg = chatContainer.querySelector('.welcome-message');
             if (welcomeMsg) welcomeMsg.remove();
 
-            addMessage('☕ Checking current coffee inventory...', false);
+            addMessage('Checking current coffee inventory...', false);
             
             try {
                 // Fetch full inventory data
@@ -893,19 +893,19 @@
                 enRouteCoffeeInventory = inv.enRoute;
                 
                 // Build the summary text - clean and simple
-                let summary = '☕ Current Coffee Inventory\n\n';
+                let summary = 'Current Coffee Inventory\n\n';
                 
-                summary += '🌿 Green Coffee\n';
+                summary += 'GREEN COFFEE\n';
                 inv.green.forEach(coffee => {
                     summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
                 });
                 
-                summary += '\n🔥 Roasted Coffee\n';
+                summary += '\nROASTED COFFEE\n';
                 inv.roasted.forEach(coffee => {
                     summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
                 });
                 
-                summary += '\n🚚 En Route\n';
+                summary += '\nEN ROUTE\n';
                 if (inv.enRoute && inv.enRoute.length > 0) {
                     inv.enRoute.forEach(coffee => {
                         summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
@@ -924,9 +924,12 @@
                     await typeText(content, summary, 8);
                 }
                 
+                // Add conversational follow-up after typing completes
+                addConversationalFollowUp('inventory_checked');
+                
             } catch (error) {
                 console.error('Error:', error);
-                addMessage('❌ Error loading inventory: ' + error.message, false);
+                addMessage('Error loading inventory: ' + error.message, false);
             }
         }
 
@@ -936,7 +939,10 @@
             const welcomeMsg = chatContainer.querySelector('.welcome-message');
             if (welcomeMsg) welcomeMsg.remove();
 
-            addMessage('🔥 <strong>Order Roast</strong><br><br>Which coffee roasts do you want to order?<br><br><em style="color:#707070;">Example: "Archives Blend, Ethiopia Gera, Colombia Decaf"</em>', false);
+            // Clear any previous clarification context
+            window.pendingClarification = null;
+
+            addMessage('<strong>Order Roast</strong><br><br>Which coffee roasts do you want to order?<br><br><em style="color:#707070;">Example: "Archives Blend" or "Ethiopia Gera"</em>', false);
             
             waitingForRoastOrder = true;
             userInput.placeholder = 'Enter coffee roasts to order...';
@@ -948,20 +954,39 @@
             try {
                 addMessage('Analyzing your order...', false);
                 
+                // Build request with context if we had a previous clarification
+                const requestBody = { userInput: userText };
+                if (window.pendingClarification) {
+                    requestBody.previousQuestion = window.pendingClarification.question;
+                    requestBody.previousSuggestion = window.pendingClarification.suggestion;
+                }
+                
                 const response = await fetch('/api/roast-order/parse', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ userInput: userText })
+                    body: JSON.stringify(requestBody)
                 });
                 
                 const data = await response.json();
                 
+                // Clear previous clarification context
+                window.pendingClarification = null;
+                
                 if (data.needsClarification) {
+                    // Store clarification context for next response
+                    window.pendingClarification = {
+                        question: data.clarificationQuestion,
+                        suggestion: data.suggestedCoffee
+                    };
+                    
                     // Update last message with clarification question
                     const messages = chatContainer.querySelectorAll('.message');
                     const lastMsg = messages[messages.length - 1];
-                    if (lastMsg) lastMsg.innerHTML = `🤔 ${data.clarificationQuestion}`;
-                    waitingForRoastOrder = true; // Keep waiting for clarification
+                    if (lastMsg) {
+                        const content = lastMsg.querySelector('.message-content') || lastMsg;
+                        content.innerHTML = data.clarificationQuestion;
+                    }
+                    waitingForRoastOrder = true;
                     return;
                 }
                 
@@ -970,44 +995,286 @@
                     if (matchedCoffees.length === 0) {
                         const messages = chatContainer.querySelectorAll('.message');
                         const lastMsg = messages[messages.length - 1];
-                        if (lastMsg) lastMsg.innerHTML = '❌ Could not find any matching coffees. Please specify exact names from our roasted coffee list.';
+                        if (lastMsg) {
+                            const content = lastMsg.querySelector('.message-content') || lastMsg;
+                            content.innerHTML = 'Could not find any matching coffees. Please specify exact names from our roasted coffee list.';
+                        }
                         waitingForRoastOrder = true;
                         return;
                     }
                     
-                    // Set up pending order and show configuration modal
+                    // Build default order based on coffee types
                     pendingRoastOrder = matchedCoffees.map(c => {
                         const roasted = roastedCoffeeInventory.find(r => r.name === c.name);
-                        return {
-                            name: c.name,
-                            type: roasted ? roasted.type : 'Unknown',
-                            recipe: roasted ? roasted.recipe : null,
-                            batches: 1,
-                            weight: roasted && roasted.type === 'Single Origin' ? 30 : (roasted && roasted.type === 'Private Label' ? 20 : 60),
-                            batchWeight: 30
-                        };
+                        if (roasted && roasted.type === 'Blend' && roasted.recipe) {
+                            return {
+                                name: c.name,
+                                type: roasted.type,
+                                recipe: roasted.recipe,
+                                weight: 166
+                            };
+                        } else if (roasted && roasted.type === 'Single Origin') {
+                            return {
+                                name: c.name,
+                                type: roasted.type,
+                                recipe: roasted.recipe,
+                                weight: 55
+                            };
+                        } else {
+                            return {
+                                name: c.name,
+                                type: roasted ? roasted.type : 'Private Label',
+                                recipe: null,
+                                weight: 20
+                            };
+                        }
                     });
                     
-                    // Update last message
-                    const messages = chatContainer.querySelectorAll('.message');
-                    const lastMsg = messages[messages.length - 1];
-                    if (lastMsg) lastMsg.innerHTML = `✓ Found ${matchedCoffees.length} coffee(s). Opening configuration...`;
-                    
-                    openRoastOrderModal();
+                    // Show default order in chat
+                    showDefaultOrderInChat();
                 } else {
                     const messages = chatContainer.querySelectorAll('.message');
                     const lastMsg = messages[messages.length - 1];
-                    if (lastMsg) lastMsg.innerHTML = '❌ Could not understand the order. Please try again with specific coffee names.';
+                    if (lastMsg) {
+                        const content = lastMsg.querySelector('.message-content') || lastMsg;
+                        content.innerHTML = 'Could not understand the order. Please try again with specific coffee names.';
+                    }
                     waitingForRoastOrder = true;
                 }
             } catch (error) {
                 console.error('Error parsing order:', error);
-                addMessage('❌ Error: ' + error.message, false);
+                addMessage('Error: ' + error.message, false);
                 waitingForRoastOrder = true;
             }
         }
 
-        // Open Roast Order Configuration Modal
+        // Show default order in chat
+        function showDefaultOrderInChat() {
+            // Nickname mapping for coffees
+            const getNickname = (name) => {
+                const nicknames = {
+                    'Brazil Mogiano': 'Brazil',
+                    'Colombia Decaf': 'Decaf',
+                    'Colombia Antioquia': 'Colombia',
+                    'Ethiopia Yirgacheffe': 'Yirgacheffe',
+                    'Ethiopia Gera': 'Ethiopia'
+                };
+                return nicknames[name] || name;
+            };
+            
+            // Helper to calculate batches (max 65lb, min 25lb per batch)
+            const calcBatches = (totalWeight) => {
+                if (totalWeight <= 65) {
+                    return { batches: 1, batchWeight: Math.round(totalWeight) };
+                }
+                const batches = Math.ceil(totalWeight / 65);
+                const batchWeight = Math.round(totalWeight / batches);
+                return { batches, batchWeight };
+            };
+            
+            let html = '<strong>Default Order:</strong><br><br>';
+            let hasValidationError = false;
+            
+            pendingRoastOrder.forEach((item, index) => {
+                if (item.type === 'Blend' && item.recipe) {
+                    const totalGreenWeight = Math.round(item.weight / 0.85);
+                    
+                    let blendParts = [];
+                    item.recipe.forEach((comp) => {
+                        const green = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
+                        const compGreenWeight = Math.round(totalGreenWeight * comp.percentage / 100);
+                        const { batches, batchWeight } = calcBatches(compGreenWeight);
+                        const nickname = getNickname(comp.name);
+                        
+                        // Validate batch weight
+                        if (batchWeight < 25 || batchWeight > 65) {
+                            hasValidationError = true;
+                        }
+                        
+                        blendParts.push(`${batches} batch${batches > 1 ? 'es' : ''} of ${nickname} (${batchWeight}lb - profile ${green ? green.roastProfile : '?'} - drop temp ${green ? green.dropTemp : '?'})`);
+                    });
+                    
+                    html += `- ${blendParts.join(' blended with ')}<br>`;
+                    html += `<em style="color:#888; margin-left:12px;">~${Math.round(item.weight)}lb roasted total</em><br><br>`;
+                    
+                } else if (item.type === 'Single Origin' && item.recipe) {
+                    const green = greenCoffeeInventory.find(g => g.id === item.recipe[0].greenCoffeeId);
+                    const greenWeight = Math.round(item.weight / 0.85);
+                    const { batches, batchWeight } = calcBatches(greenWeight);
+                    const nickname = getNickname(item.name);
+                    
+                    // Validate batch weight
+                    if (batchWeight < 25 || batchWeight > 65) {
+                        hasValidationError = true;
+                    }
+                    
+                    html += `- ${batches} batch${batches > 1 ? 'es' : ''} of ${nickname} (${batchWeight}lb - profile ${green ? green.roastProfile : '?'} - drop temp ${green ? green.dropTemp : '?'})<br>`;
+                    html += `<em style="color:#888; margin-left:12px;">~${Math.round(item.weight)}lb roasted</em><br><br>`;
+                } else {
+                    // Private Label - output = input (comes roasted), multiples of 5lb
+                    const nickname = getNickname(item.name);
+                    html += `- ${Math.round(item.weight)}lb private label ${nickname}<br><br>`;
+                }
+            });
+            
+            if (hasValidationError) {
+                html += '<div style="background:#4a3030; padding:10px; border-radius:8px; margin-bottom:12px;">';
+                html += '<strong>Batch size issue:</strong> Each batch must be between 25-65lb. ';
+                html += 'Please adjust your order weight. <em>Tip: Max out at 65lb batches to save costs!</em>';
+                html += '</div>';
+            }
+            
+            html += 'Is this amount ok? <em style="color:#707070;">(yes to confirm, or specify changes)</em>';
+            html += '<div class="response-buttons" style="margin-top: 12px;">';
+            html += '<button class="action-btn" onclick="confirmDefaultOrder()">Yes, generate email</button>';
+            html += '<button class="action-btn" onclick="cancelRoastOrder()">Cancel</button>';
+            html += '</div>';
+            
+            // Update last message
+            const messages = chatContainer.querySelectorAll('.message');
+            const lastMsg = messages[messages.length - 1];
+            if (lastMsg) {
+                const content = lastMsg.querySelector('.message-content') || lastMsg;
+                content.innerHTML = html;
+            }
+            
+            window.waitingForOrderConfirmation = true;
+        }
+
+        // Confirm default order and generate email
+        async function confirmDefaultOrder() {
+            window.waitingForOrderConfirmation = false;
+            addMessage('Yes, generate email', true);
+            addMessage('Generating email draft...', false);
+            
+            try {
+                const response = await fetch('/api/roast-order/generate-email', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ orderItems: pendingRoastOrder })
+                });
+                
+                const data = await response.json();
+                pendingRoastEmail = data;
+                
+                // Show email preview in chat
+                let html = '<strong>Email Draft Preview</strong><br><br>';
+                html += `<strong>To:</strong> ${data.to}<br>`;
+                html += `<strong>Subject:</strong> ${data.subject}<br><br>`;
+                html += `<div style="background:#1a1a1a; padding:12px; border-radius:8px; white-space:pre-wrap; font-size:13px;">${data.body}</div><br>`;
+                html += '<div class="response-buttons" style="margin-top: 12px;">';
+                html += '<button class="action-btn" onclick="confirmRoastOrderFromChat()">Confirm & Create Draft</button>';
+                html += '<button class="action-btn" onclick="editRoastEmail()">Edit Email</button>';
+                html += '<button class="action-btn" onclick="cancelRoastOrder()">Cancel</button>';
+                html += '</div>';
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML = html;
+                }
+                
+            } catch (error) {
+                console.error('Error generating email:', error);
+                addMessage('Error generating email: ' + error.message, false);
+            }
+        }
+
+        // Edit email in modal
+        function editRoastEmail() {
+            if (!pendingRoastEmail) return;
+            document.getElementById('roastEmailTo').value = pendingRoastEmail.to;
+            document.getElementById('roastEmailSubject').value = pendingRoastEmail.subject;
+            document.getElementById('roastEmailBody').value = pendingRoastEmail.body;
+            document.getElementById('roastEmailModal').style.display = 'flex';
+        }
+
+        // Confirm from chat
+        async function confirmRoastOrderFromChat() {
+            if (!pendingRoastEmail) return;
+            
+            const emailData = {
+                to: pendingRoastEmail.to,
+                subject: pendingRoastEmail.subject,
+                body: pendingRoastEmail.body
+            };
+            
+            await finalizeRoastOrder(emailData);
+        }
+
+        // Cancel roast order
+        function cancelRoastOrder() {
+            pendingRoastOrder = [];
+            pendingRoastEmail = null;
+            waitingForRoastOrder = false;
+            window.waitingForOrderConfirmation = false;
+            window.pendingClarification = null;
+            addMessage('Order cancelled.', false);
+            userInput.placeholder = 'Speak or type your request...';
+            addConversationalFollowUp('order_cancelled');
+        }
+
+        // Finalize roast order (shared by chat and modal confirm)
+        async function finalizeRoastOrder(emailData) {
+            addMessage('Confirming order...', false);
+            
+            try {
+                const response = await fetch('/api/roast-order/confirm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        orderItems: pendingRoastOrder,
+                        emailData: emailData
+                    })
+                });
+                
+                const data = await response.json();
+                
+                // Show confirmation message
+                let confirmHtml = '<strong>Roast Order Confirmed</strong><br><br>';
+                
+                if (data.deductions && data.deductions.length > 0) {
+                    confirmHtml += 'Green coffee inventory updated:<br>';
+                    data.deductions.forEach(d => {
+                        confirmHtml += `   ${d.name}: -${d.deducted}lb (${d.remaining}lb remaining)<br>`;
+                    });
+                    confirmHtml += '<br>';
+                }
+                
+                confirmHtml += `Added ${data.enRouteItems.length} item(s) to en route.`;
+                
+                if (data.draftCreated) {
+                    confirmHtml += '<br>Email draft created in Gmail.';
+                }
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML = confirmHtml;
+                }
+                
+                // Reload inventory
+                await loadInventory();
+                
+                // Reset state
+                pendingRoastOrder = [];
+                pendingRoastEmail = null;
+                waitingForRoastOrder = false;
+                window.waitingForOrderConfirmation = false;
+                userInput.placeholder = 'Speak or type your request...';
+                
+                // Add conversational follow-up
+                addConversationalFollowUp('roast_order_confirmed');
+                
+            } catch (error) {
+                console.error('Error confirming order:', error);
+                addMessage('Error confirming order: ' + error.message, false);
+            }
+        }
+
+        // Open Roast Order Configuration Modal (kept for edit functionality)
         function openRoastOrderModal() {
             const configDiv = document.getElementById('roastOrderConfig');
             let html = '';
@@ -1085,7 +1352,7 @@
             userInput.placeholder = 'Speak or type your request...';
         }
 
-        // Generate Roast Order Email
+        // Generate Roast Order Email (from modal)
         async function generateRoastOrderEmail() {
             if (pendingRoastOrder.length === 0) {
                 alert('No items in order');
@@ -1117,10 +1384,9 @@
 
         function closeRoastEmailModal() {
             document.getElementById('roastEmailModal').style.display = 'none';
-            document.getElementById('roastOrderModal').style.display = 'flex';
         }
 
-        // Confirm Roast Order
+        // Confirm Roast Order (from modal)
         async function confirmRoastOrder() {
             const emailData = {
                 to: document.getElementById('roastEmailTo').value,
@@ -1128,53 +1394,8 @@
                 body: document.getElementById('roastEmailBody').value
             };
             
-            try {
-                const response = await fetch('/api/roast-order/confirm', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        orderItems: pendingRoastOrder,
-                        emailData: emailData
-                    })
-                });
-                
-                const data = await response.json();
-                
-                // Close modal
-                document.getElementById('roastEmailModal').style.display = 'none';
-                
-                // Show confirmation message
-                let confirmHtml = '✅ <strong>Roast Order Confirmed!</strong><br><br>';
-                
-                if (data.deductions && data.deductions.length > 0) {
-                    confirmHtml += '<strong>Green Coffee Inventory Updated:</strong><br>';
-                    data.deductions.forEach(d => {
-                        confirmHtml += `• ${d.name}: -${d.deducted}lb (${d.remaining}lb remaining)<br>`;
-                    });
-                    confirmHtml += '<br>';
-                }
-                
-                confirmHtml += `<strong>Added to En Route:</strong> ${data.enRouteItems.length} item(s)<br>`;
-                
-                if (data.draftCreated) {
-                    confirmHtml += '<br>📧 Email draft created in Gmail!';
-                }
-                
-                addMessage(confirmHtml, false);
-                
-                // Reload inventory
-                await loadInventory();
-                
-                // Reset state
-                pendingRoastOrder = [];
-                pendingRoastEmail = null;
-                waitingForRoastOrder = false;
-                userInput.placeholder = 'Speak or type your request...';
-                
-            } catch (error) {
-                console.error('Error confirming order:', error);
-                alert('Error confirming order: ' + error.message);
-            }
+            document.getElementById('roastEmailModal').style.display = 'none';
+            await finalizeRoastOrder(emailData);
         }
 
         // ============ Manage Inventory Modal ============
@@ -1300,7 +1521,7 @@
                 }
                 
                 closeInventoryModal();
-                addMessage('✅ Inventory updated successfully!', false);
+                addMessage('Inventory updated successfully.', false);
             } catch (error) {
                 console.error('Error saving inventory:', error);
                 alert('Error saving inventory: ' + error.message);
@@ -1314,11 +1535,93 @@
         // ============ En Route Modal ============
 
         async function viewEnRoute() {
+            // Clear welcome message
+            const welcomeMsg = chatContainer.querySelector('.welcome-message');
+            if (welcomeMsg) welcomeMsg.remove();
+            
             await loadInventory();
-            renderEnRouteModal();
-            document.getElementById('enRouteModal').style.display = 'flex';
+            
+            if (enRouteCoffeeInventory.length === 0) {
+                addMessage('No coffee currently en route.', false);
+                addConversationalFollowUp('en_route_empty');
+                return;
+            }
+            
+            let html = '<strong>En Route Coffee</strong><br><br>';
+            
+            enRouteCoffeeInventory.forEach((item, index) => {
+                const orderDate = new Date(item.orderDate).toLocaleDateString();
+                const statusColor = item.status === 'shipped' ? '#4a6741' : '#6a5741';
+                
+                html += `<div style="background:#1a1a1a; padding:12px; border-radius:8px; margin-bottom:10px;">`;
+                html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">`;
+                html += `<strong style="color:#90EE90;">${item.name}</strong> - ${item.weight}lb`;
+                html += `<span style="background:${statusColor}; padding:2px 8px; border-radius:4px; font-size:11px;">${item.status}</span>`;
+                html += `</div>`;
+                html += `<div style="font-size:12px; color:#888; margin-bottom:8px;">Ordered: ${orderDate}${item.trackingNumber ? ' | Tracking: ' + item.trackingNumber : ''}</div>`;
+                html += `<div style="display:flex; gap:8px;">`;
+                html += `<button class="action-btn" onclick="editEnRouteItem('${item.id}')" style="font-size:12px; padding:6px 10px;">Edit</button>`;
+                html += `<button class="action-btn" onclick="markDeliveredChat('${item.id}', '${item.name}', ${item.weight})" style="font-size:12px; padding:6px 10px; background:#4a6741;">Mark Delivered</button>`;
+                html += `</div>`;
+                html += `</div>`;
+            });
+            
+            addMessage(html, false);
+        }
+        
+        async function editEnRouteItem(itemId) {
+            const item = enRouteCoffeeInventory.find(i => i.id === itemId);
+            if (!item) return;
+            
+            addMessage(`Editing tracking for ${item.name}. Enter new tracking number:`, false);
+            
+            window.pendingEnRouteEdit = itemId;
+            userInput.placeholder = 'Enter tracking number...';
+            userInput.focus();
+        }
+        
+        async function markDeliveredChat(itemId, itemName, weight) {
+            addMessage(`Mark ${itemName} (${weight}lb) as delivered?`, false);
+            
+            let html = '<div class="response-buttons" style="margin-top: 8px;">';
+            html += `<button class="action-btn" onclick="confirmDelivery('${itemId}')">Yes, add to inventory</button>`;
+            html += `<button class="action-btn" onclick="cancelDelivery()">Cancel</button>`;
+            html += '</div>';
+            
+            const messages = chatContainer.querySelectorAll('.message');
+            const lastMsg = messages[messages.length - 1];
+            if (lastMsg) {
+                const content = lastMsg.querySelector('.message-content') || lastMsg;
+                content.innerHTML += html;
+            }
+        }
+        
+        async function confirmDelivery(itemId) {
+            try {
+                const response = await fetch('/api/inventory/enroute/deliver', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: itemId })
+                });
+                
+                const data = await response.json();
+                await loadInventory();
+                
+                addMessage(data.message, false);
+                addConversationalFollowUp('delivery_confirmed');
+                
+            } catch (error) {
+                console.error('Error:', error);
+                addMessage('Error marking as delivered: ' + error.message, false);
+            }
+        }
+        
+        function cancelDelivery() {
+            addMessage('Cancelled.', false);
+            addConversationalFollowUp('cancelled');
         }
 
+        // Keep modal functions for backward compatibility but they're less used now
         function renderEnRouteModal() {
             const listDiv = document.getElementById('enRouteList');
             
@@ -1342,7 +1645,7 @@
                 html += `<div style="display:flex; gap:10px; align-items:center;">`;
                 html += `<input type="text" placeholder="Tracking number..." value="${item.trackingNumber || ''}" style="flex:1; padding:8px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" id="tracking-${item.id}">`;
                 html += `<button onclick="updateTracking('${item.id}')" style="background:#41576a; border:none; color:white; padding:8px 12px; border-radius:4px; cursor:pointer;">Save Tracking</button>`;
-                html += `<button onclick="markDelivered('${item.id}')" style="background:#4a6741; border:none; color:white; padding:8px 12px; border-radius:4px; cursor:pointer;">✓ Delivered</button>`;
+                html += `<button onclick="markDelivered('${item.id}')" style="background:#4a6741; border:none; color:white; padding:8px 12px; border-radius:4px; cursor:pointer;">Delivered</button>`;
                 html += `</div>`;
                 html += `</div>`;
             });
@@ -1389,7 +1692,7 @@
                 // Show confirmation
                 const welcomeMsg = document.querySelector('.welcome-message');
                 if (!welcomeMsg) {
-                    addMessage(`✅ ${data.message}`, false);
+                    addMessage(`${data.message}`, false);
                 }
                 
             } catch (error) {
@@ -1519,7 +1822,7 @@
                 
                 if (!response.ok) {
                     console.error('API error:', data);
-                    return '<p style="color: #ff6b6b;">⚠️ Error: ' + (data.error || 'Processing failed') + '</p>';
+                    return '<p style="color: #ff6b6b;">Error: ' + (data.error || 'Processing failed') + '</p>';
                 }
                 
                 // Check if this is an invoice action
@@ -1548,11 +1851,11 @@
                         
                         if (!addResponse.ok) {
                             const error = await addResponse.json();
-                            return '<p style="color: #ff6b6b;">⚠️ ' + error.error + '</p>';
+                            return '<p style="color: #ff6b6b;">' + error.error + '</p>';
                         }
                         
                         const addData = await addResponse.json();
-                        let html = '✅ ' + addData.message + '<br><br>';
+                        let html = '' + addData.message + '<br><br>';
                         
                         // Generate the invoice
                         const invoiceDetails = `${pending.customer} ${pending.quantity} ${pending.unit} ${pending.product}`;
@@ -1561,7 +1864,7 @@
                         
                     } catch (error) {
                         console.error('Error:', error);
-                        return '<p style="color: #ff6b6b;">⚠️ Error adding customer.</p>';
+                        return '<p style="color: #ff6b6b;">Error adding customer.</p>';
                     }
                 }
                 
@@ -1572,8 +1875,8 @@
                     window.currentConversationState = 'waiting_for_new_customer_confirmation';
                     let html = '<div style="white-space: pre-wrap;">' + data.response + '</div>';
                     html += '<div class="response-buttons" style="margin-top: 10px;">';
-                    html += '<button class="action-btn" onclick="confirmNewCustomer(true)">✅ Yes, add them</button>';
-                    html += '<button class="action-btn" onclick="confirmNewCustomer(false)">❌ No, cancel</button>';
+                    html += '<button class="action-btn" onclick="confirmNewCustomer(true)">Yes, add them</button>';
+                    html += '<button class="action-btn" onclick="confirmNewCustomer(false)">No, cancel</button>';
                     html += '</div>';
                     return html;
                 }
@@ -1591,7 +1894,7 @@
                     window.currentConversationState = 'none';
                     // Add follow-up after a short delay
                     setTimeout(() => {
-                        addFollowUpMessage();
+                        addConversationalFollowUp('invoice_generated');
                     }, 300);
                 }
                 
@@ -1599,7 +1902,7 @@
                 
             } catch (error) {
                 console.error('Error:', error);
-                return '<p style="color: #ff6b6b;">⚠️ Error processing request.</p>';
+                return '<p style="color: #ff6b6b;">Error processing request.</p>';
             }
         }
         
@@ -1655,12 +1958,12 @@
                 
                 if (!addResponse.ok) {
                     const error = await addResponse.json();
-                    addMessage('<p style="color: #ff6b6b;">⚠️ ' + error.error + '</p>', false);
+                    addMessage('<p style="color: #ff6b6b;">' + error.error + '</p>', false);
                     return;
                 }
                 
                 const addData = await addResponse.json();
-                addMessage('✅ ' + addData.message, false);
+                addMessage('' + addData.message, false);
                 
                 // Now generate the invoice
                 addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
@@ -1674,7 +1977,7 @@
                 
             } catch (error) {
                 console.error('Error:', error);
-                addMessage('<p style="color: #ff6b6b;">⚠️ Error adding customer.</p>', false);
+                addMessage('<p style="color: #ff6b6b;">Error adding customer.</p>', false);
             }
         }
 
@@ -1699,7 +2002,7 @@
 
         function copyResponse(button) {
             navigator.clipboard.writeText(currentResponseText).then(() => {
-                button.textContent = '✅ Copied!';
+                button.textContent = 'Copied!';
                 button.classList.add('success');
                 setTimeout(() => {
                     button.textContent = '📋 Copy';
@@ -1794,7 +2097,7 @@
                 
                 if (response.ok) {
                     const data = await response.json();
-                    addMessage('✅ ' + (data.message || 'Draft created! Check your Gmail drafts folder.'), false);
+                    addMessage('' + (data.message || 'Draft created! Check your Gmail drafts folder.'), false);
                     closeEmailModal();
                     // Clear the attachment data
                     delete modal.dataset.pdfUrl;
@@ -1804,11 +2107,11 @@
                     return true;
                 } else {
                     const data = await response.json();
-                    addMessage('⚠️ Failed: ' + (data.error || 'Unknown error'), false);
+                    addMessage('Failed: ' + (data.error || 'Unknown error'), false);
                     return false;
                 }
             } catch (error) {
-                addMessage('⚠️ Error creating draft', false);
+                addMessage('Error creating draft', false);
                 return false;
             } finally {
                 btn.disabled = false;
@@ -1869,11 +2172,11 @@
                     const data = await response.json();
                     
                     if (data.success) {
-                        addMessage(`✅ Updated email(s) for ${pending.customerName}: ${data.emails.join(', ')}`, false);
+                        addMessage(`Updated email(s) for ${pending.customerName}: ${data.emails.join(', ')}`, false);
                     }
                 } catch (error) {
                     console.error('Error updating emails:', error);
-                    addMessage('⚠️ Error saving emails.', false);
+                    addMessage('Error saving emails.', false);
                 }
             } else {
                 addMessage('No problem, email not saved to directory.', false);
@@ -1883,7 +2186,7 @@
             
             // Add follow-up
             setTimeout(() => {
-                addFollowUpMessage();
+                addConversationalFollowUp('email_updated');
             }, 500);
         }
 
@@ -1911,6 +2214,14 @@
             if (waitingForRoastOrder) {
                 waitingForRoastOrder = false;
                 parseRoastOrder(message);
+                return;
+            }
+            
+            // Check if we're waiting for en route tracking edit
+            if (window.pendingEnRouteEdit) {
+                const itemId = window.pendingEnRouteEdit;
+                window.pendingEnRouteEdit = null;
+                updateTrackingChat(itemId, message);
                 return;
             }
 
@@ -1955,6 +2266,24 @@
                 });
             }
         }
+        
+        async function updateTrackingChat(itemId, trackingNumber) {
+            try {
+                await fetch('/api/inventory/enroute/tracking', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id: itemId, trackingNumber })
+                });
+                
+                await loadInventory();
+                addMessage(`Tracking updated to: ${trackingNumber}`, false);
+                addConversationalFollowUp('tracking_updated');
+                
+            } catch (error) {
+                console.error('Error updating tracking:', error);
+                addMessage('Error updating tracking: ' + error.message, false);
+            }
+        }
 
         async function generateInvoice(details) {
             try {
@@ -1974,7 +2303,7 @@
                 
             } catch (error) {
                 console.error('Error:', error);
-                return '<p style="color: #ff6b6b;">⚠️ Error: ' + error.message + '</p>';
+                return '<p style="color: #ff6b6b;">Error: ' + error.message + '</p>';
             }
         }
 
@@ -2005,7 +2334,7 @@
             html += '</div>';
             
             html += '<div class="response-buttons" id="invoiceButtons-' + data.invoiceNumber + '">';
-            html += '<button class="action-btn" onclick="confirmInvoice(\'' + data.invoiceNumber + '\')" style="background:#28a745;color:white;">✅ Confirm Invoice</button>';
+            html += '<button class="action-btn" onclick="confirmInvoice(\'' + data.invoiceNumber + '\')" style="background:#28a745;color:white;">Confirm Invoice</button>';
             html += '</div>';
             
             return html;
@@ -2013,7 +2342,7 @@
         
         async function confirmInvoice(invoiceNumber) {
             if (!window.pendingInvoiceData) {
-                addMessage('⚠️ No pending invoice to confirm.', false);
+                addMessage('No pending invoice to confirm.', false);
                 return;
             }
             
@@ -2036,35 +2365,70 @@
                     // Update buttons to show PDF and Email options
                     const buttonsDiv = document.getElementById('invoiceButtons-' + data.invoiceNumber);
                     if (buttonsDiv) {
-                        buttonsDiv.innerHTML = '<span style="color:#28a745;font-weight:bold;">✅ Confirmed</span>' +
-                            '<a href="' + data.pdfUrl + '" download="' + data.invoiceNumber + '.pdf" class="action-btn" style="text-decoration:none;">📥 Download PDF</a>' +
-                            '<button class="action-btn" onclick="openEmailModalWithInvoice(\'' + data.pdfUrl + '\', \'' + data.invoiceNumber + '\', \'' + data.customer.replace(/'/g, "\\'") + '\')">📧 Draft Invoice Email</button>';
+                        buttonsDiv.innerHTML = '<span style="color:#28a745;font-weight:bold;">Confirmed</span>' +
+                            '<a href="' + data.pdfUrl + '" download="' + data.invoiceNumber + '.pdf" class="action-btn" style="text-decoration:none;">Download PDF</a>' +
+                            '<button class="action-btn" onclick="openEmailModalWithInvoice(\'' + data.pdfUrl + '\', \'' + data.invoiceNumber + '\', \'' + data.customer.replace(/'/g, "\\'") + '\')">Draft Invoice Email</button>';
                     }
                     
-                    addMessage('✅ Invoice ' + data.invoiceNumber + ' confirmed and added to spreadsheet!', false);
+                    addMessage('Invoice ' + data.invoiceNumber + ' confirmed and added to spreadsheet.', false);
                     
                     window.pendingInvoiceData = null;
                     
                     // Add follow-up after confirmation
                     setTimeout(() => {
-                        addFollowUpMessage();
+                        addConversationalFollowUp('invoice_confirmed');
                     }, 500);
                 } else {
-                    addMessage('⚠️ ' + (result.error || 'Failed to confirm invoice'), false);
+                    addMessage('Failed: ' + (result.error || 'Failed to confirm invoice'), false);
                 }
             } catch (error) {
                 console.error('Error confirming invoice:', error);
-                addMessage('⚠️ Error confirming invoice. Please try again.', false);
+                addMessage('Error confirming invoice. Please try again.', false);
+            }
+        }
+
+        // Gemini-powered conversational follow-up
+        async function addConversationalFollowUp(context) {
+            try {
+                const response = await fetch('/api/chat/respond', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        completedAction: context,
+                        inventory: {
+                            green: greenCoffeeInventory,
+                            roasted: roastedCoffeeInventory,
+                            enRoute: enRouteCoffeeInventory
+                        }
+                    })
+                });
+                
+                const data = await response.json();
+                
+                // Add the conversational message with quick action buttons
+                let html = `<div style="margin-bottom: 12px;">${data.message || 'What else can I help with?'}</div>`;
+                html += '<div class="quick-actions" style="display: flex; flex-wrap: wrap; gap: 8px;">';
+                html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
+                html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
+                html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
+                html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
+                html += '</div>';
+                
+                addMessage(html, false);
+                
+            } catch (error) {
+                console.error('Error getting follow-up:', error);
+                addFollowUpMessage();
             }
         }
 
         function addFollowUpMessage() {
             let html = '<div style="margin-bottom: 15px;">What else can I help with?</div>';
             html += '<div class="quick-actions" style="display: flex; flex-wrap: wrap; gap: 8px;">';
-            html += '<button class="action-btn" onclick="checkCurrentInventory()" style="display: flex; align-items: center; gap: 5px;">☕ Check Inventory</button>';
-            html += '<button class="action-btn" onclick="startRoastOrder()" style="display: flex; align-items: center; gap: 5px;">🔥 Order Roast</button>';
-            html += '<button class="action-btn" onclick="startInvoice()" style="display: flex; align-items: center; gap: 5px;">🧾 Generate Invoice</button>';
-            html += '<button class="action-btn" onclick="viewEnRoute()" style="display: flex; align-items: center; gap: 5px;">🚚 En Route</button>';
+            html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
+            html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
+            html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
+            html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
             html += '</div>';
             
             addMessage(html, false);
@@ -2147,17 +2511,17 @@
                 const data = await response.json();
                 
                 if (data.success && data.emails) {
-                    addMessage(`✅ Saved email(s) for ${pending.customerName}: ${data.emails.join(', ')}`, false);
+                    addMessage(`Saved email(s) for ${pending.customerName}: ${data.emails.join(', ')}`, false);
                     
                     // Now open the email modal with the emails
                     document.getElementById('emailTo').value = data.emails.join(', ');
                     showEmailModal(pending.invoiceNumber);
                 } else {
-                    addMessage(`⚠️ ${data.error || 'Could not process email. Please try again.'}`, false);
+                    addMessage(`${data.error || 'Could not process email. Please try again.'}`, false);
                 }
             } catch (error) {
                 console.error('Error saving email:', error);
-                addMessage('⚠️ Error saving email. Please try again.', false);
+                addMessage('Error saving email. Please try again.', false);
             }
             
             window.pendingEmailInvoice = null;

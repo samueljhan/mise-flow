@@ -1206,6 +1206,62 @@ app.post('/api/process', async (req, res) => {
         showFollowUp: true
       });
     }
+    
+    // Quick inventory check patterns - handle without AI
+    const inventoryPatterns = [
+      /how much (.+) do (?:we|i) have/i,
+      /what(?:'s| is) (?:the|our) (.+) (?:inventory|stock|level)/i,
+      /check (.+) (?:inventory|stock|level)/i,
+      /(.+) (?:inventory|stock|level)/i,
+      /do we have (?:any )?(.+)/i,
+      /how many (?:lbs?|pounds?) of (.+)/i
+    ];
+    
+    for (const pattern of inventoryPatterns) {
+      const match = textLower.match(pattern);
+      if (match) {
+        const searchTerm = match[1].trim().replace(/\?$/, '');
+        
+        // Search in roasted coffee inventory
+        const roastedMatch = roastedCoffeeInventory.find(c => 
+          c.name.toLowerCase().includes(searchTerm) ||
+          searchTerm.includes(c.name.toLowerCase()) ||
+          (searchTerm.includes('blend') && c.name.toLowerCase().includes('blend')) ||
+          (searchTerm.includes('decaf') && c.name.toLowerCase().includes('decaf')) ||
+          (searchTerm.includes('ethiopia') && c.name.toLowerCase().includes('ethiopia')) ||
+          (searchTerm.includes('colombia') && c.name.toLowerCase().includes('colombia'))
+        );
+        
+        if (roastedMatch) {
+          return res.json({
+            response: `You have ${roastedMatch.weight} lb of ${roastedMatch.name} in roasted inventory.`,
+            action: 'check_inventory',
+            showFollowUp: true
+          });
+        }
+        
+        // Search in green coffee inventory
+        const greenMatch = greenCoffeeInventory.find(c => 
+          c.name.toLowerCase().includes(searchTerm) ||
+          searchTerm.includes(c.name.toLowerCase())
+        );
+        
+        if (greenMatch) {
+          return res.json({
+            response: `You have ${greenMatch.weight} lb of ${greenMatch.name} in green coffee inventory.`,
+            action: 'check_inventory',
+            showFollowUp: true
+          });
+        }
+        
+        // Not found
+        return res.json({
+          response: `I couldn't find "${searchTerm}" in inventory. Would you like me to check the full inventory?`,
+          action: 'check_inventory',
+          showFollowUp: true
+        });
+      }
+    }
 
     // Try to parse invoice pattern without AI first (for rate limit fallback)
     const invoicePattern = /(?:invoice|order|bill)?\s*(?:for\s+)?(\w+(?:'s)?(?:\s+\w+)?)\s*[,.]?\s*(\d+)\s*(?:lbs?|pounds?|lb)?\s*(?:of\s+)?(.+)/i;
@@ -1236,35 +1292,43 @@ app.post('/api/process', async (req, res) => {
     // Try Gemini with retry
     let intentData = null;
     try {
-      const intentPrompt = `${SYSTEM_PROMPT}
+      const intentPrompt = `You are Mise, an AI assistant for Archives of Us Coffee inventory management.
+
+AVAILABLE INTENTS:
+- "check_inventory": User is asking about current stock levels, how much of something they have, inventory questions
+- "create_invoice": User wants to create an invoice for a customer (must mention customer name AND quantity)
+- "order_roast": User wants to order roasted coffee
+- "view_en_route": User wants to check shipped orders or tracking
+- "general_question": Other questions or conversation
+- "decline": User is declining or canceling something
 
 KNOWN CUSTOMERS: ${getKnownCustomers().join(', ')}
 
-CUSTOMER MATCHING RULES:
-- "Dex", "Dex's Coffee", "deks", "dex coffee" → matches "Dex" (isKnownCustomer: true)
-- "CED", "ced coffee" → matches "CED" (isKnownCustomer: true)
-- "Archives of Us", "AOU", "archives", "aou coffee" → matches "Archives of Us" (isKnownCustomer: true)
-- "Junia", "junia coffee", "juna" → matches "Junia" (isKnownCustomer: true)
+ROASTED COFFEE INVENTORY:
+${roastedCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb`).join('\n')}
+
+GREEN COFFEE INVENTORY:
+${greenCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb`).join('\n')}
 
 CONVERSATION CONTEXT: ${conversationState || 'none'}
 
 User said: "${text}"
 
-IMPORTANT: For invoice requests with multiple products (e.g., "100lb blend, 20lb decaf"), capture ALL items in the items array.
+IMPORTANT RULES:
+1. If user asks "how much X do I have" or anything about inventory levels → intent is "check_inventory"
+2. Only use "create_invoice" if user clearly mentions a customer name AND a quantity
+3. For inventory checks, include the actual inventory data in friendlyResponse
 
 Respond ONLY with valid JSON:
 {
-  "intent": "create_invoice" | "update_inventory" | "check_inventory" | "decline" | "confirm" | "general_question",
-  "customer": "<matched customer name or original if new>",
+  "intent": "<one of the intents above>",
+  "customer": "<customer name if invoice>",
   "items": [{"quantity": <number>, "product": "<product name>"}],
   "isKnownCustomer": <true/false>,
-  "friendlyResponse": "<brief response>",
-  "conversationComplete": <true/false>
-}
-
-Examples:
-- "dex 100lb blend, 20lb decaf" → {"intent": "create_invoice", "customer": "Dex", "items": [{"quantity": 100, "product": "Archives Blend"}, {"quantity": 20, "product": "Colombia Decaf"}], "isKnownCustomer": true, ...}
-- "CED 50 lbs archives" → {"intent": "create_invoice", "customer": "CED", "items": [{"quantity": 50, "product": "Archives Blend"}], "isKnownCustomer": true, ...}`;
+  "friendlyResponse": "<conversational response with actual data if inventory check>",
+  "conversationComplete": <true/false>,
+  "coffeeAskedAbout": "<coffee name if inventory check>"
+}`;
 
       const intentText = await callGeminiWithRetry(intentPrompt, { temperature: 0.1, maxRetries: 2 });
       console.log(`🤖 Intent detection: ${intentText}`);
@@ -1294,6 +1358,60 @@ Examples:
         response: "I didn't quite catch that. Could you rephrase?",
         action: null,
         showFollowUp: false
+      });
+    }
+    
+    // Handle check_inventory intent
+    if (intentData.intent === 'check_inventory') {
+      // If Gemini provided a good response, use it
+      if (intentData.friendlyResponse && !intentData.friendlyResponse.includes('Processing') && !intentData.friendlyResponse.includes('invoice')) {
+        return res.json({
+          response: intentData.friendlyResponse,
+          action: 'check_inventory',
+          showFollowUp: true
+        });
+      }
+      
+      // Otherwise, try to find the coffee they asked about
+      if (intentData.coffeeAskedAbout) {
+        const searchTerm = intentData.coffeeAskedAbout.toLowerCase();
+        const roastedMatch = roastedCoffeeInventory.find(c => 
+          c.name.toLowerCase().includes(searchTerm) ||
+          searchTerm.includes(c.name.toLowerCase())
+        );
+        
+        if (roastedMatch) {
+          return res.json({
+            response: `You have ${roastedMatch.weight} lb of ${roastedMatch.name} in stock.`,
+            action: 'check_inventory',
+            showFollowUp: true
+          });
+        }
+      }
+      
+      // Default inventory response
+      return res.json({
+        response: "I can check that for you. Use the 'Check Inventory' button for a full breakdown, or ask about a specific coffee.",
+        action: 'check_inventory',
+        showFollowUp: true
+      });
+    }
+    
+    // Handle order_roast intent
+    if (intentData.intent === 'order_roast') {
+      return res.json({
+        response: "I can help you order roasts. Use the 'Order Roast' button to get started, or tell me which coffee you'd like to order.",
+        action: 'order_roast',
+        showFollowUp: true
+      });
+    }
+    
+    // Handle view_en_route intent
+    if (intentData.intent === 'view_en_route') {
+      return res.json({
+        response: "Use the 'En Route' button to view your shipped orders and tracking information.",
+        action: 'view_en_route',
+        showFollowUp: true
       });
     }
     
@@ -1632,13 +1750,16 @@ app.post('/api/inventory/enroute/tracking', (req, res) => {
 
 // Mark en route item as delivered (moves to roasted inventory)
 app.post('/api/inventory/enroute/deliver', (req, res) => {
-  const { id } = req.body;
+  const { id, confirmedBy } = req.body;
   const index = enRouteCoffeeInventory.findIndex(c => c.id === id);
   if (index === -1) {
     return res.status(404).json({ error: 'En route item not found' });
   }
   
   const item = enRouteCoffeeInventory[index];
+  
+  // Log the delivery confirmation
+  console.log(`Delivery confirmed: ${item.name} (${item.weight}lb) by ${confirmedBy || 'unknown'} at ${new Date().toISOString()}`);
   
   // Check if this roasted coffee already exists
   const existingRoasted = roastedCoffeeInventory.find(c => c.name === item.name);
@@ -1661,6 +1782,60 @@ app.post('/api/inventory/enroute/deliver', (req, res) => {
   enRouteCoffeeInventory.splice(index, 1);
   
   res.json({ success: true, message: `${item.name} (${item.weight}lb) added to roasted inventory` });
+});
+
+// ============ UPS Tracking API ============
+
+// Look up UPS tracking info
+app.post('/api/ups/track', async (req, res) => {
+  const { trackingNumber } = req.body;
+  
+  if (!trackingNumber) {
+    return res.json({ error: 'No tracking number provided' });
+  }
+  
+  // Use Gemini to simulate tracking lookup (in production, use actual UPS API)
+  // For now, provide a helpful response with link to UPS
+  try {
+    const prompt = `A user wants to track a UPS package with tracking number: ${trackingNumber}
+
+Since I don't have direct access to UPS tracking API, provide a helpful response. 
+If the tracking number looks valid (1Z followed by alphanumeric characters, or starts with certain patterns), 
+say it appears to be a valid UPS tracking number.
+
+Respond with JSON only:
+{
+  "status": "In Transit" or "Shipped" or "Unknown",
+  "validFormat": true/false,
+  "message": "brief message about the tracking number"
+}`;
+
+    const response = await callGeminiWithRetry(prompt);
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    
+    if (jsonMatch) {
+      const data = JSON.parse(jsonMatch[0]);
+      res.json({
+        trackingNumber,
+        status: data.status || 'Check UPS.com for status',
+        validFormat: data.validFormat,
+        trackingUrl: `https://www.ups.com/track?tracknum=${trackingNumber}`
+      });
+    } else {
+      res.json({
+        trackingNumber,
+        status: 'Check UPS.com for status',
+        trackingUrl: `https://www.ups.com/track?tracknum=${trackingNumber}`
+      });
+    }
+  } catch (error) {
+    console.error('UPS tracking error:', error);
+    res.json({
+      trackingNumber,
+      status: 'Unable to verify',
+      trackingUrl: `https://www.ups.com/track?tracknum=${trackingNumber}`
+    });
+  }
 });
 
 // ============ Conversational Chat API ============
@@ -1816,9 +1991,8 @@ Respond with JSON only:
 app.post('/api/roast-order/generate-email', async (req, res) => {
   const { orderItems } = req.body;
   
-  const today = new Date().toLocaleDateString('en-US', { 
-    month: 'long', day: 'numeric', year: 'numeric' 
-  });
+  const today = new Date();
+  const dateStr = `${today.getMonth() + 1}/${today.getDate()}/${today.getFullYear()}`;
   
   let emailBody = `Hi Shared Team,\n\nHope all is well! Would like to place a toll roast order for the following:\n\n`;
   
@@ -1913,7 +2087,7 @@ app.post('/api/roast-order/generate-email', async (req, res) => {
   
   res.json({
     to: 'samueljhan@gmail.com',
-    subject: `AOU Toll Roast Order ${today}`,
+    subject: `AOU Toll Roast Order, ${dateStr}`,
     body: emailBody,
     orderItems: orderItems
   });

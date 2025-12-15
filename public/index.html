@@ -1558,10 +1558,10 @@
                 html += `<strong style="color:#90EE90;">${item.name}</strong> - ${item.weight}lb`;
                 html += `<span style="background:${statusColor}; padding:2px 8px; border-radius:4px; font-size:11px;">${item.status}</span>`;
                 html += `</div>`;
-                html += `<div style="font-size:12px; color:#888; margin-bottom:8px;">Ordered: ${orderDate}${item.trackingNumber ? ' | Tracking: ' + item.trackingNumber : ''}</div>`;
+                html += `<div style="font-size:12px; color:#888; margin-bottom:8px;">Ordered: ${orderDate}</div>`;
                 html += `<div style="display:flex; gap:8px;">`;
-                html += `<button class="action-btn" onclick="editEnRouteItem('${item.id}')" style="font-size:12px; padding:6px 10px;">Edit</button>`;
-                html += `<button class="action-btn" onclick="markDeliveredChat('${item.id}', '${item.name}', ${item.weight})" style="font-size:12px; padding:6px 10px; background:#4a6741;">Mark Delivered</button>`;
+                html += `<button class="action-btn" onclick="viewTracking('${item.id}', '${item.trackingNumber || ''}')" style="font-size:12px; padding:6px 10px;">Tracking</button>`;
+                html += `<button class="action-btn" onclick="startMarkDelivered('${item.id}', '${item.name}', ${item.weight})" style="font-size:12px; padding:6px 10px; background:#4a6741;">Mark Delivered</button>`;
                 html += `</div>`;
                 html += `</div>`;
             });
@@ -1569,45 +1569,111 @@
             addMessage(html, false);
         }
         
-        async function editEnRouteItem(itemId) {
-            const item = enRouteCoffeeInventory.find(i => i.id === itemId);
-            if (!item) return;
+        async function viewTracking(itemId, trackingNumber) {
+            if (!trackingNumber) {
+                addMessage('There is no tracking number recorded. Do you want to add one?', false);
+                
+                let html = '<div class="response-buttons" style="margin-top: 8px;">';
+                html += `<button class="action-btn" onclick="promptAddTracking('${itemId}')">Yes, add tracking</button>`;
+                html += `<button class="action-btn" onclick="addConversationalFollowUp('tracking_skipped')">No</button>`;
+                html += '</div>';
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML += html;
+                }
+                return;
+            }
             
-            addMessage(`Editing tracking for ${item.name}. Enter new tracking number:`, false);
+            // Show tracking info
+            addMessage('Looking up tracking information...', false);
             
+            try {
+                const response = await fetch('/api/ups/track', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ trackingNumber })
+                });
+                
+                const data = await response.json();
+                
+                let html = `<strong>UPS Tracking: ${trackingNumber}</strong><br><br>`;
+                
+                if (data.error) {
+                    html += `Status: Unable to retrieve tracking info<br>`;
+                    html += `<a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90;">View on UPS.com</a>`;
+                } else {
+                    html += `Status: ${data.status || 'In Transit'}<br>`;
+                    if (data.estimatedDelivery) {
+                        html += `Estimated Arrival: ${data.estimatedDelivery}<br>`;
+                    }
+                    if (data.lastLocation) {
+                        html += `Last Location: ${data.lastLocation}<br>`;
+                    }
+                    html += `<br><a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90;">View full details on UPS.com</a>`;
+                }
+                
+                html += '<br><br><div class="response-buttons">';
+                html += `<button class="action-btn" onclick="promptAddTracking('${itemId}')">Update Tracking</button>`;
+                html += '</div>';
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML = html;
+                }
+                
+            } catch (error) {
+                console.error('Error fetching tracking:', error);
+                let html = `<strong>UPS Tracking: ${trackingNumber}</strong><br><br>`;
+                html += `<a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90;">View tracking on UPS.com</a>`;
+                html += '<br><br><div class="response-buttons">';
+                html += `<button class="action-btn" onclick="promptAddTracking('${itemId}')">Update Tracking</button>`;
+                html += '</div>';
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML = html;
+                }
+            }
+        }
+        
+        function promptAddTracking(itemId) {
+            addMessage('Enter the UPS tracking number:', false);
             window.pendingEnRouteEdit = itemId;
             userInput.placeholder = 'Enter tracking number...';
             userInput.focus();
         }
         
-        async function markDeliveredChat(itemId, itemName, weight) {
-            addMessage(`Mark ${itemName} (${weight}lb) as delivered?`, false);
-            
-            let html = '<div class="response-buttons" style="margin-top: 8px;">';
-            html += `<button class="action-btn" onclick="confirmDelivery('${itemId}')">Yes, add to inventory</button>`;
-            html += `<button class="action-btn" onclick="cancelDelivery()">Cancel</button>`;
-            html += '</div>';
-            
-            const messages = chatContainer.querySelectorAll('.message');
-            const lastMsg = messages[messages.length - 1];
-            if (lastMsg) {
-                const content = lastMsg.querySelector('.message-content') || lastMsg;
-                content.innerHTML += html;
-            }
+        function startMarkDelivered(itemId, itemName, weight) {
+            addMessage(`Mark ${itemName} (${weight}lb) as delivered?<br><br>Please enter your initials to confirm:`, false);
+            window.pendingDeliveryConfirm = { itemId, itemName, weight };
+            userInput.placeholder = 'Enter your initials...';
+            userInput.focus();
         }
         
-        async function confirmDelivery(itemId) {
+        async function confirmDeliveryWithInitials(initials) {
+            const pending = window.pendingDeliveryConfirm;
+            if (!pending) return;
+            
+            window.pendingDeliveryConfirm = null;
+            
             try {
                 const response = await fetch('/api/inventory/enroute/deliver', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ id: itemId })
+                    body: JSON.stringify({ id: pending.itemId, confirmedBy: initials })
                 });
                 
                 const data = await response.json();
                 await loadInventory();
                 
-                addMessage(data.message, false);
+                addMessage(`${data.message} (Confirmed by: ${initials.toUpperCase()})`, false);
                 addConversationalFollowUp('delivery_confirmed');
                 
             } catch (error) {
@@ -1616,9 +1682,23 @@
             }
         }
         
+        async function confirmDelivery(itemId) {
+            // This is now handled by startMarkDelivered + initials flow
+            startMarkDelivered(itemId, '', 0);
+        }
+        
         function cancelDelivery() {
+            window.pendingDeliveryConfirm = null;
             addMessage('Cancelled.', false);
             addConversationalFollowUp('cancelled');
+        }
+
+        async function editEnRouteItem(itemId) {
+            promptAddTracking(itemId);
+        }
+        
+        async function markDeliveredChat(itemId, itemName, weight) {
+            startMarkDelivered(itemId, itemName, weight);
         }
 
         // Keep modal functions for backward compatibility but they're less used now
@@ -2214,6 +2294,12 @@
             if (waitingForRoastOrder) {
                 waitingForRoastOrder = false;
                 parseRoastOrder(message);
+                return;
+            }
+            
+            // Check if we're waiting for delivery confirmation initials
+            if (window.pendingDeliveryConfirm) {
+                confirmDeliveryWithInitials(message);
                 return;
             }
             

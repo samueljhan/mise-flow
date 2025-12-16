@@ -1401,9 +1401,7 @@ app.post('/api/invoice/confirm', async (req, res) => {
   }
 
   try {
-    console.log(`🔔 /api/invoice/confirm called with body:`, JSON.stringify(req.body));
     const { invoiceNumber, date, total, items } = req.body;
-    console.log(`🔔 Extracted items:`, items);
     
     if (!invoiceNumber || !date || total === undefined) {
       return res.status(400).json({ error: 'Missing invoice details' });
@@ -1427,16 +1425,12 @@ app.post('/api/invoice/confirm', async (req, res) => {
 
     // Deduct items from roasted coffee inventory
     const deductions = [];
-    console.log(`🔍 Items received for deduction:`, JSON.stringify(items));
-    console.log(`🔍 Current roasted inventory:`, roastedCoffeeInventory.map(c => ({ name: c.name, weight: c.weight })));
     
     if (items && items.length > 0) {
       for (const item of items) {
         // Find matching roasted coffee by description/product name
         const productName = item.description ? item.description.replace(' (units in lbs)', '') : item.product;
         const quantity = item.quantity || 0;
-        
-        console.log(`🔍 Looking for "${productName}" (quantity: ${quantity})`);
         
         // Search for matching roasted coffee with flexible matching
         const roastedMatch = roastedCoffeeInventory.find(c => {
@@ -1612,6 +1606,17 @@ app.post('/api/process', async (req, res) => {
     }
     
     const textLower = text.toLowerCase().trim();
+    
+    // Quick handlers for simple commands (no AI needed)
+    
+    // Handle simple inventory check commands
+    if (textLower === 'inventory' || textLower === 'check inventory' || textLower === 'stock' || textLower === 'check stock') {
+      return res.json({
+        response: null,  // Frontend will handle display
+        action: 'check_inventory',
+        showFollowUp: true
+      });
+    }
     
     // Only handle simple yes/no/thanks without AI (for speed)
     if (textLower === 'yes' || textLower === 'yeah' || textLower === 'yep') {

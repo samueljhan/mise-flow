@@ -2069,6 +2069,14 @@
                     
                     // Actually generate the invoice
                     const invoiceResult = await generateInvoice(data.invoiceDetails);
+                    
+                    // Add follow-up after invoice generation (but not if there was an error)
+                    if (!invoiceResult.includes("Sorry") && !invoiceResult.includes("error")) {
+                        setTimeout(() => {
+                            addConversationalFollowUp('invoice_generated');
+                        }, 500);
+                    }
+                    
                     return processingHtml + '<br>' + invoiceResult;
                 }
                 
@@ -2474,6 +2482,50 @@
             const isCanceling = cancelPhrases.some(p => lowerMsg.includes(p));
             const isChangingTopic = topicChangePhrases.some(p => lowerMsg.includes(p));
             const wantsToSwitch = isCanceling || isChangingTopic;
+            
+            // Check if there's a pending invoice that hasn't been confirmed
+            if (window.pendingInvoiceData && !window.pendingInvoiceWarningShown) {
+                // Check if user is trying to correct the invoice (mentions same customer or product)
+                const pendingCustomer = window.pendingInvoiceData.customer?.toLowerCase() || '';
+                const pendingProducts = window.pendingInvoiceData.items?.map(i => i.description?.toLowerCase() || '') || [];
+                const mentionsInvoice = lowerMsg.includes(pendingCustomer) || 
+                                        pendingProducts.some(p => lowerMsg.includes(p.replace(' (units in lbs)', '').toLowerCase())) ||
+                                        lowerMsg.includes('confirm') || lowerMsg.includes('yes');
+                
+                // If not correcting and not confirming, warn user
+                if (!mentionsInvoice) {
+                    window.pendingInvoiceWarningShown = true;
+                    window.pendingMessageAfterWarning = message;
+                    
+                    let html = `<div style="color: #f0ad4e; margin-bottom: 12px;">⚠️ You have an unconfirmed invoice (${window.pendingInvoiceData.invoiceNumber}) for ${window.pendingInvoiceData.customer}.</div>`;
+                    html += `<div style="margin-bottom: 12px;">Are you sure you want to move on without confirming it?</div>`;
+                    html += `<div style="display: flex; gap: 8px;">`;
+                    html += `<button class="action-btn" onclick="proceedWithoutInvoice()">Yes, move on</button>`;
+                    html += `<button class="action-btn" style="background:#28a745;color:white;" onclick="reshowPendingInvoice()">No, show invoice</button>`;
+                    html += `</div>`;
+                    
+                    addMessage(html, false);
+                    return;
+                }
+            }
+            
+            // If user confirmed they want to move on after warning
+            if (window.pendingInvoiceWarningShown && (lowerMsg === 'yes' || lowerMsg === 'yes, move on' || lowerMsg.includes('move on'))) {
+                window.pendingInvoiceData = null;
+                window.pendingInvoiceWarningShown = false;
+                const originalMessage = window.pendingMessageAfterWarning;
+                window.pendingMessageAfterWarning = null;
+                
+                if (originalMessage) {
+                    addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
+                    processMessage(originalMessage).then(response => {
+                        const messages = chatContainer.querySelectorAll('.message');
+                        messages[messages.length - 1].remove();
+                        addMessage(response, false);
+                    });
+                    return;
+                }
+            }
 
             // Check if we're waiting for roast order input
             if (waitingForRoastOrder) {
@@ -2681,9 +2733,6 @@
 
         function formatInvoiceResponse(data) {
             // Store invoice data for confirmation
-            console.log('🔔 Invoice response received:', data);
-            console.log('🔔 Items from response:', data.items);
-            
             window.pendingInvoiceData = {
                 invoiceNumber: data.invoiceNumber,
                 date: data.date,
@@ -2692,8 +2741,6 @@
                 customer: data.customer,
                 items: data.items  // Store items for inventory deduction
             };
-            
-            console.log('🔔 Stored pendingInvoiceData:', window.pendingInvoiceData);
             
             let html = '<div>';
             html += '<strong>🧾 Invoice Generated!</strong><br><br>';
@@ -2725,8 +2772,6 @@
             }
             
             const data = window.pendingInvoiceData;
-            console.log('🔔 Confirming invoice with data:', data);
-            console.log('🔔 Items being sent:', data.items);
             
             try {
                 const response = await fetch('/api/invoice/confirm', {
@@ -2775,6 +2820,8 @@
                     await loadInventory();
                     
                     window.pendingInvoiceData = null;
+                    window.pendingInvoiceWarningShown = false;
+                    window.pendingMessageAfterWarning = null;
                     
                     // Add follow-up after confirmation
                     setTimeout(() => {
@@ -2787,6 +2834,71 @@
                 console.error('Error confirming invoice:', error);
                 addMessage('Error confirming invoice. Please try again.', false);
             }
+        }
+
+        // Handle user choosing to proceed without confirming pending invoice
+        function proceedWithoutInvoice() {
+            const originalMessage = window.pendingMessageAfterWarning;
+            window.pendingInvoiceData = null;
+            window.pendingInvoiceWarningShown = false;
+            window.pendingMessageAfterWarning = null;
+            
+            addMessage('Invoice discarded.', false);
+            
+            if (originalMessage) {
+                addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
+                processMessage(originalMessage).then(response => {
+                    const messages = chatContainer.querySelectorAll('.message');
+                    messages[messages.length - 1].remove();
+                    addMessage(response, false);
+                });
+            } else {
+                addFollowUpButtons();
+            }
+        }
+        
+        // Re-show the pending invoice for user to confirm or edit
+        function reshowPendingInvoice() {
+            window.pendingInvoiceWarningShown = false;
+            window.pendingMessageAfterWarning = null;
+            
+            if (!window.pendingInvoiceData) {
+                addMessage('No pending invoice found.', false);
+                return;
+            }
+            
+            const data = window.pendingInvoiceData;
+            let html = '<div>';
+            html += '<strong>📋 Pending Invoice</strong><br><br>';
+            html += '<strong>Invoice #:</strong> ' + data.invoiceNumber + '<br>';
+            html += '<strong>Customer:</strong> ' + data.customer + '<br>';
+            
+            if (data.items && data.items.length > 0) {
+                html += '<strong>Items:</strong><br>';
+                data.items.forEach(item => {
+                    html += '- ' + item.quantity + ' lbs ' + item.description.replace(' (units in lbs)', '') + ' @ $' + item.unitPrice.toFixed(2) + ' = $' + item.total.toFixed(2) + '<br>';
+                });
+            }
+            
+            html += '<strong>Total:</strong> $' + data.total.toFixed(2) + '<br><br>';
+            html += '<em style="color: #888;">To make changes, generate a new invoice with the correct details.</em><br><br>';
+            html += '</div>';
+            
+            html += '<div class="response-buttons">';
+            html += '<button class="action-btn" onclick="confirmInvoice(\'' + data.invoiceNumber + '\')" style="background:#28a745;color:white;">Confirm Invoice</button>';
+            html += '<button class="action-btn" onclick="discardPendingInvoice()">Discard</button>';
+            html += '</div>';
+            
+            addMessage(html, false);
+        }
+        
+        // Discard the pending invoice
+        function discardPendingInvoice() {
+            window.pendingInvoiceData = null;
+            window.pendingInvoiceWarningShown = false;
+            window.pendingMessageAfterWarning = null;
+            addMessage('Invoice discarded. What else can I help with?', false);
+            addFollowUpButtons();
         }
 
         // Gemini-powered conversational follow-up

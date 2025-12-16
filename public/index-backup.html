@@ -596,7 +596,7 @@
         <div class="chat-container" id="chatContainer">
             <div class="welcome-message">
                 <h2>Welcome AOU Coffee</h2>
-                <p>What would you like to do right now?</p>
+                <p>How can I help?</p>
                 
                 <div class="example-prompts">
                     <div class="example-prompt" onclick="checkCurrentInventory()">
@@ -629,7 +629,7 @@
 
         <div class="input-container">
             <div class="input-wrapper">
-                <textarea id="userInput" placeholder="Describe what you want to do…" rows="1"></textarea>
+                <textarea id="userInput" placeholder="Speak or type your reply..." rows="1"></textarea>
                 <button class="voice-btn" id="voiceBtn" title="Start recording">
                     <svg viewBox="0 0 24 24">
                         <path d="M12 1a4 4 0 0 1 4 4v7a4 4 0 1 1-8 0V5a4 4 0 0 1 4-4z"/>
@@ -779,12 +779,6 @@
                 googleStatusEl.classList.add('disconnected');
             }
         }
-        
-        // Call this when we get a 401 to update UI
-        function handleGoogleDisconnected() {
-            googleConnected = false;
-            updateGoogleUI();
-        }
 
         function handleGoogleAuth() {
             if (googleConnected) {
@@ -803,39 +797,12 @@
         // Check for connection on page load
         checkGoogleStatus();
 
-        // Function to connect Google while preserving state
-        function connectGoogle(returnAction) {
-            // Save the action to restore after OAuth
-            if (returnAction) {
-                localStorage.setItem('miseflow_pending_action', returnAction);
-            }
-            window.location.href = '/auth/google';
-        }
-
         // Check URL params for connection status
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('google') === 'connected') {
             googleConnected = true;
             updateGoogleUI();
             window.history.replaceState({}, document.title, window.location.pathname);
-            
-            // Check if there's a pending action to restore
-            const pendingAction = localStorage.getItem('miseflow_pending_action');
-            if (pendingAction) {
-                localStorage.removeItem('miseflow_pending_action');
-                // Restore the action after a short delay to let UI initialize
-                setTimeout(() => {
-                    if (pendingAction === 'invoice') {
-                        startInvoice();
-                    } else if (pendingAction === 'roast_order') {
-                        startRoastOrder();
-                    } else if (pendingAction === 'email') {
-                        // Just show a message that they can now send emails
-                        addMessage('Google connected! You can now send emails.', false);
-                        addFollowUpButtons();
-                    }
-                }, 300);
-            }
         }
 
         // Auto-resize textarea
@@ -858,14 +825,6 @@
             // Clear welcome message
             const welcomeMsg = chatContainer.querySelector('.welcome-message');
             if (welcomeMsg) welcomeMsg.remove();
-
-            // Check if Google is connected first
-            if (!googleConnected) {
-                addMessage(`<div style="color: #dc3545;">⚠️ Google account not connected</div>
-                    <div style="margin-top: 8px;">Invoice generation requires a connected Google account to create PDFs and access pricing data.</div>
-                    <button class="action-btn" style="margin-top: 12px;" onclick="connectGoogle('invoice')">Connect Google Account</button>`, false);
-                return;
-            }
 
             // Add assistant message asking for details
             addMessage('<strong>Generate Invoice</strong><br><br>Customer and order details?<br><br><em style="color:#707070;">Example: "CED, 100 lbs Archives Blend"</em>', false);
@@ -1258,7 +1217,7 @@
             window.waitingForOrderConfirmation = false;
             window.pendingClarification = null;
             addMessage('Order cancelled.', false);
-            userInput.placeholder = 'Describe what you want to do…';
+            userInput.placeholder = 'Speak or type your reply...';
             addConversationalFollowUp('order_cancelled');
         }
 
@@ -1277,20 +1236,6 @@
                 });
                 
                 const data = await response.json();
-                
-                // Handle Google not connected
-                if (response.status === 401) {
-                    handleGoogleDisconnected();
-                    const messages = chatContainer.querySelectorAll('.message');
-                    const lastMsg = messages[messages.length - 1];
-                    if (lastMsg) {
-                        const content = lastMsg.querySelector('.message-content') || lastMsg;
-                        content.innerHTML = `<div style="color: #dc3545;">⚠️ ${data.error || 'Google account not connected.'}</div>
-                            <div style="margin-top: 8px;">Please connect your Google account to create email drafts.</div>
-                            <button class="action-btn" style="margin-top: 12px;" onclick="connectGoogle('roast_order')">Connect Google Account</button>`;
-                    }
-                    return;
-                }
                 
                 // Show confirmation message
                 let confirmHtml = '<strong>Roast Order Confirmed</strong><br><br>';
@@ -1324,7 +1269,7 @@
                 pendingRoastEmail = null;
                 waitingForRoastOrder = false;
                 window.waitingForOrderConfirmation = false;
-                userInput.placeholder = 'Describe what you want to do…';
+                userInput.placeholder = 'Speak or type your reply...';
                 
                 // Add conversational follow-up
                 addConversationalFollowUp('roast_order_confirmed');
@@ -1410,7 +1355,7 @@
             document.getElementById('roastOrderModal').style.display = 'none';
             pendingRoastOrder = [];
             waitingForRoastOrder = false;
-            userInput.placeholder = 'Describe what you want to do…';
+            userInput.placeholder = 'Speak or type your reply...';
         }
 
         // Generate Roast Order Email (from modal)
@@ -2059,7 +2004,7 @@
                     setTimeout(() => {
                         addConversationalFollowUp('unclear_request');
                     }, 300);
-                    return "Sorry, I didn't get that.";
+                    return "Sorry, I didn't get that. What can I help you with?";
                 }
                 
                 // Check if this is an invoice action
@@ -2135,14 +2080,6 @@
                     }, 300);
                 }
                 
-                // For unclear responses, just show buttons (no additional message)
-                if (data.action === 'unclear') {
-                    window.currentConversationState = 'none';
-                    setTimeout(() => {
-                        addFollowUpButtons();
-                    }, 300);
-                }
-                
                 return html;
                 
             } catch (error) {
@@ -2151,7 +2088,7 @@
                 setTimeout(() => {
                     addConversationalFollowUp('unclear_request');
                 }, 300);
-                return "Sorry, I didn't get that.";
+                return "Sorry, I didn't get that. What can I help you with?";
             }
         }
         
@@ -2354,14 +2291,6 @@
                     delete modal.dataset.customerName;
                     delete modal.dataset.originalEmails;
                     return true;
-                } else if (response.status === 401) {
-                    handleGoogleDisconnected();
-                    const data = await response.json();
-                    addMessage(`<div style="color: #dc3545;">⚠️ ${data.error || 'Google account not connected.'}</div>
-                        <div style="margin-top: 8px;">Please connect your Google account to send emails.</div>
-                        <button class="action-btn" style="margin-top: 12px;" onclick="connectGoogle('email')">Connect Google Account</button>`, false);
-                    closeEmailModal();
-                    return false;
                 } else {
                     const data = await response.json();
                     addMessage('Failed: ' + (data.error || 'Unknown error'), false);
@@ -2465,7 +2394,7 @@
             
             userInput.value = '';
             userInput.style.height = 'auto';
-            userInput.placeholder = 'Describe what you want to do…';
+            userInput.placeholder = 'Speak or type your reply...';
             
             // Check for cancel/topic change phrases
             const lowerMsg = message.toLowerCase();
@@ -2641,22 +2570,12 @@
 
                 const data = await response.json();
                 
-                // Handle Google not connected - show specific message
-                if (response.status === 401) {
-                    handleGoogleDisconnected();
-                    return `<div style="color: #dc3545;">⚠️ ${data.error || 'Google account not connected.'}</div>
-                            <div style="margin-top: 8px;">Please connect your Google account to generate invoices.</div>
-                            <button class="action-btn" style="margin-top: 12px;" onclick="connectGoogle('invoice')">Connect Google Account</button>`;
-                }
-                
                 // Handle conversational fallback when parsing fails
-                if (data.success === false) {
-                    if (data.action === 'unclear') {
-                        setTimeout(() => {
-                            addFollowUpButtons();
-                        }, 300);
-                    }
-                    return data.error || "Sorry, I didn't get that.";
+                if (data.success === false && data.showFollowUp) {
+                    setTimeout(() => {
+                        addConversationalFollowUp('unclear_request');
+                    }, 300);
+                    return data.error || "Sorry, I didn't get that. What can I help you with?";
                 }
                 
                 if (!response.ok) {
@@ -2667,33 +2586,19 @@
                 
             } catch (error) {
                 console.error('Error:', error);
-                // Check if it's a connection error
-                if (error.message && error.message.includes('Google')) {
-                    return `<div style="color: #dc3545;">⚠️ ${error.message}</div>
-                            <button class="action-btn" style="margin-top: 12px;" onclick="connectGoogle('invoice')">Connect Google Account</button>`;
-                }
-                setTimeout(() => {
-                    addFollowUpButtons();
-                }, 300);
-                return "Sorry, I didn't get that.";
+                return "Sorry, I didn't get that. What can I help you with?";
             }
         }
 
         function formatInvoiceResponse(data) {
             // Store invoice data for confirmation
-            console.log('🔔 Invoice response received:', data);
-            console.log('🔔 Items from response:', data.items);
-            
             window.pendingInvoiceData = {
                 invoiceNumber: data.invoiceNumber,
                 date: data.date,
                 total: data.total,
                 pdfUrl: data.pdfUrl,
-                customer: data.customer,
-                items: data.items  // Store items for inventory deduction
+                customer: data.customer
             };
-            
-            console.log('🔔 Stored pendingInvoiceData:', window.pendingInvoiceData);
             
             let html = '<div>';
             html += '<strong>🧾 Invoice Generated!</strong><br><br>';
@@ -2725,8 +2630,6 @@
             }
             
             const data = window.pendingInvoiceData;
-            console.log('🔔 Confirming invoice with data:', data);
-            console.log('🔔 Items being sent:', data.items);
             
             try {
                 const response = await fetch('/api/invoice/confirm', {
@@ -2735,21 +2638,11 @@
                     body: JSON.stringify({
                         invoiceNumber: data.invoiceNumber,
                         date: data.date,
-                        total: data.total,
-                        items: data.items  // Send items for inventory deduction
+                        total: data.total
                     })
                 });
                 
                 const result = await response.json();
-                
-                // Handle Google not connected
-                if (response.status === 401) {
-                    handleGoogleDisconnected();
-                    addMessage(`<div style="color: #dc3545;">⚠️ ${result.error || 'Google account not connected.'}</div>
-                        <div style="margin-top: 8px;">Please connect your Google account to confirm invoices.</div>
-                        <button class="action-btn" style="margin-top: 12px;" onclick="connectGoogle('invoice')">Connect Google Account</button>`, false);
-                    return;
-                }
                 
                 if (result.success) {
                     // Update buttons to show PDF and Email options
@@ -2760,19 +2653,7 @@
                             '<button class="action-btn" onclick="openEmailModalWithInvoice(\'' + data.pdfUrl + '\', \'' + data.invoiceNumber + '\', \'' + data.customer.replace(/'/g, "\\'") + '\')">Draft Invoice Email</button>';
                     }
                     
-                    // Build confirmation message with inventory updates
-                    let confirmMsg = 'Invoice ' + data.invoiceNumber + ' confirmed and added to spreadsheet.';
-                    if (result.deductions && result.deductions.length > 0) {
-                        confirmMsg += '<br><br><strong>Roasted inventory updated:</strong><br>';
-                        result.deductions.forEach(d => {
-                            confirmMsg += `• ${d.product}: -${d.deducted} lb (${d.remaining} lb remaining)<br>`;
-                        });
-                    }
-                    
-                    addMessage(confirmMsg, false);
-                    
-                    // Reload inventory to reflect changes
-                    await loadInventory();
+                    addMessage('Invoice ' + data.invoiceNumber + ' confirmed and added to spreadsheet.', false);
                     
                     window.pendingInvoiceData = null;
                     
@@ -2791,12 +2672,6 @@
 
         // Gemini-powered conversational follow-up
         async function addConversationalFollowUp(context) {
-            // For unclear requests, just show buttons without another message
-            if (context === 'unclear_request') {
-                addFollowUpButtons();
-                return;
-            }
-            
             try {
                 const response = await fetch('/api/chat/respond', {
                     method: 'POST',
@@ -2831,20 +2706,6 @@
                 addFollowUpMessage();
             }
         }
-        
-        function addFollowUpButtons() {
-            // Just buttons, no message
-            let html = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
-            html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
-            html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
-            html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
-            html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
-            html += '<button class="action-btn" onclick="openManageInventory()">Manage Inventory</button>';
-            html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
-            html += '</div>';
-            
-            addMessage(html, false);
-        }
 
         function addFollowUpMessage() {
             let html = '<div style="margin-bottom: 12px;">What else can I help with?</div>';
@@ -2862,7 +2723,6 @@
         
         function manageRetailPlaceholder() {
             addMessage('Manage Retail feature coming soon! This will allow you to update retail coffee bag sales.', false);
-            addFollowUpMessage();
         }
 
         function useQuickAction(prompt) {

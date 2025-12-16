@@ -82,7 +82,7 @@ if (process.env.GOOGLE_REFRESH_TOKEN) {
     refresh_token: process.env.GOOGLE_REFRESH_TOKEN
   };
   oauth2Client.setCredentials(userTokens);
-  console.log('📝 Google refresh token loaded from environment (will verify on first use)');
+  console.log('✓ Google account auto-connected from saved refresh token');
 }
 
 // AWS Transcribe configuration (standard, not medical)
@@ -255,15 +255,6 @@ let roastedCoffeeInventory = [
     ]
   },
   {
-    id: 'colombia-excelso',
-    name: 'Colombia Excelso',
-    weight: 50,
-    type: 'Single Origin',
-    recipe: [
-      { greenCoffeeId: 'colombia-antioquia', name: 'Colombia Antioquia', percentage: 100 }
-    ]
-  },
-  {
     id: 'colombia-decaf',
     name: 'Colombia Decaf',
     weight: 30,
@@ -318,316 +309,6 @@ function formatInventorySummary() {
   return summary;
 }
 
-// ============ Inventory Sync with Google Sheets ============
-
-// Sync inventory TO Google Sheets - Single "Inventory" sheet format
-async function syncInventoryToSheets() {
-  if (!userTokens) {
-    console.log('⚠️ Cannot sync inventory - Google not connected');
-    return { success: false, error: 'Google not connected' };
-  }
-
-  try {
-    oauth2Client.setCredentials(userTokens);
-    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
-
-    // Generate PST timestamp
-    const now = new Date();
-    const pstTimestamp = now.toLocaleString('en-US', {
-      timeZone: 'America/Los_Angeles',
-      month: 'long',
-      day: 'numeric',
-      year: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    }) + ' PST';
-
-    // Build combined inventory data (Column A empty, Row 1 empty)
-    const data = [];
-    
-    // Row 1: empty
-    data.push(['', '', '', '', '', '', '']);
-    
-    // Row 2: Last updated timestamp
-    data.push(['', `Last updated: ${pstTimestamp}`, '', '', '', '', '']);
-    
-    // Row 3: empty (spacing)
-    data.push(['', '', '', '', '', '', '']);
-    
-    // GREEN COFFEE SECTION
-    data.push(['', 'Green Coffee Inventory', '', '', '', '', '']);
-    data.push(['', 'Name', 'Weight (lb)', 'Roast Profile', 'Drop Temp', '', '']);
-    greenCoffeeInventory.forEach(c => {
-      data.push(['', c.name, c.weight, c.roastProfile || '', c.dropTemp || '', '', '']);
-    });
-    
-    // Empty row
-    data.push(['', '', '', '', '', '', '']);
-    
-    // ROASTED COFFEE SECTION
-    data.push(['', 'Roasted Coffee Inventory', '', '', '', '', '']);
-    data.push(['', 'Name', 'Weight (lb)', 'Type', 'Recipe', '', '']);
-    roastedCoffeeInventory.forEach(c => {
-      const recipe = c.recipe ? c.recipe.map(r => `${r.percentage}% ${r.name}`).join(' + ') : 'N/A';
-      data.push(['', c.name, c.weight, c.type || '', recipe, '', '']);
-    });
-    
-    // Empty row
-    data.push(['', '', '', '', '', '', '']);
-    
-    // EN ROUTE SECTION
-    data.push(['', 'En Route Inventory', '', '', '', '', '']);
-    data.push(['', 'Name', 'Weight (lb)', 'Type', 'Tracking Number', 'Date Ordered', 'Estimated Ship Date']);
-    if (enRouteCoffeeInventory.length > 0) {
-      enRouteCoffeeInventory.forEach(c => {
-        // Only show estimated delivery if tracking number exists
-        const estDelivery = c.trackingNumber ? (c.estimatedDelivery || '') : '';
-        const dateOrdered = c.dateOrdered || c.orderDate || c.dateAdded || '';
-        data.push(['', c.name, c.weight, c.type || '', c.trackingNumber || '', dateOrdered, estDelivery]);
-      });
-    }
-
-    // Clear and write to Inventory sheet
-    await sheets.spreadsheets.values.clear({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Inventory!A:G'
-    }).catch(() => {}); // Ignore if sheet doesn't exist
-
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Inventory!A1',
-      valueInputOption: 'USER_ENTERED',
-      requestBody: { values: data }
-    }).catch(async (err) => {
-      // Sheet might not exist, try to create it
-      console.log('Creating Inventory sheet...');
-      await sheets.spreadsheets.batchUpdate({
-        spreadsheetId: SPREADSHEET_ID,
-        requestBody: {
-          requests: [{ addSheet: { properties: { title: 'Inventory' } } }]
-        }
-      });
-      await sheets.spreadsheets.values.update({
-        spreadsheetId: SPREADSHEET_ID,
-        range: 'Inventory!A1',
-        valueInputOption: 'USER_ENTERED',
-        requestBody: { values: data }
-      });
-    });
-
-    const timestamp = new Date().toISOString();
-    console.log(`✅ Inventory synced to Google Sheets at ${timestamp}`);
-    return { success: true, timestamp };
-
-  } catch (error) {
-    console.error('❌ Inventory sync error:', error.message);
-    return { success: false, error: error.message };
-  }
-}
-
-// Load inventory FROM Google Sheets - reads from single "Inventory" sheet
-async function loadInventoryFromSheets() {
-  if (!userTokens) {
-    console.log('⚠️ Cannot load inventory - Google not connected, using defaults');
-    return { success: false, error: 'Google not connected' };
-  }
-
-  try {
-    oauth2Client.setCredentials(userTokens);
-    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
-
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Inventory!A:F'
-    });
-    
-    const rows = response.data.values || [];
-    if (rows.length === 0) {
-      console.log('⚠️ Inventory sheet empty, using defaults');
-      return { success: false, error: 'Sheet empty' };
-    }
-
-    // Parse the combined sheet - find section headers
-    let currentSection = null;
-    const tempGreen = [];
-    const tempRoasted = [];
-    const tempEnRoute = [];
-
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      const cellB = (row[1] || '').toString().toLowerCase();
-      
-      // Detect section headers
-      if (cellB.includes('green coffee inventory')) {
-        currentSection = 'green';
-        continue;
-      } else if (cellB.includes('roasted coffee inventory')) {
-        currentSection = 'roasted';
-        continue;
-      } else if (cellB.includes('en route inventory')) {
-        currentSection = 'enroute';
-        continue;
-      }
-      
-      // Skip header rows, empty rows, and timestamp row
-      if (!row[1] || cellB === 'name' || cellB === '' || cellB.startsWith('last updated')) continue;
-      
-      // Parse data based on current section
-      if (currentSection === 'green' && row[1]) {
-        tempGreen.push({
-          id: row[1].toLowerCase().replace(/\s+/g, '-'),
-          name: row[1],
-          weight: parseFloat(row[2]) || 0,
-          roastProfile: row[3] || '',
-          dropTemp: parseFloat(row[4]) || 0
-        });
-      } else if (currentSection === 'roasted' && row[1]) {
-        tempRoasted.push({
-          id: row[1].toLowerCase().replace(/\s+/g, '-'),
-          name: row[1],
-          weight: parseFloat(row[2]) || 0,
-          type: row[3] || '',
-          recipe: null
-        });
-      } else if (currentSection === 'enroute' && row[1]) {
-        tempEnRoute.push({
-          id: row[1].toLowerCase().replace(/\s+/g, '-') + '-' + Date.now(),
-          name: row[1],
-          weight: parseFloat(row[2]) || 0,
-          type: row[3] || '',
-          trackingNumber: row[4] || '',
-          dateOrdered: row[5] || '',
-          estimatedDelivery: row[6] || ''
-        });
-      }
-    }
-
-    // Only update if we found data
-    if (tempGreen.length > 0) {
-      greenCoffeeInventory = tempGreen;
-      console.log(`📗 Loaded ${greenCoffeeInventory.length} green coffees from Sheets`);
-    }
-    if (tempRoasted.length > 0) {
-      roastedCoffeeInventory = tempRoasted;
-      console.log(`📕 Loaded ${roastedCoffeeInventory.length} roasted coffees from Sheets`);
-    }
-    if (tempEnRoute.length > 0) {
-      enRouteCoffeeInventory = tempEnRoute;
-      console.log(`📦 Loaded ${enRouteCoffeeInventory.length} en route items from Sheets`);
-    }
-
-    return { success: true };
-
-  } catch (error) {
-    console.error('❌ Load inventory error:', error.message);
-    return { success: false, error: error.message };
-  }
-}
-
-// Schedule weekly sync: Every Thursday at 11:59 PM Los Angeles time
-let lastSyncTime = null;
-let nextScheduledSync = null;
-
-function getNextThursday1159PM() {
-  // Get current time in Los Angeles
-  const now = new Date();
-  const laTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
-  
-  // Find next Thursday
-  const dayOfWeek = laTime.getDay(); // 0 = Sunday, 4 = Thursday
-  let daysUntilThursday = (4 - dayOfWeek + 7) % 7;
-  
-  // If it's Thursday, check if we're past 11:59 PM
-  if (daysUntilThursday === 0) {
-    const currentHour = laTime.getHours();
-    const currentMinute = laTime.getMinutes();
-    if (currentHour > 23 || (currentHour === 23 && currentMinute >= 59)) {
-      daysUntilThursday = 7; // Next Thursday
-    }
-  }
-  
-  // If today is past Thursday, wait until next week
-  if (daysUntilThursday === 0 && laTime.getHours() >= 23 && laTime.getMinutes() >= 59) {
-    daysUntilThursday = 7;
-  }
-  
-  // Calculate target date in LA timezone
-  const targetLA = new Date(laTime);
-  targetLA.setDate(targetLA.getDate() + daysUntilThursday);
-  targetLA.setHours(23, 59, 0, 0);
-  
-  // Convert back to UTC for scheduling
-  // Create a date string in LA timezone and parse it
-  const targetString = targetLA.toLocaleString('en-US', { 
-    timeZone: 'America/Los_Angeles',
-    year: 'numeric', month: '2-digit', day: '2-digit',
-    hour: '2-digit', minute: '2-digit', second: '2-digit',
-    hour12: false
-  });
-  
-  // Parse and get the UTC equivalent
-  const [datePart, timePart] = targetString.split(', ');
-  const [month, day, year] = datePart.split('/');
-  const [hour, minute, second] = timePart.split(':');
-  
-  // Create date in LA timezone, then get UTC time
-  const laDate = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`);
-  
-  // Adjust for LA timezone offset (PST = -8, PDT = -7)
-  // We need to add the offset to get UTC
-  const janOffset = new Date(laDate.getFullYear(), 0, 1).getTimezoneOffset();
-  const julOffset = new Date(laDate.getFullYear(), 6, 1).getTimezoneOffset();
-  const isDST = laDate.getTimezoneOffset() < Math.max(janOffset, julOffset);
-  const laOffsetHours = isDST ? 7 : 8; // PDT = -7, PST = -8
-  
-  const utcTarget = new Date(laDate.getTime() + (laOffsetHours * 60 * 60 * 1000));
-  
-  return utcTarget;
-}
-
-function scheduleWeeklySync() {
-  const nextSync = getNextThursday1159PM();
-  const now = new Date();
-  const msUntilSync = nextSync.getTime() - now.getTime();
-  
-  // Ensure we don't schedule in the past
-  const actualMs = Math.max(msUntilSync, 60000); // At least 1 minute
-  
-  nextScheduledSync = nextSync.toISOString();
-  
-  console.log(`📅 Next inventory sync scheduled for: ${nextSync.toLocaleString('en-US', { 
-    timeZone: 'America/Los_Angeles',
-    weekday: 'long',
-    year: 'numeric', 
-    month: 'long', 
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZoneName: 'short'
-  })}`);
-  console.log(`   (in ${Math.round(actualMs / 1000 / 60 / 60)} hours)`);
-  
-  setTimeout(async () => {
-    console.log('🔄 Running weekly inventory sync (Thursday 11:59 PM LA)...');
-    const result = await syncInventoryToSheets();
-    if (result.success) {
-      lastSyncTime = result.timestamp;
-    }
-    // Schedule next week's sync
-    scheduleWeeklySync();
-  }, actualMs);
-}
-
-// Start the weekly schedule
-scheduleWeeklySync();
-
-// Also load from Sheets on startup after a delay (to allow Google connection)
-setTimeout(async () => {
-  console.log('🔄 Running startup inventory load...');
-  await loadInventoryFromSheets();
-}, 5000);
-
 // ============ Google OAuth Routes ============
 
 app.get('/auth/google', (req, res) => {
@@ -672,66 +353,17 @@ app.get('/auth/google/callback', async (req, res) => {
   }
 });
 
-app.get('/api/google/status', async (req, res) => {
-  if (!userTokens) {
-    return res.json({ connected: false, services: [] });
-  }
-  
-  // Verify tokens are actually valid by trying to get access token
-  try {
-    oauth2Client.setCredentials(userTokens);
-    const { token } = await oauth2Client.getAccessToken();
-    if (token) {
-      res.json({ 
-        connected: true,
-        services: ['Gmail', 'Sheets']
-      });
-    } else {
-      // Token refresh failed, clear tokens
-      console.log('⚠️ Google token refresh failed, clearing tokens');
-      userTokens = null;
-      res.json({ connected: false, services: [] });
-    }
-  } catch (error) {
-    console.log('⚠️ Google token validation failed:', error.message);
-    userTokens = null;
-    res.json({ connected: false, services: [] });
-  }
+app.get('/api/google/status', (req, res) => {
+  res.json({ 
+    connected: !!userTokens,
+    services: userTokens ? ['Gmail', 'Sheets'] : []
+  });
 });
 
 app.get('/api/google/disconnect', (req, res) => {
   userTokens = null;
   oauth2Client.revokeCredentials();
   res.json({ success: true });
-});
-
-// ============ Inventory Sync Endpoints ============
-
-// Manual sync to Google Sheets
-app.post('/api/inventory/sync', async (req, res) => {
-  console.log('📤 Manual inventory sync triggered');
-  const result = await syncInventoryToSheets();
-  if (result.success) {
-    lastSyncTime = result.timestamp;
-  }
-  res.json(result);
-});
-
-// Load inventory from Google Sheets
-app.post('/api/inventory/load', async (req, res) => {
-  console.log('📥 Manual inventory load triggered');
-  const result = await loadInventoryFromSheets();
-  res.json(result);
-});
-
-// Get sync status
-app.get('/api/inventory/sync-status', (req, res) => {
-  res.json({
-    lastSync: lastSyncTime,
-    nextSync: nextScheduledSync,
-    schedule: 'Every Thursday at 11:59 PM Los Angeles time',
-    googleConnected: !!userTokens
-  });
 });
 
 // ============ Gmail Routes ============
@@ -1165,8 +797,7 @@ Examples:
       return res.json({ 
         success: false,
         error: "Sorry, I didn't get that. What can I help you with?",
-        showFollowUp: false,
-        action: 'unclear'
+        showFollowUp: true
       });
     }
     
@@ -1174,8 +805,7 @@ Examples:
       return res.json({ 
         success: false,
         error: "Sorry, I didn't get that. What can I help you with?",
-        showFollowUp: false,
-        action: 'unclear'
+        showFollowUp: true
       });
     }
     
@@ -1401,9 +1031,7 @@ app.post('/api/invoice/confirm', async (req, res) => {
   }
 
   try {
-    console.log(`🔔 /api/invoice/confirm called with body:`, JSON.stringify(req.body));
-    const { invoiceNumber, date, total, items } = req.body;
-    console.log(`🔔 Extracted items:`, items);
+    const { invoiceNumber, date, total } = req.body;
     
     if (!invoiceNumber || !date || total === undefined) {
       return res.status(400).json({ error: 'Missing invoice details' });
@@ -1425,62 +1053,7 @@ app.post('/api/invoice/confirm', async (req, res) => {
 
     console.log(`✅ Invoice ${invoiceNumber} confirmed and recorded in spreadsheet`);
 
-    // Deduct items from roasted coffee inventory
-    const deductions = [];
-    console.log(`🔍 Items received for deduction:`, JSON.stringify(items));
-    console.log(`🔍 Current roasted inventory:`, roastedCoffeeInventory.map(c => ({ name: c.name, weight: c.weight })));
-    
-    if (items && items.length > 0) {
-      for (const item of items) {
-        // Find matching roasted coffee by description/product name
-        const productName = item.description ? item.description.replace(' (units in lbs)', '') : item.product;
-        const quantity = item.quantity || 0;
-        
-        console.log(`🔍 Looking for "${productName}" (quantity: ${quantity})`);
-        
-        // Search for matching roasted coffee with flexible matching
-        const roastedMatch = roastedCoffeeInventory.find(c => {
-          const cName = c.name.toLowerCase();
-          const pName = productName.toLowerCase();
-          // Exact match
-          if (cName === pName) return true;
-          // Partial match (e.g., "Ethiopia Gera" matches "Ethiopia Gera Natural")
-          if (cName.includes(pName) || pName.includes(cName)) return true;
-          // Handle "Archives" matching "Archives Blend"
-          if (pName.includes('archives') && cName.includes('archives')) return true;
-          if (pName.includes('ethiopia') && cName.includes('ethiopia')) return true;
-          if (pName.includes('decaf') && cName.includes('decaf')) return true;
-          return false;
-        });
-        
-        if (roastedMatch && quantity > 0) {
-          const previousWeight = roastedMatch.weight;
-          roastedMatch.weight = Math.max(0, roastedMatch.weight - quantity);
-          
-          deductions.push({
-            product: roastedMatch.name,
-            deducted: quantity,
-            previous: previousWeight,
-            remaining: roastedMatch.weight
-          });
-          
-          console.log(`📦 Deducted ${quantity} lb from ${roastedMatch.name}: ${previousWeight} → ${roastedMatch.weight} lb`);
-        } else {
-          console.log(`⚠️ No match found for "${productName}" in roasted inventory`);
-        }
-      }
-    } else {
-      console.log(`⚠️ No items array received for deduction`);
-    }
-
-    res.json({ 
-      success: true, 
-      message: `Invoice ${invoiceNumber} confirmed`,
-      deductions: deductions
-    });
-
-    // Sync inventory to Sheets in background (don't await)
-    syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
+    res.json({ success: true, message: `Invoice ${invoiceNumber} confirmed` });
 
   } catch (error) {
     console.error('Invoice confirmation error:', error);
@@ -1611,17 +1184,68 @@ app.post('/api/process', async (req, res) => {
       return res.status(400).json({ error: 'Text is required' });
     }
     
+    // Quick pattern matching for common phrases (fallback when rate limited)
     const textLower = text.toLowerCase().trim();
     
-    // Only handle simple yes/no/thanks without AI (for speed)
-    if (textLower === 'yes' || textLower === 'yeah' || textLower === 'yep') {
-      if (conversationState === 'waiting_for_new_customer_confirmation') {
+    // Handle simple yes/no without AI
+    if (textLower === 'no' || textLower === 'cancel' || textLower === 'nope') {
+      return res.json({
+        response: "No problem!",
+        action: 'declined',
+        showFollowUp: true
+      });
+    }
+    
+    // Handle "never mind" with topic change detection
+    if (textLower.includes('never mind') || textLower.includes('nevermind')) {
+      // Check if they're also asking for something else
+      if (textLower.includes('inventory') || textLower.includes('help me with')) {
+        // They want to switch to inventory
+        let summary = 'No problem! Here\'s your current inventory:\n\n';
+        summary += 'ROASTED COFFEE:\n';
+        roastedCoffeeInventory.forEach(c => { summary += `• ${c.name}: ${c.weight} lb\n`; });
+        summary += '\nGREEN COFFEE:\n';
+        greenCoffeeInventory.forEach(c => { summary += `• ${c.name}: ${c.weight} lb\n`; });
+        if (enRouteCoffeeInventory.length > 0) {
+          summary += `\nEN ROUTE: ${enRouteCoffeeInventory.length} item(s)`;
+        }
         return res.json({
-          response: "Great! Adding them now...",
-          action: 'confirm_add_customer',
-          showFollowUp: false
+          response: summary,
+          action: 'check_inventory',
+          showFollowUp: true
         });
       }
+      return res.json({
+        response: "No problem! What else can I help you with?",
+        action: 'declined',
+        showFollowUp: true
+      });
+    }
+    
+    // Handle help with inventory requests
+    if (textLower.includes('help') && textLower.includes('inventory')) {
+      let summary = 'Sure! Here\'s your current inventory:\n\n';
+      summary += 'ROASTED COFFEE:\n';
+      roastedCoffeeInventory.forEach(c => { summary += `• ${c.name}: ${c.weight} lb\n`; });
+      summary += '\nGREEN COFFEE:\n';
+      greenCoffeeInventory.forEach(c => { summary += `• ${c.name}: ${c.weight} lb\n`; });
+      if (enRouteCoffeeInventory.length > 0) {
+        summary += `\nEN ROUTE: ${enRouteCoffeeInventory.length} item(s)`;
+      }
+      return res.json({
+        response: summary,
+        action: 'check_inventory',
+        showFollowUp: true
+      });
+    }
+    
+    if ((textLower === 'yes' || textLower === 'yeah' || textLower === 'yep' || textLower.includes('yes, add')) && 
+        conversationState === 'waiting_for_new_customer_confirmation') {
+      return res.json({
+        response: "Great! Adding them now...",
+        action: 'confirm_add_customer',
+        showFollowUp: false
+      });
     }
     
     if (textLower === 'thanks' || textLower === 'thank you' || textLower === "that's all") {
@@ -1632,158 +1256,296 @@ app.post('/api/process', async (req, res) => {
       });
     }
     
-    // Build comprehensive context for Gemini - let it handle everything else
-    const customerDetails = Object.entries(customers).map(([name, data]) => 
-      `${name} (${data.code}): ${data.email || 'no email'}`
-    ).join('\n');
+    // Quick inventory check patterns - handle without AI
+    const inventoryPatterns = [
+      /how much (.+) do (?:we|i) have/i,
+      /what(?:'s| is) (?:the|our) (.+) (?:inventory|stock|level)/i,
+      /check (.+) (?:inventory|stock|level)/i,
+      /(.+) (?:inventory|stock|level)/i,
+      /do we have (?:any )?(.+)/i,
+      /how many (?:lbs?|pounds?) of (.+)/i
+    ];
     
-    const roastedSummary = roastedCoffeeInventory.length > 0 
-      ? roastedCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb`).join('\n')
-      : '- None in stock';
-      
-    const greenSummary = greenCoffeeInventory.length > 0
-      ? greenCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb`).join('\n')
-      : '- None in stock';
-      
-    const enRouteSummary = enRouteCoffeeInventory.length > 0
-      ? enRouteCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb (tracking: ${c.trackingNumber || 'none'})`).join('\n')
-      : '- Nothing en route';
+    // Check for green coffee category request first
+    if (textLower.includes('green coffee') || textLower.includes('green inventory') || textLower.includes('unroasted')) {
+      let summary = 'GREEN COFFEE INVENTORY:\n';
+      if (greenCoffeeInventory.length > 0) {
+        greenCoffeeInventory.forEach(c => {
+          summary += `• ${c.name}: ${c.weight} lb\n`;
+        });
+      } else {
+        summary += '• None in stock\n';
+      }
+      return res.json({
+        response: summary,
+        action: 'check_inventory',
+        showFollowUp: true
+      });
+    }
     
-    // Gemini-first approach - let it handle everything with full context
+    // Check for roasted coffee category request
+    if (textLower.includes('roasted coffee') || textLower.includes('roasted inventory')) {
+      let summary = 'ROASTED COFFEE INVENTORY:\n';
+      if (roastedCoffeeInventory.length > 0) {
+        roastedCoffeeInventory.forEach(c => {
+          summary += `• ${c.name}: ${c.weight} lb\n`;
+        });
+      } else {
+        summary += '• None in stock\n';
+      }
+      return res.json({
+        response: summary,
+        action: 'check_inventory',
+        showFollowUp: true
+      });
+    }
+    
+    for (const pattern of inventoryPatterns) {
+      const match = textLower.match(pattern);
+      if (match) {
+        const searchTerm = match[1].trim().replace(/\?$/, '');
+        
+        // Skip if it's just "green" or "roasted" alone - handled above
+        if (searchTerm === 'green' || searchTerm === 'roasted' || searchTerm === 'green coffee' || searchTerm === 'roasted coffee') {
+          continue;
+        }
+        
+        // Search in roasted coffee inventory
+        const roastedMatch = roastedCoffeeInventory.find(c => 
+          c.name.toLowerCase().includes(searchTerm) ||
+          searchTerm.includes(c.name.toLowerCase()) ||
+          (searchTerm.includes('blend') && c.name.toLowerCase().includes('blend')) ||
+          (searchTerm.includes('decaf') && c.name.toLowerCase().includes('decaf')) ||
+          (searchTerm.includes('ethiopia') && c.name.toLowerCase().includes('ethiopia')) ||
+          (searchTerm.includes('colombia') && c.name.toLowerCase().includes('colombia'))
+        );
+        
+        if (roastedMatch) {
+          return res.json({
+            response: `You have ${roastedMatch.weight} lb of ${roastedMatch.name} in roasted inventory.`,
+            action: 'check_inventory',
+            showFollowUp: true
+          });
+        }
+        
+        // Search in green coffee inventory
+        const greenMatch = greenCoffeeInventory.find(c => 
+          c.name.toLowerCase().includes(searchTerm) ||
+          searchTerm.includes(c.name.toLowerCase())
+        );
+        
+        if (greenMatch) {
+          return res.json({
+            response: `You have ${greenMatch.weight} lb of ${greenMatch.name} in green coffee inventory.`,
+            action: 'check_inventory',
+            showFollowUp: true
+          });
+        }
+        
+        // Not found - don't show follow-up since there's an unanswered question
+        return res.json({
+          response: `I couldn't find "${searchTerm}" in inventory. Would you like me to check the full inventory?`,
+          action: 'check_inventory',
+          showFollowUp: false
+        });
+      }
+    }
+
+    // Try to parse invoice pattern without AI first (for rate limit fallback)
+    const invoicePattern = /(?:invoice|order|bill)?\s*(?:for\s+)?(\w+(?:'s)?(?:\s+\w+)?)\s*[,.]?\s*(\d+)\s*(?:lbs?|pounds?|lb)?\s*(?:of\s+)?(.+)/i;
+    const simplePattern = /^(\w+(?:'s)?(?:\s+\w+)?)\s+(\d+)\s*(?:lbs?|pounds?|lb)?\s*(.+)$/i;
+    
+    let fallbackData = null;
+    const match = text.match(invoicePattern) || text.match(simplePattern);
+    if (match) {
+      const customerInput = match[1].trim();
+      const quantity = parseInt(match[2]);
+      const product = match[3].trim();
+      
+      // Match customer
+      const matchedCustomer = getKnownCustomers().find(c => 
+        c.toLowerCase() === customerInput.toLowerCase() ||
+        customerInput.toLowerCase().includes(c.toLowerCase()) ||
+        c.toLowerCase().includes(customerInput.toLowerCase())
+      );
+      
+      fallbackData = {
+        intent: 'create_invoice',
+        customer: matchedCustomer || customerInput,
+        items: [{ quantity, product }],
+        isKnownCustomer: !!matchedCustomer
+      };
+    }
+    
+    // Try Gemini with retry
     let intentData = null;
     try {
-      const intentPrompt = `You are Mise, an AI assistant for Archives of Us Coffee inventory and invoicing.
+      const intentPrompt = `You are Mise, an AI assistant for Archives of Us Coffee inventory management.
 
-=== CURRENT DATA ===
+AVAILABLE INTENTS:
+- "check_inventory": User is asking about current stock levels, how much of something they have, inventory questions, or wants help with inventory
+- "create_invoice": User wants to create an invoice for a customer (must mention customer name AND quantity)
+- "order_roast": User wants to order roasted coffee
+- "view_en_route": User wants to check shipped orders or tracking
+- "general_question": Other questions or conversation
+- "decline": User is declining, canceling, saying "never mind", or changing topics away from a previous request
+
+KNOWN CUSTOMERS: ${getKnownCustomers().join(', ')}
 
 ROASTED COFFEE INVENTORY:
-${roastedSummary}
+${roastedCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb`).join('\n')}
 
-GREEN COFFEE INVENTORY (unroasted beans):
-${greenSummary}
+GREEN COFFEE INVENTORY:
+${greenCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb`).join('\n')}
 
-EN ROUTE (shipped, not yet delivered):
-${enRouteSummary}
+CONVERSATION CONTEXT: ${conversationState || 'none'}
 
-CUSTOMERS:
-${customerDetails}
+User said: "${text}"
 
-CONVERSATION STATE: ${conversationState || 'none'}
+IMPORTANT RULES:
+1. If user says "never mind", "cancel", "actually", "wait", or changes topic → intent is "decline"
+2. If user asks "can you help me with inventory" or "help with inventory" → intent is "check_inventory"  
+3. If user asks "how much X do I have" or anything about inventory levels → intent is "check_inventory"
+4. Only use "create_invoice" if user clearly mentions a customer name AND a quantity
+5. Be flexible - understand natural conversation and topic changes
+6. For inventory checks, include the actual inventory data in friendlyResponse
 
-=== USER MESSAGE ===
-"${text}"
-
-=== YOUR TASK ===
-Understand what the user wants and respond helpfully.
-
-AVAILABLE ACTIONS:
-- "check_inventory": User asking about stock levels, inventory, how much of something
-- "create_invoice": User wants to invoice a customer (needs customer + quantity + product)
-- "order_roast": User wants to place a roast order
-- "view_en_route": User asking about shipments or tracking
-- "decline": User canceling, saying never mind, changing topics, or saying no/cancel/nope
-- "general": Conversation, questions, or unclear requests
-
-GUIDELINES:
-1. If user asks about inventory, provide the ACTUAL DATA from above
-2. If user asks about "green coffee" or "unroasted", show GREEN COFFEE data
-3. If unclear, ask a clarifying question - don't say you don't understand
-4. If you ask a question, set needsFollowUp to true
-
-Respond with JSON only:
+Respond ONLY with valid JSON:
 {
-  "intent": "<action>",
-  "response": "<your helpful response with actual data>",
-  "customer": "<customer name or null>",
-  "items": [{"quantity": <number>, "product": "<product>"}],
+  "intent": "<one of the intents above>",
+  "customer": "<customer name if invoice>",
+  "items": [{"quantity": <number>, "product": "<product name>"}],
   "isKnownCustomer": <true/false>,
-  "needsFollowUp": <true if you asked a question>
+  "friendlyResponse": "<conversational response with actual data if inventory check>",
+  "conversationComplete": <true/false>,
+  "coffeeAskedAbout": "<coffee name if inventory check>"
 }`;
 
-      const intentText = await callGeminiWithRetry(intentPrompt, { temperature: 0.2, maxRetries: 2 });
-      console.log('🤖 Gemini response:', intentText);
+      const intentText = await callGeminiWithRetry(intentPrompt, { temperature: 0.1, maxRetries: 2 });
+      console.log(`🤖 Intent detection: ${intentText}`);
       
       const cleanJson = intentText.replace(/```json\n?|\n?```/g, '').trim();
       intentData = JSON.parse(cleanJson);
       
     } catch (error) {
       if (error.message === 'RATE_LIMITED') {
-        console.log('⚠️ Rate limited');
-        return res.json({
-          response: "I'm a bit busy right now. Please try again in a moment.",
-          action: 'rate_limited',
-          showFollowUp: true
-        });
+        console.log('⚠️ Rate limited, using fallback pattern matching');
+        if (fallbackData) {
+          intentData = fallbackData;
+        } else {
+          return res.json({
+            response: "I'm a bit busy right now. Please try again in a moment, or use the quick action buttons below.",
+            action: 'rate_limited',
+            showFollowUp: true
+          });
+        }
       } else {
-        console.error('Gemini error:', error);
-        return res.json({
-          response: "Sorry, I didn't get that. What can I help you with?",
-          action: 'unclear',
-          showFollowUp: false
-        });
+        throw error;
       }
     }
     
     if (!intentData) {
       return res.json({ 
         response: "Sorry, I didn't get that. What can I help you with?",
-        action: 'unclear',
+        action: null,
         showFollowUp: false
       });
     }
     
-    // Use Gemini's response directly - it has all the data
-    const intent = intentData.intent;
-    const geminiResponse = intentData.response;
-    const needsFollowUp = intentData.needsFollowUp;
-    
-    // Handle check_inventory - use Gemini's response
-    if (intent === 'check_inventory') {
+    // Handle check_inventory intent
+    if (intentData.intent === 'check_inventory') {
+      // Build a full inventory summary
+      let summary = 'Here\'s your current inventory:\n\n';
+      
+      summary += 'ROASTED COFFEE:\n';
+      if (roastedCoffeeInventory.length > 0) {
+        roastedCoffeeInventory.forEach(c => {
+          summary += `• ${c.name}: ${c.weight} lb\n`;
+        });
+      } else {
+        summary += '• None\n';
+      }
+      
+      summary += '\nGREEN COFFEE:\n';
+      if (greenCoffeeInventory.length > 0) {
+        greenCoffeeInventory.forEach(c => {
+          summary += `• ${c.name}: ${c.weight} lb\n`;
+        });
+      } else {
+        summary += '• None\n';
+      }
+      
+      if (enRouteCoffeeInventory.length > 0) {
+        summary += `\nEN ROUTE: ${enRouteCoffeeInventory.length} item(s)`;
+      }
+      
+      // If asking about specific coffee, just answer that
+      if (intentData.coffeeAskedAbout) {
+        const searchTerm = intentData.coffeeAskedAbout.toLowerCase();
+        const roastedMatch = roastedCoffeeInventory.find(c => 
+          c.name.toLowerCase().includes(searchTerm) ||
+          searchTerm.includes(c.name.toLowerCase())
+        );
+        
+        if (roastedMatch) {
+          return res.json({
+            response: `You have ${roastedMatch.weight} lb of ${roastedMatch.name} in roasted inventory.`,
+            action: 'check_inventory',
+            showFollowUp: true
+          });
+        }
+        
+        const greenMatch = greenCoffeeInventory.find(c => 
+          c.name.toLowerCase().includes(searchTerm) ||
+          searchTerm.includes(c.name.toLowerCase())
+        );
+        
+        if (greenMatch) {
+          return res.json({
+            response: `You have ${greenMatch.weight} lb of ${greenMatch.name} in green coffee inventory.`,
+            action: 'check_inventory',
+            showFollowUp: true
+          });
+        }
+      }
+      
+      // Return full summary
       return res.json({
-        response: geminiResponse,
+        response: summary,
         action: 'check_inventory',
-        showFollowUp: !needsFollowUp
+        showFollowUp: true
       });
     }
     
-    // Handle decline
-    if (intent === 'decline') {
+    // Handle order_roast intent
+    if (intentData.intent === 'order_roast') {
       return res.json({
-        response: geminiResponse || "No problem!",
+        response: "I can help you order roasts. Use the 'Order Roast' button to get started, or tell me which coffee you'd like to order.",
+        action: 'order_roast',
+        showFollowUp: true
+      });
+    }
+    
+    // Handle view_en_route intent
+    if (intentData.intent === 'view_en_route') {
+      return res.json({
+        response: "Use the 'En Route' button to view your shipped orders and tracking information.",
+        action: 'view_en_route',
+        showFollowUp: true
+      });
+    }
+    
+    // Handle decline/cancel
+    if (intentData.intent === 'decline') {
+      return res.json({
+        response: intentData.friendlyResponse || "No problem!",
         action: 'declined',
         showFollowUp: true
       });
     }
     
-    // Handle general questions
-    if (intent === 'general') {
-      return res.json({
-        response: geminiResponse,
-        action: 'general',
-        showFollowUp: !needsFollowUp
-      });
-    }
-    
-    // Handle order_roast intent
-    if (intent === 'order_roast') {
-      return res.json({
-        response: geminiResponse || "I can help you order roasts. Use the 'Order Roast' button to get started, or tell me which coffee you'd like to order.",
-        action: 'order_roast',
-        showFollowUp: !needsFollowUp
-      });
-    }
-    
-    // Handle view_en_route intent
-    if (intent === 'view_en_route') {
-      return res.json({
-        response: geminiResponse || "Use the 'En Route' button to view your shipped orders and tracking information.",
-        action: 'view_en_route',
-        showFollowUp: !needsFollowUp
-      });
-    }
-    
     // Handle confirm (when user types "yes" to add new customer)
-    if (intent === 'confirm' && conversationState === 'waiting_for_new_customer_confirmation') {
+    if (intentData.intent === 'confirm' && conversationState === 'waiting_for_new_customer_confirmation') {
       return res.json({
         response: "Great! Adding them now...",
         action: 'confirm_add_customer',
@@ -1842,19 +1604,19 @@ Respond with JSON only:
       } else {
         // Missing info for invoice
         return res.json({
-          response: geminiResponse || "I'd be happy to create an invoice! Could you provide the customer name, quantity, and product?",
+          response: intentData.friendlyResponse || "I'd be happy to create an invoice! Could you provide the customer name, quantity, and product?",
           action: 'need_more_info',
           showFollowUp: false
         });
       }
     }
     
-    // For other intents, return Gemini's response
+    // For other intents, return the friendly response with conversation state
     res.json({ 
-      response: geminiResponse || "How can I help you today?",
-      action: intent,
+      response: intentData.friendlyResponse || "How can I help you today?",
+      action: intentData.intent,
       data: intentData,
-      showFollowUp: !needsFollowUp
+      showFollowUp: intentData.conversationComplete === true
     });
   } catch (error) {
     console.error('AI processing error:', error);
@@ -2008,7 +1770,6 @@ app.post('/api/inventory/green/update', (req, res) => {
   if (roastProfile !== undefined) coffee.roastProfile = roastProfile;
   if (dropTemp !== undefined) coffee.dropTemp = dropTemp;
   res.json({ success: true, coffee });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Add new green coffee
@@ -2021,7 +1782,6 @@ app.post('/api/inventory/green/add', (req, res) => {
   const newCoffee = { id, name, weight, roastProfile, dropTemp };
   greenCoffeeInventory.push(newCoffee);
   res.json({ success: true, coffee: newCoffee });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Remove green coffee
@@ -2033,7 +1793,6 @@ app.post('/api/inventory/green/remove', (req, res) => {
   }
   greenCoffeeInventory.splice(index, 1);
   res.json({ success: true });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Get roasted coffee inventory
@@ -2052,7 +1811,6 @@ app.post('/api/inventory/roasted/update', (req, res) => {
   if (type !== undefined) coffee.type = type;
   if (recipe !== undefined) coffee.recipe = recipe;
   res.json({ success: true, coffee });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Add new roasted coffee
@@ -2062,7 +1820,6 @@ app.post('/api/inventory/roasted/add', (req, res) => {
   const newCoffee = { id, name, weight, type, recipe };
   roastedCoffeeInventory.push(newCoffee);
   res.json({ success: true, coffee: newCoffee });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Remove roasted coffee
@@ -2074,7 +1831,6 @@ app.post('/api/inventory/roasted/remove', (req, res) => {
   }
   roastedCoffeeInventory.splice(index, 1);
   res.json({ success: true });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Get en route inventory
@@ -2093,17 +1849,15 @@ app.post('/api/inventory/enroute/add', (req, res) => {
     type,
     recipe,
     trackingNumber: '',
-    dateOrdered: orderDate || new Date().toLocaleDateString('en-US'),
-    estimatedDelivery: '',
+    orderDate: orderDate || new Date().toISOString(),
     status: 'ordered'
   };
   enRouteCoffeeInventory.push(newItem);
   res.json({ success: true, item: newItem });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
-// Update tracking number and fetch estimated delivery
-app.post('/api/inventory/enroute/tracking', async (req, res) => {
+// Update tracking number
+app.post('/api/inventory/enroute/tracking', (req, res) => {
   const { id, trackingNumber } = req.body;
   const item = enRouteCoffeeInventory.find(c => c.id === id);
   if (!item) {
@@ -2111,18 +1865,7 @@ app.post('/api/inventory/enroute/tracking', async (req, res) => {
   }
   item.trackingNumber = trackingNumber;
   item.status = 'shipped';
-  
-  // Fetch estimated delivery date from UPS
-  if (trackingNumber) {
-    const trackingInfo = await getUPSEstimatedDelivery(trackingNumber);
-    if (trackingInfo && trackingInfo.estimatedDelivery) {
-      item.estimatedDelivery = trackingInfo.estimatedDelivery;
-      console.log(`📦 Tracking ${trackingNumber}: Est. delivery ${trackingInfo.estimatedDelivery}`);
-    }
-  }
-  
   res.json({ success: true, item });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Mark en route item as delivered (moves to roasted inventory)
@@ -2159,64 +1902,9 @@ app.post('/api/inventory/enroute/deliver', (req, res) => {
   enRouteCoffeeInventory.splice(index, 1);
   
   res.json({ success: true, message: `${item.name} (${item.weight}lb) added to roasted inventory` });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // ============ UPS Tracking API ============
-
-// Look up UPS tracking info and get estimated delivery date
-async function getUPSEstimatedDelivery(trackingNumber) {
-  if (!trackingNumber) return null;
-  
-  try {
-    // Use Gemini to extract delivery date from UPS tracking
-    const prompt = `I need to look up UPS tracking number: ${trackingNumber}
-
-Based on standard UPS Ground shipping times (typically 5-7 business days from ship date), and common tracking number patterns:
-- If it starts with "1Z" it's a valid UPS tracking number
-- Ground shipments from California typically take 5-7 business days
-
-Since this is a roasted coffee order that was just shipped, estimate the delivery date as approximately 5-7 business days from today.
-
-Respond with JSON only (no markdown):
-{
-  "estimatedDelivery": "MM/DD/YYYY format date, approximately 6 business days from today",
-  "status": "In Transit" or "Shipped",
-  "validFormat": true if starts with 1Z, false otherwise
-}`;
-
-    const response = await callGeminiWithRetry(prompt);
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    
-    if (jsonMatch) {
-      const data = JSON.parse(jsonMatch[0]);
-      return {
-        estimatedDelivery: data.estimatedDelivery || null,
-        status: data.status || 'In Transit',
-        validFormat: data.validFormat
-      };
-    }
-  } catch (error) {
-    console.error('UPS lookup error:', error);
-  }
-  
-  // Fallback: calculate ~6 business days from now
-  const today = new Date();
-  let businessDays = 6;
-  let deliveryDate = new Date(today);
-  while (businessDays > 0) {
-    deliveryDate.setDate(deliveryDate.getDate() + 1);
-    const dayOfWeek = deliveryDate.getDay();
-    if (dayOfWeek !== 0 && dayOfWeek !== 6) { // Skip weekends
-      businessDays--;
-    }
-  }
-  return {
-    estimatedDelivery: deliveryDate.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }),
-    status: 'In Transit',
-    validFormat: trackingNumber.startsWith('1Z')
-  };
-}
 
 // Look up UPS tracking info
 app.post('/api/ups/track', async (req, res) => {
@@ -2226,15 +1914,48 @@ app.post('/api/ups/track', async (req, res) => {
     return res.json({ error: 'No tracking number provided' });
   }
   
-  const trackingInfo = await getUPSEstimatedDelivery(trackingNumber);
-  
-  res.json({
-    trackingNumber,
-    status: trackingInfo?.status || 'Check UPS.com for status',
-    estimatedDelivery: trackingInfo?.estimatedDelivery || null,
-    validFormat: trackingInfo?.validFormat,
-    trackingUrl: `https://www.ups.com/track?tracknum=${trackingNumber}`
-  });
+  // Use Gemini to simulate tracking lookup (in production, use actual UPS API)
+  // For now, provide a helpful response with link to UPS
+  try {
+    const prompt = `A user wants to track a UPS package with tracking number: ${trackingNumber}
+
+Since I don't have direct access to UPS tracking API, provide a helpful response. 
+If the tracking number looks valid (1Z followed by alphanumeric characters, or starts with certain patterns), 
+say it appears to be a valid UPS tracking number.
+
+Respond with JSON only:
+{
+  "status": "In Transit" or "Shipped" or "Unknown",
+  "validFormat": true/false,
+  "message": "brief message about the tracking number"
+}`;
+
+    const response = await callGeminiWithRetry(prompt);
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    
+    if (jsonMatch) {
+      const data = JSON.parse(jsonMatch[0]);
+      res.json({
+        trackingNumber,
+        status: data.status || 'Check UPS.com for status',
+        validFormat: data.validFormat,
+        trackingUrl: `https://www.ups.com/track?tracknum=${trackingNumber}`
+      });
+    } else {
+      res.json({
+        trackingNumber,
+        status: 'Check UPS.com for status',
+        trackingUrl: `https://www.ups.com/track?tracknum=${trackingNumber}`
+      });
+    }
+  } catch (error) {
+    console.error('UPS tracking error:', error);
+    res.json({
+      trackingNumber,
+      status: 'Unable to verify',
+      trackingUrl: `https://www.ups.com/track?tracknum=${trackingNumber}`
+    });
+  }
 });
 
 // ============ Conversational Chat API ============
@@ -2579,9 +2300,6 @@ app.post('/api/roast-order/confirm', async (req, res) => {
     draftCreated,
     message: `Order confirmed! ${deductions.length > 0 ? 'Green coffee inventory updated.' : ''} ${enRouteItems.length} item(s) added to en route.${draftCreated ? ' Email draft created in Gmail.' : ''}`
   });
-
-  // Sync inventory to Sheets in background (don't await)
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // ============ Health Check ============

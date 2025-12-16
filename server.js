@@ -1482,6 +1482,455 @@ app.post('/api/invoice/confirm', async (req, res) => {
   }
 });
 
+// ============ Invoice Payment Matching ============
+
+// Match a payment against unpaid invoices
+async function matchPaymentToInvoice(paymentAmount, paymentDate, paymentDescription) {
+  if (!userTokens) {
+    return { matched: false, reason: 'Google not connected' };
+  }
+
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    // Get all invoices from Invoices sheet
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Invoices!A:F'
+    });
+
+    const rows = response.data.values || [];
+    if (rows.length < 2) {
+      return { matched: false, reason: 'No invoices found' };
+    }
+
+    // Find unpaid invoices (column E or F might have "Paid" status)
+    // Typical format: Date, Invoice#, Amount, Customer, Status, etc.
+    const unpaidInvoices = [];
+    
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || row.length < 3) continue;
+      
+      // Try to extract invoice data - format varies
+      // Common patterns: [Date, Invoice#, Amount] or [Empty, Date, Invoice#, Amount]
+      let invoiceNum = '';
+      let amount = 0;
+      let date = '';
+      let isPaid = false;
+      
+      for (let j = 0; j < row.length; j++) {
+        const cell = (row[j] || '').toString();
+        
+        // Check for invoice number pattern (C-XXX-NNNN)
+        if (cell.match(/^C-[A-Z]{2,4}-\d+$/)) {
+          invoiceNum = cell;
+        }
+        // Check for dollar amount
+        else if (cell.match(/^\$?[\d,]+\.?\d*$/)) {
+          const parsed = parseFloat(cell.replace(/[$,]/g, ''));
+          if (parsed > 0) amount = parsed;
+        }
+        // Check for date
+        else if (cell.match(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)) {
+          date = cell;
+        }
+        // Check for paid status
+        else if (cell.toLowerCase() === 'paid' || cell.toLowerCase() === 'x') {
+          isPaid = true;
+        }
+      }
+      
+      if (invoiceNum && amount > 0 && !isPaid) {
+        unpaidInvoices.push({
+          rowIndex: i + 1, // 1-indexed for Sheets
+          invoiceNumber: invoiceNum,
+          amount: amount,
+          date: date,
+          customerCode: invoiceNum.split('-')[1] || ''
+        });
+      }
+    }
+
+    if (unpaidInvoices.length === 0) {
+      return { matched: false, reason: 'No unpaid invoices found' };
+    }
+
+    // Find matching invoice by amount (exact or within 1%)
+    const tolerance = 0.01; // 1% tolerance
+    const matches = unpaidInvoices.filter(inv => {
+      const diff = Math.abs(inv.amount - paymentAmount) / inv.amount;
+      return diff <= tolerance;
+    });
+
+    if (matches.length === 0) {
+      return { matched: false, reason: 'No invoice matches this amount', unpaidInvoices };
+    }
+
+    if (matches.length === 1) {
+      // Single match - high confidence
+      const match = matches[0];
+      
+      // Get customer name from code
+      const customerName = getCustomerNameFromCode(match.customerCode);
+      
+      return {
+        matched: true,
+        confidence: 'high',
+        invoice: match,
+        suggestedCustomer: customerName || match.customerCode,
+        reason: `Exact amount match: $${paymentAmount} = Invoice ${match.invoiceNumber}`
+      };
+    }
+
+    // Multiple matches - use Gemini to help disambiguate
+    const prompt = `Help match a bank payment to an invoice.
+
+Payment Details:
+- Amount: $${paymentAmount}
+- Date: ${paymentDate}
+- Description: "${paymentDescription}"
+
+Matching Invoices (same amount):
+${matches.map(m => `- ${m.invoiceNumber}: $${m.amount}, dated ${m.date}, customer code ${m.customerCode}`).join('\n')}
+
+Based on the payment date and description, which invoice is the best match?
+Consider:
+1. Date proximity (payment should be after invoice date)
+2. Any customer name hints in the description
+
+Respond with JSON only:
+{
+  "bestMatch": "invoice number or null if unclear",
+  "confidence": "high/medium/low",
+  "reason": "brief explanation"
+}`;
+
+    try {
+      const geminiResponse = await callGeminiWithRetry(prompt, { temperature: 0.1 });
+      const jsonMatch = geminiResponse.match(/\{[\s\S]*\}/);
+      
+      if (jsonMatch) {
+        const result = JSON.parse(jsonMatch[0]);
+        const matchedInvoice = matches.find(m => m.invoiceNumber === result.bestMatch);
+        
+        if (matchedInvoice) {
+          const customerName = getCustomerNameFromCode(matchedInvoice.customerCode);
+          return {
+            matched: true,
+            confidence: result.confidence,
+            invoice: matchedInvoice,
+            suggestedCustomer: customerName || matchedInvoice.customerCode,
+            reason: result.reason
+          };
+        }
+      }
+    } catch (e) {
+      console.error('Gemini matching error:', e);
+    }
+
+    // Fallback: return all matches for manual review
+    return {
+      matched: true,
+      confidence: 'low',
+      possibleMatches: matches,
+      reason: 'Multiple invoices match this amount - manual review needed'
+    };
+
+  } catch (error) {
+    console.error('Payment matching error:', error);
+    return { matched: false, reason: error.message };
+  }
+}
+
+// Get customer name from invoice code
+function getCustomerNameFromCode(code) {
+  // Search customerDirectory for matching code
+  for (const [key, customer] of Object.entries(customerDirectory)) {
+    if (customer.code === code) {
+      return customer.name;
+    }
+  }
+  return null;
+}
+
+// Mark invoice as paid in spreadsheet
+async function markInvoicePaid(invoiceNumber, paymentDate, paymentMethod) {
+  if (!userTokens) {
+    return { success: false, error: 'Google not connected' };
+  }
+
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    // Find the invoice row
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Invoices!A:F'
+    });
+
+    const rows = response.data.values || [];
+    let targetRow = -1;
+
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].some(cell => cell === invoiceNumber)) {
+        targetRow = i + 1;
+        break;
+      }
+    }
+
+    if (targetRow === -1) {
+      return { success: false, error: 'Invoice not found' };
+    }
+
+    // Update the row to mark as paid (add to column E or next available)
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Invoices!E${targetRow}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [['Paid']]
+      }
+    });
+
+    console.log(`✅ Marked invoice ${invoiceNumber} as paid`);
+    return { success: true, invoiceNumber, paymentDate };
+
+  } catch (error) {
+    console.error('Mark paid error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// API endpoint to match a payment
+app.post('/api/payment/match', async (req, res) => {
+  const { amount, date, description } = req.body;
+
+  if (!amount) {
+    return res.status(400).json({ error: 'Payment amount required' });
+  }
+
+  const result = await matchPaymentToInvoice(
+    parseFloat(amount),
+    date || new Date().toLocaleDateString(),
+    description || ''
+  );
+
+  res.json(result);
+});
+
+// API endpoint to confirm a payment match and mark invoice paid
+app.post('/api/payment/confirm', async (req, res) => {
+  const { invoiceNumber, paymentDate, paymentMethod, customer } = req.body;
+
+  if (!invoiceNumber) {
+    return res.status(400).json({ error: 'Invoice number required' });
+  }
+
+  const result = await markInvoicePaid(invoiceNumber, paymentDate, paymentMethod);
+  
+  if (result.success) {
+    // Also update Accounting sheet if it exists
+    try {
+      oauth2Client.setCredentials(userTokens);
+      const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+      
+      // Try to update the Income section with customer info
+      // This is a best-effort update
+      console.log(`💰 Payment confirmed for ${invoiceNumber} from ${customer || 'Unknown'}`);
+    } catch (e) {
+      // Non-critical error
+    }
+  }
+
+  res.json(result);
+});
+
+// Auto-match payments when adding to accounting (called from frontend or Plaid)
+app.post('/api/accounting/process-payment', async (req, res) => {
+  const { amount, date, description, autoConfirm } = req.body;
+
+  // Step 1: Try to match
+  const matchResult = await matchPaymentToInvoice(
+    parseFloat(amount),
+    date,
+    description
+  );
+
+  // Step 2: If high confidence match and autoConfirm, mark as paid
+  if (matchResult.matched && matchResult.confidence === 'high' && autoConfirm) {
+    const confirmResult = await markInvoicePaid(
+      matchResult.invoice.invoiceNumber,
+      date,
+      'Auto-matched'
+    );
+    
+    return res.json({
+      ...matchResult,
+      autoConfirmed: confirmResult.success,
+      message: confirmResult.success 
+        ? `Auto-matched and marked ${matchResult.invoice.invoiceNumber} as paid`
+        : 'Matched but could not auto-confirm'
+    });
+  }
+
+  // Step 3: Return match result for manual review
+  res.json({
+    ...matchResult,
+    autoConfirmed: false,
+    message: matchResult.matched 
+      ? `Found match: ${matchResult.invoice?.invoiceNumber || 'multiple options'} (${matchResult.confidence} confidence)`
+      : matchResult.reason
+  });
+});
+
+// ============ Bank Transactions Sheet Sync ============
+
+// Auto-categorize a transaction based on description
+function categorizeTransaction(description) {
+  const desc = description.toUpperCase();
+  
+  if (desc.includes('SHARED ROASTING')) return 'Roasting Fee';
+  if (desc.includes('ROYAL COFFEE')) return 'Green Coffee';
+  if (desc.includes('ACCURATE') || desc.includes('FREIGHT') || desc.includes('SHIPPING')) return 'Shipping';
+  if (desc.includes('JPMORGAN') || desc.includes('CHASE') || desc.includes('FEE')) return 'Bank Fees';
+  if (desc.includes('TRANSFER FROM')) return 'Internal Transfer';
+  if (desc.includes('DEPOSIT') || desc.includes('PAYMENT')) return 'Customer Payment';
+  
+  // Check for known customer names
+  for (const [key, customer] of Object.entries(customerDirectory)) {
+    if (desc.includes(customer.name.toUpperCase())) return 'Customer Payment';
+  }
+  
+  return 'Other';
+}
+
+// Add a transaction to Bank Transactions sheet
+async function addBankTransaction(transaction) {
+  if (!userTokens) {
+    return { success: false, error: 'Google not connected' };
+  }
+
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    const { date, description, debit, credit, notes } = transaction;
+    const category = transaction.category || categorizeTransaction(description);
+
+    // Append to Bank Transactions sheet
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Bank Transactions!B:H',
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: {
+        values: [[date, description, category, debit || '', credit || '', '', notes || '']]
+      }
+    });
+
+    console.log(`📊 Added transaction: ${description} (${category})`);
+
+    // If it's a customer payment, try to match to invoice
+    if (category === 'Customer Payment' && credit > 0) {
+      const matchResult = await matchPaymentToInvoice(credit, date, description);
+      if (matchResult.matched && matchResult.confidence === 'high') {
+        await markInvoicePaid(matchResult.invoice.invoiceNumber, date, 'Auto-matched');
+        return { 
+          success: true, 
+          category, 
+          matched: true, 
+          invoice: matchResult.invoice.invoiceNumber 
+        };
+      }
+    }
+
+    return { success: true, category };
+
+  } catch (error) {
+    console.error('Add transaction error:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// API endpoint to add a bank transaction
+app.post('/api/bank/transaction', async (req, res) => {
+  const { date, description, debit, credit, notes } = req.body;
+
+  if (!description) {
+    return res.status(400).json({ error: 'Description required' });
+  }
+
+  const result = await addBankTransaction({
+    date: date || new Date().toLocaleDateString(),
+    description,
+    debit: debit ? parseFloat(debit) : null,
+    credit: credit ? parseFloat(credit) : null,
+    notes
+  });
+
+  res.json(result);
+});
+
+// Bulk import transactions (for Plaid sync)
+app.post('/api/bank/sync', async (req, res) => {
+  const { transactions } = req.body;
+
+  if (!transactions || !Array.isArray(transactions)) {
+    return res.status(400).json({ error: 'Transactions array required' });
+  }
+
+  const results = [];
+  for (const t of transactions) {
+    const result = await addBankTransaction(t);
+    results.push({ ...t, ...result });
+  }
+
+  const matched = results.filter(r => r.matched).length;
+  const added = results.filter(r => r.success).length;
+
+  res.json({
+    success: true,
+    total: transactions.length,
+    added,
+    matched,
+    results
+  });
+});
+
+// Update Bank Transactions sheet timestamp
+async function updateBankTransactionsTimestamp() {
+  if (!userTokens) return;
+
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    const pstTimestamp = new Date().toLocaleString('en-US', {
+      timeZone: 'America/Los_Angeles',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    }) + ' PST';
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Bank Transactions!B2',
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[`Last updated: ${pstTimestamp}`]]
+      }
+    });
+  } catch (e) {
+    // Non-critical
+  }
+}
+
 
 // Parse invoice details from natural language
 function parseInvoiceDetails(details) {

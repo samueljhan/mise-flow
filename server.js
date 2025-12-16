@@ -82,7 +82,7 @@ if (process.env.GOOGLE_REFRESH_TOKEN) {
     refresh_token: process.env.GOOGLE_REFRESH_TOKEN
   };
   oauth2Client.setCredentials(userTokens);
-  console.log('✓ Google account auto-connected from saved refresh token');
+  console.log('📝 Google refresh token loaded from environment (will verify on first use)');
 }
 
 // AWS Transcribe configuration (standard, not medical)
@@ -353,11 +353,31 @@ app.get('/auth/google/callback', async (req, res) => {
   }
 });
 
-app.get('/api/google/status', (req, res) => {
-  res.json({ 
-    connected: !!userTokens,
-    services: userTokens ? ['Gmail', 'Sheets'] : []
-  });
+app.get('/api/google/status', async (req, res) => {
+  if (!userTokens) {
+    return res.json({ connected: false, services: [] });
+  }
+  
+  // Verify tokens are actually valid by trying to get access token
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const { token } = await oauth2Client.getAccessToken();
+    if (token) {
+      res.json({ 
+        connected: true,
+        services: ['Gmail', 'Sheets']
+      });
+    } else {
+      // Token refresh failed, clear tokens
+      console.log('⚠️ Google token refresh failed, clearing tokens');
+      userTokens = null;
+      res.json({ connected: false, services: [] });
+    }
+  } catch (error) {
+    console.log('⚠️ Google token validation failed:', error.message);
+    userTokens = null;
+    res.json({ connected: false, services: [] });
+  }
 });
 
 app.get('/api/google/disconnect', (req, res) => {

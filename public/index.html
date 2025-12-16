@@ -779,6 +779,12 @@
                 googleStatusEl.classList.add('disconnected');
             }
         }
+        
+        // Call this when we get a 401 to update UI
+        function handleGoogleDisconnected() {
+            googleConnected = false;
+            updateGoogleUI();
+        }
 
         function handleGoogleAuth() {
             if (googleConnected) {
@@ -1274,6 +1280,7 @@
                 
                 // Handle Google not connected
                 if (response.status === 401) {
+                    handleGoogleDisconnected();
                     const messages = chatContainer.querySelectorAll('.message');
                     const lastMsg = messages[messages.length - 1];
                     if (lastMsg) {
@@ -2348,6 +2355,7 @@
                     delete modal.dataset.originalEmails;
                     return true;
                 } else if (response.status === 401) {
+                    handleGoogleDisconnected();
                     const data = await response.json();
                     addMessage(`<div style="color: #dc3545;">⚠️ ${data.error || 'Google account not connected.'}</div>
                         <div style="margin-top: 8px;">Please connect your Google account to send emails.</div>
@@ -2635,6 +2643,7 @@
                 
                 // Handle Google not connected - show specific message
                 if (response.status === 401) {
+                    handleGoogleDisconnected();
                     return `<div style="color: #dc3545;">⚠️ ${data.error || 'Google account not connected.'}</div>
                             <div style="margin-top: 8px;">Please connect your Google account to generate invoices.</div>
                             <button class="action-btn" style="margin-top: 12px;" onclick="connectGoogle('invoice')">Connect Google Account</button>`;
@@ -2726,6 +2735,7 @@
                 
                 // Handle Google not connected
                 if (response.status === 401) {
+                    handleGoogleDisconnected();
                     addMessage(`<div style="color: #dc3545;">⚠️ ${result.error || 'Google account not connected.'}</div>
                         <div style="margin-top: 8px;">Please connect your Google account to confirm invoices.</div>
                         <button class="action-btn" style="margin-top: 12px;" onclick="connectGoogle('invoice')">Connect Google Account</button>`, false);

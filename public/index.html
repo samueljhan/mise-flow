@@ -100,6 +100,52 @@
             opacity: 0.8;
         }
 
+        .user-profile {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .user-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            object-fit: cover;
+        }
+
+        .user-info {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        .user-name {
+            font-size: 13px;
+            color: #e0e0e0;
+            font-weight: 500;
+        }
+
+        .user-email {
+            font-size: 11px;
+            color: #888;
+        }
+
+        .logout-btn {
+            background: #3a3a3a;
+            border: none;
+            color: #999;
+            font-size: 11px;
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .logout-btn:hover {
+            background: #ff4444;
+            color: white;
+        }
+
         .microphone-status {
             padding: 8px 30px;
             background: #242424;
@@ -583,8 +629,16 @@
                 <h1>Archives of Us Coffee</h1>
                 <p>Powered by Mise Flow</p>
             </div>
-            <div class="google-status disconnected" id="googleStatus" onclick="handleGoogleAuth()">
-                🔗 Connect Google
+            <div class="user-profile" id="userProfile">
+                <img src="" alt="" class="user-avatar" id="userAvatar" style="display: none;">
+                <div class="user-info" id="userInfo" style="display: none;">
+                    <span class="user-name" id="userName"></span>
+                    <span class="user-email" id="userEmail"></span>
+                </div>
+                <button class="logout-btn" id="logoutBtn" onclick="logout()" style="display: none;">Logout</button>
+            </div>
+            <div class="google-status connected" id="googleStatus" style="display: none;">
+                ✓ Google Connected
             </div>
         </div>
 
@@ -747,6 +801,7 @@
         let currentResponseText = '';
         let partialTranscript = '';
         let savedTextBeforePartial = '';
+        let currentUser = null;
         
         // Inventory state
         let greenCoffeeInventory = [];
@@ -756,52 +811,92 @@
         let pendingRoastEmail = null;
         let waitingForRoastOrder = false;
 
-        // Check Google status on load
-        async function checkGoogleStatus() {
+        // Check user authentication and Google status on load
+        async function checkAuthAndGoogleStatus() {
             try {
+                // Check if user is authenticated
+                const userResponse = await fetch('/api/user');
+                if (userResponse.status === 401) {
+                    // Not authenticated, redirect to login
+                    window.location.href = '/login';
+                    return;
+                }
+                const userData = await userResponse.json();
+                if (userData.authenticated && userData.user) {
+                    currentUser = userData.user;
+                    updateUserUI();
+                }
+
+                // Check Google status
                 const response = await fetch('/api/google/status');
                 const data = await response.json();
                 googleConnected = data.connected;
                 updateGoogleUI();
             } catch (error) {
-                console.error('Error checking Google status:', error);
+                console.error('Error checking auth status:', error);
+                // If error, might be auth issue - redirect to login
+                window.location.href = '/login';
+            }
+        }
+
+        function updateUserUI() {
+            if (currentUser) {
+                const avatarEl = document.getElementById('userAvatar');
+                const nameEl = document.getElementById('userName');
+                const emailEl = document.getElementById('userEmail');
+                const infoEl = document.getElementById('userInfo');
+                const logoutBtn = document.getElementById('logoutBtn');
+
+                if (currentUser.picture) {
+                    avatarEl.src = currentUser.picture;
+                    avatarEl.style.display = 'block';
+                }
+                if (currentUser.name) {
+                    nameEl.textContent = currentUser.name;
+                    infoEl.style.display = 'flex';
+                }
+                if (currentUser.email) {
+                    emailEl.textContent = currentUser.email;
+                }
+                logoutBtn.style.display = 'block';
             }
         }
 
         function updateGoogleUI() {
             if (googleConnected) {
-                googleStatusEl.textContent = '✅ Google Connected';
+                googleStatusEl.textContent = '✓ Google Connected';
                 googleStatusEl.classList.remove('disconnected');
                 googleStatusEl.classList.add('connected');
+                googleStatusEl.style.display = 'block';
             } else {
-                googleStatusEl.textContent = '🔗 Connect Google';
-                googleStatusEl.classList.remove('connected');
-                googleStatusEl.classList.add('disconnected');
+                // User is logged in but Google might have disconnected
+                googleStatusEl.style.display = 'none';
             }
         }
         
-        // Call this when we get a 401 to update UI
-        function handleGoogleDisconnected() {
-            googleConnected = false;
-            updateGoogleUI();
+        // Call this when we get a 401 to redirect to login
+        function handleAuthError() {
+            window.location.href = '/login';
         }
 
-        function handleGoogleAuth() {
-            if (googleConnected) {
-                if (confirm('Disconnect Google?')) {
-                    fetch('/api/google/disconnect')
-                        .then(() => {
-                            googleConnected = false;
-                            updateGoogleUI();
-                        });
-                }
-            } else {
-                window.location.href = '/auth/google';
+        function logout() {
+            if (confirm('Are you sure you want to logout?')) {
+                window.location.href = '/logout';
             }
         }
 
-        // Check for connection on page load
-        checkGoogleStatus();
+        // Wrapper for API calls that handles 401
+        async function authenticatedFetch(url, options = {}) {
+            const response = await fetch(url, options);
+            if (response.status === 401) {
+                handleAuthError();
+                throw new Error('Authentication required');
+            }
+            return response;
+        }
+
+        // Check auth on page load
+        checkAuthAndGoogleStatus();
 
         // Function to connect Google while preserving state
         function connectGoogle(returnAction) {

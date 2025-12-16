@@ -18,9 +18,431 @@ const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 8080;
 
+// Session configuration
+const session = require('express-session');
+app.use(session({
+  secret: process.env.SESSION_SECRET || crypto.randomBytes(32).toString('hex'),
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    secure: process.env.NODE_ENV === 'production',
+    httpOnly: true,
+    maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+  }
+}));
+
 app.use(cors());
 app.use(express.json());
+
+// Auth middleware - protects routes
+function requireAuth(req, res, next) {
+  if (req.session && req.session.authenticated) {
+    return next();
+  }
+  // For API routes, return 401
+  if (req.path.startsWith('/api/')) {
+    return res.status(401).json({ error: 'Authentication required', redirect: '/login' });
+  }
+  // For page routes, redirect to login
+  return res.redirect('/login');
+}
+
+// Serve login page (unprotected)
+app.get('/login', (req, res) => {
+  // If already authenticated, redirect to app
+  if (req.session && req.session.authenticated) {
+    return res.redirect('/');
+  }
+  res.send(getLoginPage());
+});
+
+// Logout endpoint
+app.get('/logout', (req, res) => {
+  req.session.destroy();
+  res.redirect('/login');
+});
+
+// Auth routes (unprotected)
+app.get('/auth/google', (req, res) => {
+  const scopes = [
+    'https://www.googleapis.com/auth/gmail.send',
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/gmail.compose',
+    'https://www.googleapis.com/auth/spreadsheets',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile'
+  ];
+
+  const url = oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    scope: scopes,
+    prompt: 'consent'
+  });
+
+  res.redirect(url);
+});
+
+app.get('/auth/google/callback', async (req, res) => {
+  const { code } = req.query;
+
+  try {
+    const { tokens } = await oauth2Client.getToken(code);
+    oauth2Client.setCredentials(tokens);
+    userTokens = tokens;
+
+    // Get user info
+    const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
+    const userInfo = await oauth2.userinfo.get();
+    
+    // Set session as authenticated
+    req.session.authenticated = true;
+    req.session.user = {
+      email: userInfo.data.email,
+      name: userInfo.data.name,
+      picture: userInfo.data.picture
+    };
+
+    console.log(`✅ User authenticated: ${userInfo.data.email}`);
+    res.redirect('/');
+  } catch (error) {
+    console.error('Auth callback error:', error);
+    res.redirect('/login?error=auth_failed');
+  }
+});
+
+// Health check (unprotected)
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    service: 'Mise Flow API',
+    transcription: 'AWS Transcribe',
+    llm: 'Gemini 2.5 Flash',
+    google: userTokens ? 'connected' : 'not connected'
+  });
+});
+
+// Privacy page (unprotected)
+app.get('/privacy', (req, res) => {
+  res.send(getPrivacyPage());
+});
+
+// Get current user info
+app.get('/api/user', requireAuth, (req, res) => {
+  res.json({
+    authenticated: true,
+    user: req.session.user
+  });
+});
+
+// Protect static files - serve login page if not authenticated
+app.use((req, res, next) => {
+  // Allow access to login-related assets
+  if (req.path === '/login' || req.path.startsWith('/auth/') || req.path === '/privacy' || req.path === '/api/health') {
+    return next();
+  }
+  
+  // Check authentication for all other routes
+  if (!req.session || !req.session.authenticated) {
+    // For HTML pages, redirect to login
+    if (req.accepts('html') && !req.path.startsWith('/api/')) {
+      return res.redirect('/login');
+    }
+    // For API routes, return 401
+    if (req.path.startsWith('/api/')) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+  }
+  next();
+});
+
 app.use(express.static('public'));
+
+// Login page HTML
+function getLoginPage() {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mise Flow - Login</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .login-container {
+      background: #252540;
+      border-radius: 16px;
+      padding: 48px;
+      max-width: 420px;
+      width: 90%;
+      text-align: center;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    .logo {
+      font-size: 3rem;
+      margin-bottom: 8px;
+    }
+    h1 {
+      color: #fff;
+      font-size: 1.8rem;
+      margin-bottom: 8px;
+    }
+    .subtitle {
+      color: #888;
+      margin-bottom: 32px;
+      font-size: 0.95rem;
+    }
+    .google-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      background: #fff;
+      color: #333;
+      border: none;
+      border-radius: 8px;
+      padding: 14px 24px;
+      font-size: 1rem;
+      font-weight: 500;
+      cursor: pointer;
+      width: 100%;
+      transition: all 0.2s;
+      text-decoration: none;
+    }
+    .google-btn:hover {
+      background: #f1f1f1;
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    }
+    .google-btn svg {
+      width: 20px;
+      height: 20px;
+    }
+    .permissions {
+      margin-top: 32px;
+      text-align: left;
+      background: rgba(255,255,255,0.05);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .permissions h3 {
+      color: #aaa;
+      font-size: 0.8rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 12px;
+    }
+    .permission-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: #ccc;
+      font-size: 0.9rem;
+      margin-bottom: 8px;
+    }
+    .permission-item:last-child { margin-bottom: 0; }
+    .permission-item span.icon { font-size: 1.1rem; }
+    .error-msg {
+      background: #ff4444;
+      color: white;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      font-size: 0.9rem;
+    }
+    .footer {
+      margin-top: 24px;
+      color: #666;
+      font-size: 0.8rem;
+    }
+    .footer a {
+      color: #888;
+      text-decoration: none;
+    }
+    .footer a:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <div class="logo">☕</div>
+    <h1>Mise Flow</h1>
+    <p class="subtitle">Inventory & Invoice Management for Archives of Us Coffee</p>
+    
+    ${new URL('http://localhost?error=auth_failed').searchParams.get('error') ? '<div class="error-msg">Authentication failed. Please try again.</div>' : ''}
+    
+    <a href="/auth/google" class="google-btn">
+      <svg viewBox="0 0 24 24">
+        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+      </svg>
+      Sign in with Google
+    </a>
+    
+    <div class="permissions">
+      <h3>Permissions Requested</h3>
+      <div class="permission-item">
+        <span class="icon">📧</span>
+        <span>Send & read emails (for customer invoices)</span>
+      </div>
+      <div class="permission-item">
+        <span class="icon">📊</span>
+        <span>Access Google Sheets (inventory & pricing)</span>
+      </div>
+      <div class="permission-item">
+        <span class="icon">👤</span>
+        <span>View your email address & name</span>
+      </div>
+    </div>
+    
+    <div class="footer">
+      <a href="/privacy">Privacy Policy</a>
+    </div>
+  </div>
+  
+  <script>
+    // Check for error param
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get('error')) {
+      document.querySelector('.error-msg')?.style.display = 'block';
+    }
+  </script>
+</body>
+</html>`;
+}
+
+// Privacy page HTML (moved to function)
+function getPrivacyPage() {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy - Mise Flow</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      line-height: 1.6;
+      padding: 40px 20px;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: #252525;
+      border-radius: 12px;
+      padding: 40px;
+    }
+    h1 {
+      color: #fff;
+      margin-bottom: 8px;
+      font-size: 2rem;
+    }
+    .subtitle {
+      color: #888;
+      margin-bottom: 32px;
+      font-size: 0.9rem;
+    }
+    h2 {
+      color: #28a745;
+      margin-top: 32px;
+      margin-bottom: 12px;
+      font-size: 1.2rem;
+    }
+    p, li {
+      color: #ccc;
+      margin-bottom: 12px;
+    }
+    ul {
+      margin-left: 24px;
+      margin-bottom: 16px;
+    }
+    a {
+      color: #28a745;
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    .back-link {
+      display: inline-block;
+      margin-top: 32px;
+      padding: 10px 20px;
+      background: #28a745;
+      color: #fff;
+      border-radius: 6px;
+      text-decoration: none;
+    }
+    .back-link:hover {
+      background: #218838;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Privacy Policy</h1>
+    <p class="subtitle">Last updated: December 2024</p>
+    
+    <p>Mise Flow ("we", "our", or "us") is an inventory and invoice management tool for Archives of Us Coffee. This policy explains how we handle your information.</p>
+    
+    <h2>Information We Collect</h2>
+    <p>When you use Mise Flow, we may collect:</p>
+    <ul>
+      <li><strong>Business Data:</strong> Customer names, invoice details, inventory records, and order information you enter into the system</li>
+      <li><strong>Google Account Data:</strong> When you connect your Google account, we access Gmail (to draft emails) and Google Sheets (to sync data) with your permission</li>
+      <li><strong>Voice Input:</strong> If you use voice dictation, audio is processed by AWS Transcribe and is not stored after transcription</li>
+    </ul>
+    
+    <h2>How We Use Your Information</h2>
+    <ul>
+      <li>Generate and manage invoices</li>
+      <li>Track coffee inventory (green, roasted, and en route)</li>
+      <li>Sync data with your Google Sheets</li>
+      <li>Draft emails in your Gmail account</li>
+      <li>Process natural language commands via AI (Google Gemini)</li>
+    </ul>
+    
+    <h2>Data Storage</h2>
+    <ul>
+      <li>Invoice PDFs are stored temporarily on our servers</li>
+      <li>Inventory data syncs to your connected Google Sheet</li>
+      <li>We do not sell or share your business data with third parties</li>
+    </ul>
+    
+    <h2>Third-Party Services</h2>
+    <p>Mise Flow uses the following services:</p>
+    <ul>
+      <li><strong>Google APIs:</strong> Gmail and Sheets integration (governed by <a href="https://policies.google.com/privacy" target="_blank">Google's Privacy Policy</a>)</li>
+      <li><strong>AWS Transcribe:</strong> Voice-to-text processing</li>
+      <li><strong>Google Gemini:</strong> AI-powered natural language processing</li>
+      <li><strong>Railway:</strong> Application hosting</li>
+    </ul>
+    
+    <h2>Your Rights</h2>
+    <ul>
+      <li>Disconnect your Google account at any time</li>
+      <li>Request deletion of your data</li>
+      <li>Export your invoice and inventory records</li>
+    </ul>
+    
+    <h2>Contact</h2>
+    <p>For privacy questions or data requests, contact: <a href="mailto:samueljhan@gmail.com">samueljhan@gmail.com</a></p>
+    
+    <a href="/login" class="back-link">← Back to Login</a>
+  </div>
+</body>
+</html>`;
+}
 
 // Archives of Us Coffee Spreadsheet ID
 const SPREADSHEET_ID = '1D5JuAEpOC2ZXD2IAel1ImBXqFUrcMzFY-gXu4ocOMCw';
@@ -628,49 +1050,7 @@ setTimeout(async () => {
   await loadInventoryFromSheets();
 }, 5000);
 
-// ============ Google OAuth Routes ============
-
-app.get('/auth/google', (req, res) => {
-  const scopes = [
-    'https://www.googleapis.com/auth/gmail.send',
-    'https://www.googleapis.com/auth/gmail.readonly',
-    'https://www.googleapis.com/auth/gmail.compose',
-    'https://www.googleapis.com/auth/spreadsheets'
-  ];
-  
-  const url = oauth2Client.generateAuthUrl({
-    access_type: 'offline',
-    scope: scopes,
-    prompt: 'consent'
-  });
-  
-  res.redirect(url);
-});
-
-app.get('/auth/google/callback', async (req, res) => {
-  const { code } = req.query;
-  
-  try {
-    const { tokens } = await oauth2Client.getToken(code);
-    oauth2Client.setCredentials(tokens);
-    userTokens = tokens;
-    
-    console.log('✅ Google OAuth successful (Gmail + Sheets)');
-    
-    // Log refresh token so it can be saved to environment variables
-    if (tokens.refresh_token) {
-      console.log('=== SAVE THIS REFRESH TOKEN TO RAILWAY ===');
-      console.log(tokens.refresh_token);
-      console.log('==========================================');
-      console.log('Add to Railway Variables as: GOOGLE_REFRESH_TOKEN');
-    }
-    
-    res.redirect('/?google=connected');
-  } catch (error) {
-    console.error('OAuth error:', error);
-    res.redirect('/?google=error');
-  }
-});
+// ============ Google Status and Disconnect ============
 
 app.get('/api/google/status', async (req, res) => {
   if (!userTokens) {
@@ -687,7 +1067,6 @@ app.get('/api/google/status', async (req, res) => {
         services: ['Gmail', 'Sheets']
       });
     } else {
-      // Token refresh failed, clear tokens
       console.log('⚠️ Google token refresh failed, clearing tokens');
       userTokens = null;
       res.json({ connected: false, services: [] });
@@ -702,7 +1081,8 @@ app.get('/api/google/status', async (req, res) => {
 app.get('/api/google/disconnect', (req, res) => {
   userTokens = null;
   oauth2Client.revokeCredentials();
-  res.json({ success: true });
+  req.session.destroy();
+  res.json({ success: true, redirect: '/login' });
 });
 
 // ============ Inventory Sync Endpoints ============
@@ -3038,149 +3418,11 @@ app.post('/api/roast-order/confirm', async (req, res) => {
   syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
-// ============ Privacy Policy ============
-
-app.get('/privacy', (req, res) => {
-  const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Privacy Policy - Mise Flow</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #1a1a1a;
-      color: #e0e0e0;
-      line-height: 1.6;
-      padding: 40px 20px;
-    }
-    .container {
-      max-width: 800px;
-      margin: 0 auto;
-      background: #252525;
-      border-radius: 12px;
-      padding: 40px;
-    }
-    h1 {
-      color: #fff;
-      margin-bottom: 8px;
-      font-size: 2rem;
-    }
-    .subtitle {
-      color: #888;
-      margin-bottom: 32px;
-      font-size: 0.9rem;
-    }
-    h2 {
-      color: #28a745;
-      margin-top: 32px;
-      margin-bottom: 12px;
-      font-size: 1.2rem;
-    }
-    p, li {
-      color: #ccc;
-      margin-bottom: 12px;
-    }
-    ul {
-      margin-left: 24px;
-      margin-bottom: 16px;
-    }
-    a {
-      color: #28a745;
-      text-decoration: none;
-    }
-    a:hover {
-      text-decoration: underline;
-    }
-    .back-link {
-      display: inline-block;
-      margin-top: 32px;
-      padding: 10px 20px;
-      background: #28a745;
-      color: #fff;
-      border-radius: 6px;
-      text-decoration: none;
-    }
-    .back-link:hover {
-      background: #218838;
-      text-decoration: none;
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>Privacy Policy</h1>
-    <p class="subtitle">Last updated: December 2024</p>
-    
-    <p>Mise Flow ("we", "our", or "us") is an inventory and invoice management tool for Archives of Us Coffee. This policy explains how we handle your information.</p>
-    
-    <h2>Information We Collect</h2>
-    <p>When you use Mise Flow, we may collect:</p>
-    <ul>
-      <li><strong>Business Data:</strong> Customer names, invoice details, inventory records, and order information you enter into the system</li>
-      <li><strong>Google Account Data:</strong> When you connect your Google account, we access Gmail (to draft emails) and Google Sheets (to sync data) with your permission</li>
-      <li><strong>Voice Input:</strong> If you use voice dictation, audio is processed by AWS Transcribe and is not stored after transcription</li>
-    </ul>
-    
-    <h2>How We Use Your Information</h2>
-    <ul>
-      <li>Generate and manage invoices</li>
-      <li>Track coffee inventory (green, roasted, and en route)</li>
-      <li>Sync data with your Google Sheets</li>
-      <li>Draft emails in your Gmail account</li>
-      <li>Process natural language commands via AI (Google Gemini)</li>
-    </ul>
-    
-    <h2>Data Storage</h2>
-    <ul>
-      <li>Invoice PDFs are stored temporarily on our servers</li>
-      <li>Inventory data syncs to your connected Google Sheet</li>
-      <li>We do not sell or share your business data with third parties</li>
-    </ul>
-    
-    <h2>Third-Party Services</h2>
-    <p>Mise Flow uses the following services:</p>
-    <ul>
-      <li><strong>Google APIs:</strong> Gmail and Sheets integration (governed by <a href="https://policies.google.com/privacy" target="_blank">Google's Privacy Policy</a>)</li>
-      <li><strong>AWS Transcribe:</strong> Voice-to-text processing</li>
-      <li><strong>Google Gemini:</strong> AI-powered natural language processing</li>
-      <li><strong>Railway:</strong> Application hosting</li>
-    </ul>
-    
-    <h2>Your Rights</h2>
-    <ul>
-      <li>Disconnect your Google account at any time</li>
-      <li>Request deletion of your data</li>
-      <li>Export your invoice and inventory records</li>
-    </ul>
-    
-    <h2>Contact</h2>
-    <p>For privacy questions or data requests, contact: <a href="mailto:samueljhan@gmail.com">samueljhan@gmail.com</a></p>
-    
-    <a href="/" class="back-link">← Back to Mise Flow</a>
-  </div>
-</body>
-</html>`;
-  
-  res.send(html);
-});
-
-// ============ Health Check ============
-
-app.get('/api/health', (req, res) => {
-  res.json({ 
-    status: 'ok', 
-    service: 'Mise Flow API',
-    transcription: 'AWS Transcribe',
-    llm: 'Gemini 2.5 Flash',
-    google: userTokens ? 'connected' : 'not connected'
-  });
-});
+// ============ Start Server ============
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`📦 Mise Flow running on port ${PORT}`);
+  console.log(`🔐 Authentication required`);
   console.log(`🎤 AWS Transcribe enabled`);
   console.log(`✨ Gemini 2.5 Flash for AI processing`);
   console.log(`📧 Gmail integration ready`);

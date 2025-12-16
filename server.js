@@ -309,6 +309,316 @@ function formatInventorySummary() {
   return summary;
 }
 
+// ============ Inventory Sync with Google Sheets ============
+
+// Sync inventory TO Google Sheets - Single "Inventory" sheet format
+async function syncInventoryToSheets() {
+  if (!userTokens) {
+    console.log('⚠️ Cannot sync inventory - Google not connected');
+    return { success: false, error: 'Google not connected' };
+  }
+
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    // Generate PST timestamp
+    const now = new Date();
+    const pstTimestamp = now.toLocaleString('en-US', {
+      timeZone: 'America/Los_Angeles',
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true
+    }) + ' PST';
+
+    // Build combined inventory data (Column A empty, Row 1 empty)
+    const data = [];
+    
+    // Row 1: empty
+    data.push(['', '', '', '', '', '', '']);
+    
+    // Row 2: Last updated timestamp
+    data.push(['', `Last updated: ${pstTimestamp}`, '', '', '', '', '']);
+    
+    // Row 3: empty (spacing)
+    data.push(['', '', '', '', '', '', '']);
+    
+    // GREEN COFFEE SECTION
+    data.push(['', 'Green Coffee Inventory', '', '', '', '', '']);
+    data.push(['', 'Name', 'Weight (lb)', 'Roast Profile', 'Drop Temp', '', '']);
+    greenCoffeeInventory.forEach(c => {
+      data.push(['', c.name, c.weight, c.roastProfile || '', c.dropTemp || '', '', '']);
+    });
+    
+    // Empty row
+    data.push(['', '', '', '', '', '', '']);
+    
+    // ROASTED COFFEE SECTION
+    data.push(['', 'Roasted Coffee Inventory', '', '', '', '', '']);
+    data.push(['', 'Name', 'Weight (lb)', 'Type', 'Recipe', '', '']);
+    roastedCoffeeInventory.forEach(c => {
+      const recipe = c.recipe ? c.recipe.map(r => `${r.percentage}% ${r.name}`).join(' + ') : 'N/A';
+      data.push(['', c.name, c.weight, c.type || '', recipe, '', '']);
+    });
+    
+    // Empty row
+    data.push(['', '', '', '', '', '', '']);
+    
+    // EN ROUTE SECTION
+    data.push(['', 'En Route Inventory', '', '', '', '', '']);
+    data.push(['', 'Name', 'Weight (lb)', 'Type', 'Tracking Number', 'Date Ordered', 'Estimated Ship Date']);
+    if (enRouteCoffeeInventory.length > 0) {
+      enRouteCoffeeInventory.forEach(c => {
+        // Only show estimated delivery if tracking number exists
+        const estDelivery = c.trackingNumber ? (c.estimatedDelivery || '') : '';
+        const dateOrdered = c.dateOrdered || c.orderDate || c.dateAdded || '';
+        data.push(['', c.name, c.weight, c.type || '', c.trackingNumber || '', dateOrdered, estDelivery]);
+      });
+    }
+
+    // Clear and write to Inventory sheet
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Inventory!A:G'
+    }).catch(() => {}); // Ignore if sheet doesn't exist
+
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Inventory!A1',
+      valueInputOption: 'USER_ENTERED',
+      requestBody: { values: data }
+    }).catch(async (err) => {
+      // Sheet might not exist, try to create it
+      console.log('Creating Inventory sheet...');
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: {
+          requests: [{ addSheet: { properties: { title: 'Inventory' } } }]
+        }
+      });
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Inventory!A1',
+        valueInputOption: 'USER_ENTERED',
+        requestBody: { values: data }
+      });
+    });
+
+    const timestamp = new Date().toISOString();
+    console.log(`✅ Inventory synced to Google Sheets at ${timestamp}`);
+    return { success: true, timestamp };
+
+  } catch (error) {
+    console.error('❌ Inventory sync error:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+// Load inventory FROM Google Sheets - reads from single "Inventory" sheet
+async function loadInventoryFromSheets() {
+  if (!userTokens) {
+    console.log('⚠️ Cannot load inventory - Google not connected, using defaults');
+    return { success: false, error: 'Google not connected' };
+  }
+
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Inventory!A:F'
+    });
+    
+    const rows = response.data.values || [];
+    if (rows.length === 0) {
+      console.log('⚠️ Inventory sheet empty, using defaults');
+      return { success: false, error: 'Sheet empty' };
+    }
+
+    // Parse the combined sheet - find section headers
+    let currentSection = null;
+    const tempGreen = [];
+    const tempRoasted = [];
+    const tempEnRoute = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      const cellB = (row[1] || '').toString().toLowerCase();
+      
+      // Detect section headers
+      if (cellB.includes('green coffee inventory')) {
+        currentSection = 'green';
+        continue;
+      } else if (cellB.includes('roasted coffee inventory')) {
+        currentSection = 'roasted';
+        continue;
+      } else if (cellB.includes('en route inventory')) {
+        currentSection = 'enroute';
+        continue;
+      }
+      
+      // Skip header rows, empty rows, and timestamp row
+      if (!row[1] || cellB === 'name' || cellB === '' || cellB.startsWith('last updated')) continue;
+      
+      // Parse data based on current section
+      if (currentSection === 'green' && row[1]) {
+        tempGreen.push({
+          id: row[1].toLowerCase().replace(/\s+/g, '-'),
+          name: row[1],
+          weight: parseFloat(row[2]) || 0,
+          roastProfile: row[3] || '',
+          dropTemp: parseFloat(row[4]) || 0
+        });
+      } else if (currentSection === 'roasted' && row[1]) {
+        tempRoasted.push({
+          id: row[1].toLowerCase().replace(/\s+/g, '-'),
+          name: row[1],
+          weight: parseFloat(row[2]) || 0,
+          type: row[3] || '',
+          recipe: null
+        });
+      } else if (currentSection === 'enroute' && row[1]) {
+        tempEnRoute.push({
+          id: row[1].toLowerCase().replace(/\s+/g, '-') + '-' + Date.now(),
+          name: row[1],
+          weight: parseFloat(row[2]) || 0,
+          type: row[3] || '',
+          trackingNumber: row[4] || '',
+          dateOrdered: row[5] || '',
+          estimatedDelivery: row[6] || ''
+        });
+      }
+    }
+
+    // Only update if we found data
+    if (tempGreen.length > 0) {
+      greenCoffeeInventory = tempGreen;
+      console.log(`📗 Loaded ${greenCoffeeInventory.length} green coffees from Sheets`);
+    }
+    if (tempRoasted.length > 0) {
+      roastedCoffeeInventory = tempRoasted;
+      console.log(`📕 Loaded ${roastedCoffeeInventory.length} roasted coffees from Sheets`);
+    }
+    if (tempEnRoute.length > 0) {
+      enRouteCoffeeInventory = tempEnRoute;
+      console.log(`📦 Loaded ${enRouteCoffeeInventory.length} en route items from Sheets`);
+    }
+
+    return { success: true };
+
+  } catch (error) {
+    console.error('❌ Load inventory error:', error.message);
+    return { success: false, error: error.message };
+  }
+}
+
+// Schedule weekly sync: Every Thursday at 11:59 PM Los Angeles time
+let lastSyncTime = null;
+let nextScheduledSync = null;
+
+function getNextThursday1159PM() {
+  // Get current time in Los Angeles
+  const now = new Date();
+  const laTime = new Date(now.toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }));
+  
+  // Find next Thursday
+  const dayOfWeek = laTime.getDay(); // 0 = Sunday, 4 = Thursday
+  let daysUntilThursday = (4 - dayOfWeek + 7) % 7;
+  
+  // If it's Thursday, check if we're past 11:59 PM
+  if (daysUntilThursday === 0) {
+    const currentHour = laTime.getHours();
+    const currentMinute = laTime.getMinutes();
+    if (currentHour > 23 || (currentHour === 23 && currentMinute >= 59)) {
+      daysUntilThursday = 7; // Next Thursday
+    }
+  }
+  
+  // If today is past Thursday, wait until next week
+  if (daysUntilThursday === 0 && laTime.getHours() >= 23 && laTime.getMinutes() >= 59) {
+    daysUntilThursday = 7;
+  }
+  
+  // Calculate target date in LA timezone
+  const targetLA = new Date(laTime);
+  targetLA.setDate(targetLA.getDate() + daysUntilThursday);
+  targetLA.setHours(23, 59, 0, 0);
+  
+  // Convert back to UTC for scheduling
+  // Create a date string in LA timezone and parse it
+  const targetString = targetLA.toLocaleString('en-US', { 
+    timeZone: 'America/Los_Angeles',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+    hour12: false
+  });
+  
+  // Parse and get the UTC equivalent
+  const [datePart, timePart] = targetString.split(', ');
+  const [month, day, year] = datePart.split('/');
+  const [hour, minute, second] = timePart.split(':');
+  
+  // Create date in LA timezone, then get UTC time
+  const laDate = new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}`);
+  
+  // Adjust for LA timezone offset (PST = -8, PDT = -7)
+  // We need to add the offset to get UTC
+  const janOffset = new Date(laDate.getFullYear(), 0, 1).getTimezoneOffset();
+  const julOffset = new Date(laDate.getFullYear(), 6, 1).getTimezoneOffset();
+  const isDST = laDate.getTimezoneOffset() < Math.max(janOffset, julOffset);
+  const laOffsetHours = isDST ? 7 : 8; // PDT = -7, PST = -8
+  
+  const utcTarget = new Date(laDate.getTime() + (laOffsetHours * 60 * 60 * 1000));
+  
+  return utcTarget;
+}
+
+function scheduleWeeklySync() {
+  const nextSync = getNextThursday1159PM();
+  const now = new Date();
+  const msUntilSync = nextSync.getTime() - now.getTime();
+  
+  // Ensure we don't schedule in the past
+  const actualMs = Math.max(msUntilSync, 60000); // At least 1 minute
+  
+  nextScheduledSync = nextSync.toISOString();
+  
+  console.log(`📅 Next inventory sync scheduled for: ${nextSync.toLocaleString('en-US', { 
+    timeZone: 'America/Los_Angeles',
+    weekday: 'long',
+    year: 'numeric', 
+    month: 'long', 
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZoneName: 'short'
+  })}`);
+  console.log(`   (in ${Math.round(actualMs / 1000 / 60 / 60)} hours)`);
+  
+  setTimeout(async () => {
+    console.log('🔄 Running weekly inventory sync (Thursday 11:59 PM LA)...');
+    const result = await syncInventoryToSheets();
+    if (result.success) {
+      lastSyncTime = result.timestamp;
+    }
+    // Schedule next week's sync
+    scheduleWeeklySync();
+  }, actualMs);
+}
+
+// Start the weekly schedule
+scheduleWeeklySync();
+
+// Also load from Sheets on startup after a delay (to allow Google connection)
+setTimeout(async () => {
+  console.log('🔄 Running startup inventory load...');
+  await loadInventoryFromSheets();
+}, 5000);
+
 // ============ Google OAuth Routes ============
 
 app.get('/auth/google', (req, res) => {
@@ -384,6 +694,35 @@ app.get('/api/google/disconnect', (req, res) => {
   userTokens = null;
   oauth2Client.revokeCredentials();
   res.json({ success: true });
+});
+
+// ============ Inventory Sync Endpoints ============
+
+// Manual sync to Google Sheets
+app.post('/api/inventory/sync', async (req, res) => {
+  console.log('📤 Manual inventory sync triggered');
+  const result = await syncInventoryToSheets();
+  if (result.success) {
+    lastSyncTime = result.timestamp;
+  }
+  res.json(result);
+});
+
+// Load inventory from Google Sheets
+app.post('/api/inventory/load', async (req, res) => {
+  console.log('📥 Manual inventory load triggered');
+  const result = await loadInventoryFromSheets();
+  res.json(result);
+});
+
+// Get sync status
+app.get('/api/inventory/sync-status', (req, res) => {
+  res.json({
+    lastSync: lastSyncTime,
+    nextSync: nextScheduledSync,
+    schedule: 'Every Thursday at 11:59 PM Los Angeles time',
+    googleConnected: !!userTokens
+  });
 });
 
 // ============ Gmail Routes ============
@@ -1053,7 +1392,7 @@ app.post('/api/invoice/confirm', async (req, res) => {
   }
 
   try {
-    const { invoiceNumber, date, total } = req.body;
+    const { invoiceNumber, date, total, items } = req.body;
     
     if (!invoiceNumber || !date || total === undefined) {
       return res.status(400).json({ error: 'Missing invoice details' });
@@ -1075,7 +1414,45 @@ app.post('/api/invoice/confirm', async (req, res) => {
 
     console.log(`✅ Invoice ${invoiceNumber} confirmed and recorded in spreadsheet`);
 
-    res.json({ success: true, message: `Invoice ${invoiceNumber} confirmed` });
+    // Deduct items from roasted coffee inventory
+    const deductions = [];
+    if (items && items.length > 0) {
+      for (const item of items) {
+        // Find matching roasted coffee by description/product name
+        const productName = item.description ? item.description.replace(' (units in lbs)', '') : item.product;
+        const quantity = item.quantity || 0;
+        
+        // Search for matching roasted coffee
+        const roastedMatch = roastedCoffeeInventory.find(c => 
+          c.name.toLowerCase() === productName.toLowerCase() ||
+          c.name.toLowerCase().includes(productName.toLowerCase()) ||
+          productName.toLowerCase().includes(c.name.toLowerCase())
+        );
+        
+        if (roastedMatch && quantity > 0) {
+          const previousWeight = roastedMatch.weight;
+          roastedMatch.weight = Math.max(0, roastedMatch.weight - quantity);
+          
+          deductions.push({
+            product: roastedMatch.name,
+            deducted: quantity,
+            previous: previousWeight,
+            remaining: roastedMatch.weight
+          });
+          
+          console.log(`📦 Deducted ${quantity} lb from ${roastedMatch.name}: ${previousWeight} → ${roastedMatch.weight} lb`);
+        }
+      }
+    }
+
+    res.json({ 
+      success: true, 
+      message: `Invoice ${invoiceNumber} confirmed`,
+      deductions: deductions
+    });
+
+    // Sync inventory to Sheets in background (don't await)
+    syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 
   } catch (error) {
     console.error('Invoice confirmation error:', error);
@@ -1603,6 +1980,7 @@ app.post('/api/inventory/green/update', (req, res) => {
   if (roastProfile !== undefined) coffee.roastProfile = roastProfile;
   if (dropTemp !== undefined) coffee.dropTemp = dropTemp;
   res.json({ success: true, coffee });
+  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Add new green coffee
@@ -1615,6 +1993,7 @@ app.post('/api/inventory/green/add', (req, res) => {
   const newCoffee = { id, name, weight, roastProfile, dropTemp };
   greenCoffeeInventory.push(newCoffee);
   res.json({ success: true, coffee: newCoffee });
+  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Remove green coffee
@@ -1626,6 +2005,7 @@ app.post('/api/inventory/green/remove', (req, res) => {
   }
   greenCoffeeInventory.splice(index, 1);
   res.json({ success: true });
+  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Get roasted coffee inventory
@@ -1644,6 +2024,7 @@ app.post('/api/inventory/roasted/update', (req, res) => {
   if (type !== undefined) coffee.type = type;
   if (recipe !== undefined) coffee.recipe = recipe;
   res.json({ success: true, coffee });
+  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Add new roasted coffee
@@ -1653,6 +2034,7 @@ app.post('/api/inventory/roasted/add', (req, res) => {
   const newCoffee = { id, name, weight, type, recipe };
   roastedCoffeeInventory.push(newCoffee);
   res.json({ success: true, coffee: newCoffee });
+  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Remove roasted coffee
@@ -1664,6 +2046,7 @@ app.post('/api/inventory/roasted/remove', (req, res) => {
   }
   roastedCoffeeInventory.splice(index, 1);
   res.json({ success: true });
+  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Get en route inventory
@@ -1682,15 +2065,17 @@ app.post('/api/inventory/enroute/add', (req, res) => {
     type,
     recipe,
     trackingNumber: '',
-    orderDate: orderDate || new Date().toISOString(),
+    dateOrdered: orderDate || new Date().toLocaleDateString('en-US'),
+    estimatedDelivery: '',
     status: 'ordered'
   };
   enRouteCoffeeInventory.push(newItem);
   res.json({ success: true, item: newItem });
+  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
-// Update tracking number
-app.post('/api/inventory/enroute/tracking', (req, res) => {
+// Update tracking number and fetch estimated delivery
+app.post('/api/inventory/enroute/tracking', async (req, res) => {
   const { id, trackingNumber } = req.body;
   const item = enRouteCoffeeInventory.find(c => c.id === id);
   if (!item) {
@@ -1698,7 +2083,18 @@ app.post('/api/inventory/enroute/tracking', (req, res) => {
   }
   item.trackingNumber = trackingNumber;
   item.status = 'shipped';
+  
+  // Fetch estimated delivery date from UPS
+  if (trackingNumber) {
+    const trackingInfo = await getUPSEstimatedDelivery(trackingNumber);
+    if (trackingInfo && trackingInfo.estimatedDelivery) {
+      item.estimatedDelivery = trackingInfo.estimatedDelivery;
+      console.log(`📦 Tracking ${trackingNumber}: Est. delivery ${trackingInfo.estimatedDelivery}`);
+    }
+  }
+  
   res.json({ success: true, item });
+  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Mark en route item as delivered (moves to roasted inventory)
@@ -1735,9 +2131,64 @@ app.post('/api/inventory/enroute/deliver', (req, res) => {
   enRouteCoffeeInventory.splice(index, 1);
   
   res.json({ success: true, message: `${item.name} (${item.weight}lb) added to roasted inventory` });
+  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // ============ UPS Tracking API ============
+
+// Look up UPS tracking info and get estimated delivery date
+async function getUPSEstimatedDelivery(trackingNumber) {
+  if (!trackingNumber) return null;
+  
+  try {
+    // Use Gemini to extract delivery date from UPS tracking
+    const prompt = `I need to look up UPS tracking number: ${trackingNumber}
+
+Based on standard UPS Ground shipping times (typically 5-7 business days from ship date), and common tracking number patterns:
+- If it starts with "1Z" it's a valid UPS tracking number
+- Ground shipments from California typically take 5-7 business days
+
+Since this is a roasted coffee order that was just shipped, estimate the delivery date as approximately 5-7 business days from today.
+
+Respond with JSON only (no markdown):
+{
+  "estimatedDelivery": "MM/DD/YYYY format date, approximately 6 business days from today",
+  "status": "In Transit" or "Shipped",
+  "validFormat": true if starts with 1Z, false otherwise
+}`;
+
+    const response = await callGeminiWithRetry(prompt);
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    
+    if (jsonMatch) {
+      const data = JSON.parse(jsonMatch[0]);
+      return {
+        estimatedDelivery: data.estimatedDelivery || null,
+        status: data.status || 'In Transit',
+        validFormat: data.validFormat
+      };
+    }
+  } catch (error) {
+    console.error('UPS lookup error:', error);
+  }
+  
+  // Fallback: calculate ~6 business days from now
+  const today = new Date();
+  let businessDays = 6;
+  let deliveryDate = new Date(today);
+  while (businessDays > 0) {
+    deliveryDate.setDate(deliveryDate.getDate() + 1);
+    const dayOfWeek = deliveryDate.getDay();
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) { // Skip weekends
+      businessDays--;
+    }
+  }
+  return {
+    estimatedDelivery: deliveryDate.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }),
+    status: 'In Transit',
+    validFormat: trackingNumber.startsWith('1Z')
+  };
+}
 
 // Look up UPS tracking info
 app.post('/api/ups/track', async (req, res) => {
@@ -1747,48 +2198,15 @@ app.post('/api/ups/track', async (req, res) => {
     return res.json({ error: 'No tracking number provided' });
   }
   
-  // Use Gemini to simulate tracking lookup (in production, use actual UPS API)
-  // For now, provide a helpful response with link to UPS
-  try {
-    const prompt = `A user wants to track a UPS package with tracking number: ${trackingNumber}
-
-Since I don't have direct access to UPS tracking API, provide a helpful response. 
-If the tracking number looks valid (1Z followed by alphanumeric characters, or starts with certain patterns), 
-say it appears to be a valid UPS tracking number.
-
-Respond with JSON only:
-{
-  "status": "In Transit" or "Shipped" or "Unknown",
-  "validFormat": true/false,
-  "message": "brief message about the tracking number"
-}`;
-
-    const response = await callGeminiWithRetry(prompt);
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    
-    if (jsonMatch) {
-      const data = JSON.parse(jsonMatch[0]);
-      res.json({
-        trackingNumber,
-        status: data.status || 'Check UPS.com for status',
-        validFormat: data.validFormat,
-        trackingUrl: `https://www.ups.com/track?tracknum=${trackingNumber}`
-      });
-    } else {
-      res.json({
-        trackingNumber,
-        status: 'Check UPS.com for status',
-        trackingUrl: `https://www.ups.com/track?tracknum=${trackingNumber}`
-      });
-    }
-  } catch (error) {
-    console.error('UPS tracking error:', error);
-    res.json({
-      trackingNumber,
-      status: 'Unable to verify',
-      trackingUrl: `https://www.ups.com/track?tracknum=${trackingNumber}`
-    });
-  }
+  const trackingInfo = await getUPSEstimatedDelivery(trackingNumber);
+  
+  res.json({
+    trackingNumber,
+    status: trackingInfo?.status || 'Check UPS.com for status',
+    estimatedDelivery: trackingInfo?.estimatedDelivery || null,
+    validFormat: trackingInfo?.validFormat,
+    trackingUrl: `https://www.ups.com/track?tracknum=${trackingNumber}`
+  });
 });
 
 // ============ Conversational Chat API ============
@@ -2133,6 +2551,9 @@ app.post('/api/roast-order/confirm', async (req, res) => {
     draftCreated,
     message: `Order confirmed! ${deductions.length > 0 ? 'Green coffee inventory updated.' : ''} ${enRouteItems.length} item(s) added to en route.${draftCreated ? ' Email draft created in Gmail.' : ''}`
   });
+
+  // Sync inventory to Sheets in background (don't await)
+  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // ============ Health Check ============

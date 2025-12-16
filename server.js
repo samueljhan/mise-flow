@@ -2589,6 +2589,135 @@ app.post('/api/roast-order/confirm', async (req, res) => {
   syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
+// ============ Privacy Policy ============
+
+app.get('/privacy', (req, res) => {
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy - Mise Flow</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #1a1a1a;
+      color: #e0e0e0;
+      line-height: 1.6;
+      padding: 40px 20px;
+    }
+    .container {
+      max-width: 800px;
+      margin: 0 auto;
+      background: #252525;
+      border-radius: 12px;
+      padding: 40px;
+    }
+    h1 {
+      color: #fff;
+      margin-bottom: 8px;
+      font-size: 2rem;
+    }
+    .subtitle {
+      color: #888;
+      margin-bottom: 32px;
+      font-size: 0.9rem;
+    }
+    h2 {
+      color: #28a745;
+      margin-top: 32px;
+      margin-bottom: 12px;
+      font-size: 1.2rem;
+    }
+    p, li {
+      color: #ccc;
+      margin-bottom: 12px;
+    }
+    ul {
+      margin-left: 24px;
+      margin-bottom: 16px;
+    }
+    a {
+      color: #28a745;
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    .back-link {
+      display: inline-block;
+      margin-top: 32px;
+      padding: 10px 20px;
+      background: #28a745;
+      color: #fff;
+      border-radius: 6px;
+      text-decoration: none;
+    }
+    .back-link:hover {
+      background: #218838;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Privacy Policy</h1>
+    <p class="subtitle">Last updated: December 2024</p>
+    
+    <p>Mise Flow ("we", "our", or "us") is an inventory and invoice management tool for Archives of Us Coffee. This policy explains how we handle your information.</p>
+    
+    <h2>Information We Collect</h2>
+    <p>When you use Mise Flow, we may collect:</p>
+    <ul>
+      <li><strong>Business Data:</strong> Customer names, invoice details, inventory records, and order information you enter into the system</li>
+      <li><strong>Google Account Data:</strong> When you connect your Google account, we access Gmail (to draft emails) and Google Sheets (to sync data) with your permission</li>
+      <li><strong>Voice Input:</strong> If you use voice dictation, audio is processed by AWS Transcribe and is not stored after transcription</li>
+    </ul>
+    
+    <h2>How We Use Your Information</h2>
+    <ul>
+      <li>Generate and manage invoices</li>
+      <li>Track coffee inventory (green, roasted, and en route)</li>
+      <li>Sync data with your Google Sheets</li>
+      <li>Draft emails in your Gmail account</li>
+      <li>Process natural language commands via AI (Google Gemini)</li>
+    </ul>
+    
+    <h2>Data Storage</h2>
+    <ul>
+      <li>Invoice PDFs are stored temporarily on our servers</li>
+      <li>Inventory data syncs to your connected Google Sheet</li>
+      <li>We do not sell or share your business data with third parties</li>
+    </ul>
+    
+    <h2>Third-Party Services</h2>
+    <p>Mise Flow uses the following services:</p>
+    <ul>
+      <li><strong>Google APIs:</strong> Gmail and Sheets integration (governed by <a href="https://policies.google.com/privacy" target="_blank">Google's Privacy Policy</a>)</li>
+      <li><strong>AWS Transcribe:</strong> Voice-to-text processing</li>
+      <li><strong>Google Gemini:</strong> AI-powered natural language processing</li>
+      <li><strong>Railway:</strong> Application hosting</li>
+    </ul>
+    
+    <h2>Your Rights</h2>
+    <ul>
+      <li>Disconnect your Google account at any time</li>
+      <li>Request deletion of your data</li>
+      <li>Export your invoice and inventory records</li>
+    </ul>
+    
+    <h2>Contact</h2>
+    <p>For privacy questions or data requests, contact: <a href="mailto:samueljhan@gmail.com">samueljhan@gmail.com</a></p>
+    
+    <a href="/" class="back-link">← Back to Mise Flow</a>
+  </div>
+</body>
+</html>`;
+  
+  res.send(html);
+});
+
 // ============ Health Check ============
 
 app.get('/api/health', (req, res) => {

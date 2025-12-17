@@ -798,6 +798,21 @@
         </div>
     </div>
 
+    <!-- Tracking Entry Modal -->
+    <div class="modal-overlay" id="trackingModal">
+        <div class="modal" style="max-width: 500px; max-height: 85vh; overflow-y: auto;">
+            <h3>Enter Tracking Numbers</h3>
+            <p style="color: #888; margin-bottom: 15px;">Add tracking numbers for en route orders:</p>
+            
+            <div id="trackingOrderList"></div>
+            
+            <div class="modal-buttons">
+                <button class="modal-btn cancel" onclick="closeTrackingModal()">Cancel</button>
+                <button class="modal-btn send" onclick="saveAllTracking()">Save All</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const chatContainer = document.getElementById('chatContainer');
         const userInput = document.getElementById('userInput');
@@ -1332,7 +1347,7 @@
         // Confirm default order and generate email
         async function confirmDefaultOrder() {
             window.waitingForOrderConfirmation = false;
-            addMessage('Yes, generate email', true);
+            addMessage('Confirmed', true);
             addMessage('Generating email draft...', false);
             
             try {
@@ -1432,22 +1447,47 @@
                     
                     window.waitingForOrderConfirmation = true;
                 } else {
+                    // Show clarification message but keep in order mode
+                    const clarificationMsg = data.message || "How much of each coffee would you like? For example: '80lb Archives Blend and 60lb Ethiopia Gera'";
+                    
+                    // Build a response that keeps order context
+                    let html = `<div style="margin-bottom:12px;">${clarificationMsg}</div>`;
+                    html += '<div style="color:#888; font-size:12px; margin-bottom:12px;">Current order: ';
+                    html += pendingRoastOrder.map(o => `${o.weight}lb ${o.name}`).join(', ');
+                    html += '</div>';
+                    html += '<div class="response-buttons" style="margin-top: 12px;">';
+                    html += '<button class="action-btn" onclick="openEditOrderModal()">Edit Order</button>';
+                    html += '<button class="action-btn" onclick="cancelRoastOrder()">Cancel</button>';
+                    html += '</div>';
+                    
                     const messages = chatContainer.querySelectorAll('.message');
                     const lastMsg = messages[messages.length - 1];
                     if (lastMsg) {
                         const content = lastMsg.querySelector('.message-content') || lastMsg;
-                        content.innerHTML = data.message || "I couldn't understand that modification. Please try again with format like: '80lb Archives Blend and 60lb Ethiopia Gera'";
+                        content.innerHTML = html;
                     }
+                    
                     window.waitingForOrderConfirmation = true;
+                    userInput.placeholder = "Specify amounts like: '80lb Archives Blend and 60lb Ethiopia'";
                 }
             } catch (error) {
                 console.error('Error modifying order:', error);
+                
+                // Keep user in order mode even on error
+                let html = '<div style="margin-bottom:12px;">Sorry, there was an error processing that. Please try again or use the Edit Order button.</div>';
+                html += '<div class="response-buttons" style="margin-top: 12px;">';
+                html += '<button class="action-btn" onclick="openEditOrderModal()">Edit Order</button>';
+                html += '<button class="action-btn" onclick="showDefaultOrderInChat()">Show Current Order</button>';
+                html += '<button class="action-btn" onclick="cancelRoastOrder()">Cancel</button>';
+                html += '</div>';
+                
                 const messages = chatContainer.querySelectorAll('.message');
                 const lastMsg = messages[messages.length - 1];
                 if (lastMsg) {
                     const content = lastMsg.querySelector('.message-content') || lastMsg;
-                    content.innerHTML = 'Error processing modification. Please try again.';
+                    content.innerHTML = html;
                 }
+                
                 window.waitingForOrderConfirmation = true;
             }
         }
@@ -1566,7 +1606,20 @@
             pendingRoastOrder = updatedOrder;
             closeEditOrderModal();
             
-            // Regenerate the summary in chat
+            // Disable all action buttons in previous messages to prevent stale actions
+            const allMessages = chatContainer.querySelectorAll('.message');
+            allMessages.forEach(msg => {
+                const buttons = msg.querySelectorAll('.action-btn');
+                buttons.forEach(btn => {
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
+                    btn.style.cursor = 'not-allowed';
+                    btn.onclick = null;
+                });
+            });
+            
+            // Add placeholder message that showDefaultOrderInChat will update
+            addMessage('Generating updated order...', false);
             showDefaultOrderInChat();
         }
 
@@ -1901,21 +1954,51 @@
                 return;
             }
             
+            // Group items by dateOrdered (same date/time = same roast order)
+            const orderGroups = {};
+            enRouteCoffeeInventory.forEach(item => {
+                const orderKey = item.dateOrdered || 'unknown';
+                if (!orderGroups[orderKey]) {
+                    orderGroups[orderKey] = [];
+                }
+                orderGroups[orderKey].push(item);
+            });
+            
             let html = '<strong>En Route Coffee</strong><br><br>';
             
-            enRouteCoffeeInventory.forEach((item, index) => {
-                const orderDate = new Date(item.orderDate).toLocaleDateString();
-                const statusColor = item.status === 'shipped' ? '#4a6741' : '#6a5741';
+            Object.keys(orderGroups).forEach((orderDate, groupIndex) => {
+                const items = orderGroups[orderDate];
+                const firstItem = items[0];
+                
+                // Format order date
+                let orderDateStr = '';
+                if (orderDate && orderDate !== 'unknown') {
+                    const date = new Date(orderDate);
+                    if (!isNaN(date.getTime())) {
+                        orderDateStr = date.toLocaleDateString();
+                    }
+                }
+                
+                // Check if this group has tracking
+                const hasTracking = firstItem.trackingNumber && firstItem.trackingNumber.trim() !== '';
                 
                 html += `<div style="background:#1a1a1a; padding:12px; border-radius:8px; margin-bottom:10px;">`;
-                html += `<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">`;
-                html += `<strong style="color:#90EE90;">${item.name}</strong> - ${item.weight}lb`;
-                html += `<span style="background:${statusColor}; padding:2px 8px; border-radius:4px; font-size:11px;">${item.status}</span>`;
-                html += `</div>`;
-                html += `<div style="font-size:12px; color:#888; margin-bottom:8px;">Ordered: ${orderDate}</div>`;
+                
+                // Show all items in this order group
+                items.forEach((item, idx) => {
+                    html += `<div style="margin-bottom:${idx < items.length - 1 ? '4px' : '8px'};">`;
+                    html += `<strong style="color:#90EE90;">${item.name}</strong> - ${item.weight}lb`;
+                    html += `</div>`;
+                });
+                
+                if (orderDateStr) {
+                    html += `<div style="font-size:12px; color:#888; margin-bottom:8px;">Ordered: ${orderDateStr}</div>`;
+                }
+                
                 html += `<div style="display:flex; gap:8px;">`;
-                html += `<button class="action-btn" onclick="viewTracking('${item.id}', '${item.trackingNumber || ''}')" style="font-size:12px; padding:6px 10px;">Tracking</button>`;
-                html += `<button class="action-btn" onclick="startMarkDelivered('${item.id}', '${item.name}', ${item.weight})" style="font-size:12px; padding:6px 10px; background:#4a6741;">Mark Delivered</button>`;
+                // Use first item's ID and tracking for the group
+                html += `<button class="action-btn" onclick="viewTracking('${firstItem.id}', '${firstItem.trackingNumber || ''}')" style="font-size:12px; padding:6px 10px;">Tracking</button>`;
+                html += `<button class="action-btn" onclick="startMarkDeliveredGroup('${orderDate}')" style="font-size:12px; padding:6px 10px; background:#4a6741;">Mark Delivered</button>`;
                 html += `</div>`;
                 html += `</div>`;
             });
@@ -1924,28 +2007,45 @@
         }
         
         async function viewTracking(itemId, trackingNumber) {
-            if (!trackingNumber) {
-                addMessage('There is no tracking number recorded. Do you want to add one?', false);
+            if (!trackingNumber || trackingNumber.trim() === '') {
+                // No tracking - check how many orders need tracking
+                const ordersWithoutTracking = getOrdersWithoutTracking();
                 
-                let html = '<div class="response-buttons" style="margin-top: 8px;">';
-                html += `<button class="action-btn" onclick="promptAddTracking('${itemId}')">Yes, add tracking</button>`;
-                html += `<button class="action-btn" onclick="addConversationalFollowUp('tracking_skipped')">No</button>`;
-                html += '</div>';
+                if (ordersWithoutTracking.length === 0) {
+                    addMessage('All orders have tracking numbers.', false);
+                    return;
+                }
                 
-                const messages = chatContainer.querySelectorAll('.message');
-                const lastMsg = messages[messages.length - 1];
-                if (lastMsg) {
-                    const content = lastMsg.querySelector('.message-content') || lastMsg;
-                    content.innerHTML += html;
+                if (ordersWithoutTracking.length === 1) {
+                    // Single order - simple text prompt
+                    const order = ordersWithoutTracking[0];
+                    const itemsList = order.items.map(i => `${i.weight}lb ${i.name}`).join(', ');
+                    addMessage(`No tracking number for: ${itemsList}`, false);
+                    
+                    let html = '<div style="margin-top:8px;">Enter tracking number:</div>';
+                    html += `<div style="display:flex; gap:8px; margin-top:8px;">`;
+                    html += `<input type="text" id="singleTrackingInput" placeholder="1Z..." style="flex:1; padding:8px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;">`;
+                    html += `<button class="action-btn" onclick="saveSingleTracking('${order.dateKey}')" style="padding:8px 12px;">Save</button>`;
+                    html += `</div>`;
+                    
+                    const messages = chatContainer.querySelectorAll('.message');
+                    const lastMsg = messages[messages.length - 1];
+                    if (lastMsg) {
+                        const content = lastMsg.querySelector('.message-content') || lastMsg;
+                        content.innerHTML += html;
+                    }
+                } else {
+                    // Multiple orders - show table modal
+                    openTrackingModal();
                 }
                 return;
             }
             
-            // Show tracking info
+            // Has tracking - show tracking info and ETA
             addMessage('Looking up tracking information...', false);
             
             try {
-                const response = await fetch('/api/ups/track', {
+                const response = await fetch('/api/tracking/lookup', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ trackingNumber })
@@ -1953,25 +2053,20 @@
                 
                 const data = await response.json();
                 
-                let html = `<strong>UPS Tracking: ${trackingNumber}</strong><br><br>`;
+                let html = `<strong>Tracking: ${trackingNumber}</strong><br><br>`;
                 
-                if (data.error) {
-                    html += `Status: Unable to retrieve tracking info<br>`;
-                    html += `<a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90;">View on UPS.com</a>`;
+                if (data.success && data.tracking) {
+                    if (data.tracking.estimatedDelivery) {
+                        html += `<div style="margin-bottom:8px;"><strong>Estimated Arrival:</strong> ${data.tracking.estimatedDelivery}</div>`;
+                    }
+                    if (data.tracking.status) {
+                        html += `<div style="margin-bottom:8px;"><strong>Status:</strong> ${data.tracking.status}</div>`;
+                    }
+                    html += `<a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90;">View full details on UPS.com</a>`;
                 } else {
-                    html += `Status: ${data.status || 'In Transit'}<br>`;
-                    if (data.estimatedDelivery) {
-                        html += `Estimated Arrival: ${data.estimatedDelivery}<br>`;
-                    }
-                    if (data.lastLocation) {
-                        html += `Last Location: ${data.lastLocation}<br>`;
-                    }
-                    html += `<br><a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90;">View full details on UPS.com</a>`;
+                    html += `<div style="margin-bottom:8px;">Tracking number: ${trackingNumber}</div>`;
+                    html += `<a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90;">View on UPS.com</a>`;
                 }
-                
-                html += '<br><br><div class="response-buttons">';
-                html += `<button class="action-btn" onclick="promptAddTracking('${itemId}')">Update Tracking</button>`;
-                html += '</div>';
                 
                 const messages = chatContainer.querySelectorAll('.message');
                 const lastMsg = messages[messages.length - 1];
@@ -1979,14 +2074,10 @@
                     const content = lastMsg.querySelector('.message-content') || lastMsg;
                     content.innerHTML = html;
                 }
-                
             } catch (error) {
-                console.error('Error fetching tracking:', error);
-                let html = `<strong>UPS Tracking: ${trackingNumber}</strong><br><br>`;
-                html += `<a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90;">View tracking on UPS.com</a>`;
-                html += '<br><br><div class="response-buttons">';
-                html += `<button class="action-btn" onclick="promptAddTracking('${itemId}')">Update Tracking</button>`;
-                html += '</div>';
+                // Fallback - just show link
+                let html = `<strong>Tracking: ${trackingNumber}</strong><br><br>`;
+                html += `<a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90;">View on UPS.com</a>`;
                 
                 const messages = chatContainer.querySelectorAll('.message');
                 const lastMsg = messages[messages.length - 1];
@@ -1994,6 +2085,197 @@
                     const content = lastMsg.querySelector('.message-content') || lastMsg;
                     content.innerHTML = html;
                 }
+            }
+        }
+        
+        // Get orders grouped by date that don't have tracking
+        function getOrdersWithoutTracking() {
+            const orderGroups = {};
+            enRouteCoffeeInventory.forEach(item => {
+                if (!item.trackingNumber || item.trackingNumber.trim() === '') {
+                    const orderKey = item.dateOrdered || 'unknown';
+                    if (!orderGroups[orderKey]) {
+                        orderGroups[orderKey] = [];
+                    }
+                    orderGroups[orderKey].push(item);
+                }
+            });
+            
+            return Object.keys(orderGroups).map(dateKey => ({
+                dateKey,
+                items: orderGroups[dateKey]
+            }));
+        }
+        
+        // Save tracking for single order
+        async function saveSingleTracking(dateKey) {
+            const input = document.getElementById('singleTrackingInput');
+            const trackingNumber = input?.value?.trim();
+            
+            if (!trackingNumber) {
+                alert('Please enter a tracking number');
+                return;
+            }
+            
+            // Update all items with this date
+            const itemsToUpdate = enRouteCoffeeInventory.filter(item => 
+                (item.dateOrdered || 'unknown') === dateKey
+            );
+            
+            try {
+                for (const item of itemsToUpdate) {
+                    await fetch('/api/inventory/enroute/tracking', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ id: item.id, trackingNumber })
+                    });
+                }
+                
+                await loadInventory();
+                addMessage(`Tracking saved: ${trackingNumber}`, false);
+                addConversationalFollowUp('tracking_updated');
+            } catch (error) {
+                console.error('Error saving tracking:', error);
+                addMessage('Error saving tracking number.', false);
+            }
+        }
+        
+        // Open tracking table modal for multiple orders
+        function openTrackingModal() {
+            const ordersWithoutTracking = getOrdersWithoutTracking();
+            
+            let html = '';
+            ordersWithoutTracking.forEach((order, index) => {
+                const items = order.items;
+                const itemsList = items.map(i => `${i.weight}lb ${i.name}`).join(', ');
+                
+                // Format date
+                let dateStr = '';
+                if (order.dateKey && order.dateKey !== 'unknown') {
+                    const date = new Date(order.dateKey);
+                    if (!isNaN(date.getTime())) {
+                        dateStr = date.toLocaleDateString();
+                    }
+                }
+                
+                html += `<div style="background:#1a1a1a; padding:12px; border-radius:8px; margin-bottom:8px;">`;
+                html += `<div style="margin-bottom:8px;">`;
+                html += `<strong style="color:#90EE90;">${itemsList}</strong>`;
+                if (dateStr) {
+                    html += `<br><span style="font-size:12px; color:#888;">Ordered: ${dateStr}</span>`;
+                }
+                html += `</div>`;
+                html += `<input type="text" placeholder="Enter tracking number..." style="width:100%; padding:8px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-tracking-order="${index}" data-date-key="${order.dateKey}">`;
+                html += `</div>`;
+            });
+            
+            document.getElementById('trackingOrderList').innerHTML = html;
+            document.getElementById('trackingModal').style.display = 'flex';
+        }
+        
+        function closeTrackingModal() {
+            document.getElementById('trackingModal').style.display = 'none';
+        }
+        
+        async function saveAllTracking() {
+            const inputs = document.querySelectorAll('[data-tracking-order]');
+            let updated = 0;
+            
+            for (const input of inputs) {
+                const trackingNumber = input.value.trim();
+                const dateKey = input.dataset.dateKey;
+                
+                if (trackingNumber) {
+                    const itemsToUpdate = enRouteCoffeeInventory.filter(item => 
+                        (item.dateOrdered || 'unknown') === dateKey
+                    );
+                    
+                    for (const item of itemsToUpdate) {
+                        try {
+                            await fetch('/api/inventory/enroute/tracking', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ id: item.id, trackingNumber })
+                            });
+                            updated++;
+                        } catch (error) {
+                            console.error('Error updating tracking:', error);
+                        }
+                    }
+                }
+            }
+            
+            closeTrackingModal();
+            await loadInventory();
+            
+            if (updated > 0) {
+                addMessage(`Tracking updated for ${updated} item(s).`, false);
+            }
+            addConversationalFollowUp('tracking_updated');
+        }
+        
+        // Mark delivered for a group of items (same order date)
+        async function startMarkDeliveredGroup(dateKey) {
+            const items = enRouteCoffeeInventory.filter(item => 
+                (item.dateOrdered || 'unknown') === dateKey
+            );
+            
+            if (items.length === 0) return;
+            
+            const itemsList = items.map(i => `${i.weight}lb ${i.name}`).join(', ');
+            
+            addMessage(`Mark as delivered: ${itemsList}?`, false);
+            
+            let html = '<div style="margin-top:8px;">Enter your initials to confirm:</div>';
+            html += `<div style="display:flex; gap:8px; margin-top:8px;">`;
+            html += `<input type="text" id="deliveryInitials" placeholder="Initials" style="width:80px; padding:8px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;">`;
+            html += `<button class="action-btn" onclick="confirmDeliveryGroup('${dateKey}')" style="padding:8px 12px; background:#4a6741;">Confirm</button>`;
+            html += `<button class="action-btn" onclick="addConversationalFollowUp('delivery_cancelled')">Cancel</button>`;
+            html += `</div>`;
+            
+            const messages = chatContainer.querySelectorAll('.message');
+            const lastMsg = messages[messages.length - 1];
+            if (lastMsg) {
+                const content = lastMsg.querySelector('.message-content') || lastMsg;
+                content.innerHTML += html;
+            }
+        }
+        
+        async function confirmDeliveryGroup(dateKey) {
+            const initialsInput = document.getElementById('deliveryInitials');
+            const initials = initialsInput?.value?.trim();
+            
+            if (!initials) {
+                alert('Please enter your initials');
+                return;
+            }
+            
+            const items = enRouteCoffeeInventory.filter(item => 
+                (item.dateOrdered || 'unknown') === dateKey
+            );
+            
+            try {
+                for (const item of items) {
+                    await fetch('/api/inventory/enroute/deliver', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            id: item.id,
+                            coffeeName: item.name,
+                            weight: item.weight,
+                            type: item.type,
+                            initials: initials
+                        })
+                    });
+                }
+                
+                await loadInventory();
+                const itemsList = items.map(i => `${i.weight}lb ${i.name}`).join(', ');
+                addMessage(`Delivered: ${itemsList} (confirmed by ${initials})`, false);
+                addConversationalFollowUp('delivery_confirmed');
+            } catch (error) {
+                console.error('Error marking delivered:', error);
+                addMessage('Error marking as delivered.', false);
             }
         }
         
@@ -2066,14 +2348,21 @@
             
             let html = '';
             enRouteCoffeeInventory.forEach((item, index) => {
-                const orderDate = new Date(item.orderDate).toLocaleDateString();
+                // Use dateOrdered field, handle invalid dates
+                let orderDateStr = '';
+                if (item.dateOrdered) {
+                    const orderDate = new Date(item.dateOrdered);
+                    if (!isNaN(orderDate.getTime())) {
+                        orderDateStr = orderDate.toLocaleDateString();
+                    }
+                }
+                
                 html += `<div style="background:#1a1a1a; padding:15px; border-radius:8px; margin-bottom:10px;">`;
-                html += `<div style="display:flex; justify-content:space-between; align-items:start; margin-bottom:10px;">`;
-                html += `<div>`;
+                html += `<div style="margin-bottom:10px;">`;
                 html += `<strong style="color:#90EE90;">${item.name}</strong> - ${item.weight}lb<br>`;
-                html += `<span style="font-size:12px; color:#888;">Type: ${item.type} | Ordered: ${orderDate}</span>`;
-                html += `</div>`;
-                html += `<span style="background:${item.status === 'shipped' ? '#4a6741' : '#6a5741'}; padding:3px 8px; border-radius:4px; font-size:11px;">${item.status}</span>`;
+                if (orderDateStr) {
+                    html += `<span style="font-size:12px; color:#888;">Ordered: ${orderDateStr}</span>`;
+                }
                 html += `</div>`;
                 
                 html += `<div style="display:flex; gap:10px; align-items:center;">`;

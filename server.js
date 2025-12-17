@@ -3054,9 +3054,8 @@ app.post('/api/inventory/enroute/add', async (req, res) => {
     type,
     recipe,
     trackingNumber: '',
-    dateOrdered: orderDate || new Date().toLocaleDateString('en-US'),
-    estimatedDelivery: '',
-    status: 'ordered'
+    dateOrdered: orderDate || new Date().toISOString(),
+    estimatedDelivery: ''
   };
   enRouteCoffeeInventory.push(newItem);
   await syncInventoryToSheets();
@@ -3072,7 +3071,6 @@ app.post('/api/inventory/enroute/tracking', async (req, res) => {
     return res.status(404).json({ error: 'En route item not found' });
   }
   item.trackingNumber = trackingNumber;
-  item.status = 'shipped';
   
   // Fetch estimated delivery date from UPS
   if (trackingNumber) {
@@ -3347,11 +3345,11 @@ Respond with JSON only:
       const parsed = JSON.parse(jsonMatch[0]);
       res.json(parsed);
     } else {
-      res.json({ understood: false, needsClarification: true, clarificationQuestion: "Sorry, I didn't get that. What can I help you with?" });
+      res.json({ understood: false, needsClarification: true, clarificationQuestion: "Which roasted coffees would you like to order? For example: 'Archives Blend and Ethiopia Gera'" });
     }
   } catch (error) {
     console.error('Parse roast order error:', error);
-    res.json({ understood: false, needsClarification: true, clarificationQuestion: "Sorry, I didn't get that. What can I help you with?" });
+    res.json({ understood: false, needsClarification: true, clarificationQuestion: "Which roasted coffees would you like to order? For example: 'Archives Blend and Ethiopia Gera'" });
   }
 });
 
@@ -3365,22 +3363,38 @@ app.post('/api/roast-order/modify', async (req, res) => {
   const roastedCoffeeNames = roastedCoffeeInventory.map(c => c.name);
   const roastedCoffeeTypes = roastedCoffeeInventory.map(c => ({ name: c.name, type: c.type }));
   
-  const prompt = `You are parsing a coffee roast order modification for Archives of Us Coffee.
+  const prompt = `You are Mise, an intelligent assistant for Archives of Us Coffee roast orders.
 
-Available roasted coffees: ${JSON.stringify(roastedCoffeeTypes)}
+AVAILABLE ROASTED COFFEES: ${JSON.stringify(roastedCoffeeTypes)}
 
-Current order: ${JSON.stringify(currentOrder.map(o => ({ name: o.name, weight: o.weight })))}
+CURRENT ORDER: ${JSON.stringify(currentOrder.map(o => ({ name: o.name, weight: o.weight })))}
 
-User modification request: "${userRequest}"
+USER REQUEST: "${userRequest}"
 
-NICKNAME RECOGNITION:
-- "Blend" or "Archives" → Archives Blend
-- "Ethiopia" or "Gera" → Ethiopia Gera
-- "Colombia" or "Excelso" → Colombia Excelso
+NICKNAME RECOGNITION (be flexible):
+- "Blend", "Archives", "house" → Archives Blend
+- "Ethiopia", "Gera", "ethiopian" → Ethiopia Gera  
+- "Colombia", "Excelso", "colombian" → Colombia Excelso
 - "Decaf" → Colombia Decaf
 
-Parse the user's request to extract the desired roasted coffee weights.
-The user may specify amounts like "80lb Archives Blend" or "60 pounds Ethiopia".
+YOUR TASK:
+1. Parse the user's request to understand what they want
+2. Extract coffee names and weights (amounts in pounds/lb)
+3. If the request is unclear, ask a helpful clarifying question
+
+PARSING EXAMPLES:
+- "80lb Archives Blend and 60lb Ethiopia" → Archives Blend: 80lb, Ethiopia Gera: 60lb
+- "make it 100 pounds blend" → Archives Blend: 100lb
+- "just 50 ethiopia" → Ethiopia Gera: 50lb
+- "No, make it just a total of 80lb Archives Blend and Ethiopia Gera 60lb" → Archives Blend: 80lb, Ethiopia Gera: 60lb
+- "change archives to 100" → Keep other items, change Archives Blend to 100lb
+- "less ethiopia, maybe 40" → Keep other items, change Ethiopia Gera to 40lb
+
+IMPORTANT: 
+- The user is modifying their roast order, so interpret their request in that context
+- "No" at the start usually means they're rejecting the current amounts and specifying new ones
+- If you can extract ANY amounts, return success: true with those items
+- Only return success: false if you truly cannot understand what they want
 
 Respond with JSON only:
 {
@@ -3388,7 +3402,8 @@ Respond with JSON only:
   "items": [
     { "name": "exact coffee name from available list", "weight": number_in_pounds }
   ],
-  "message": "optional message if clarification needed"
+  "needsClarification": true/false,
+  "clarificationQuestion": "helpful question if you need more info (stay in order context)"
 }`;
 
   try {
@@ -3396,13 +3411,31 @@ Respond with JSON only:
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     
     if (!jsonMatch) {
-      return res.json({ success: false, message: "I couldn't understand that. Please specify amounts like: '80lb Archives Blend and 60lb Ethiopia Gera'" });
+      return res.json({ 
+        success: false, 
+        needsClarification: true,
+        message: "I want to help you modify the order. Could you specify the amounts? For example: '80lb Archives Blend and 60lb Ethiopia Gera'"
+      });
     }
     
     const parsed = JSON.parse(jsonMatch[0]);
     
+    // If Gemini needs clarification, return that question
+    if (parsed.needsClarification && parsed.clarificationQuestion) {
+      return res.json({ 
+        success: false, 
+        needsClarification: true,
+        message: parsed.clarificationQuestion
+      });
+    }
+    
     if (!parsed.success || !parsed.items || parsed.items.length === 0) {
-      return res.json({ success: false, message: parsed.message || "I couldn't understand that modification." });
+      // Instead of giving up, ask a clarifying question
+      return res.json({ 
+        success: false, 
+        needsClarification: true,
+        message: parsed.clarificationQuestion || "How much of each coffee would you like? For example: '80lb Archives Blend and 60lb Ethiopia'"
+      });
     }
     
     // Nickname mapping for display
@@ -3678,8 +3711,7 @@ app.post('/api/roast-order/confirm', async (req, res) => {
       type: roastedCoffee ? roastedCoffee.type : 'Unknown',
       recipe: roastedCoffee ? roastedCoffee.recipe : null,
       trackingNumber: '',
-      orderDate: new Date().toISOString(),
-      status: 'ordered'
+      dateOrdered: new Date().toISOString()
     });
   });
   

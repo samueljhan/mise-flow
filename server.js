@@ -335,7 +335,7 @@ function getLoginPage(error = '') {
 <body>
   <div class="login-container">
     <h1>Mise Flow</h1>
-    <p class="subtitle">Automated workflow for AOU Coffee</p>
+    <p class="subtitle">AI-powered Work Flow for AOU Coffee, Inc.</p>
     
     <div class="error-msg" id="errorMsg" style="display: none;">Authentication failed. Please try again.</div>
     
@@ -1005,6 +1005,17 @@ async function loadInventoryFromSheets() {
     console.error('❌ Load inventory error:', error.message);
     return { success: false, error: error.message };
   }
+}
+
+// ============ Google Sheets as Ground Truth ============
+// Always fetch fresh data from Sheets before any inventory operation
+async function ensureFreshInventory() {
+  console.log('🔄 Fetching fresh inventory from Google Sheets...');
+  const result = await loadInventoryFromSheets();
+  if (!result.success) {
+    console.log('⚠️ Using cached inventory - Sheets load failed:', result.error);
+  }
+  return result;
 }
 
 // Schedule weekly sync: Every Thursday at 11:59 PM Los Angeles time
@@ -1840,6 +1851,9 @@ app.post('/api/invoice/confirm', async (req, res) => {
     return res.status(401).json({ error: 'Google not connected' });
   }
 
+  // Always fetch fresh inventory from Google Sheets before modifying
+  await ensureFreshInventory();
+
   try {
     const { invoiceNumber, date, total, items } = req.body;
     
@@ -1907,14 +1921,14 @@ app.post('/api/invoice/confirm', async (req, res) => {
       console.log(`⚠️ No items array received for deduction`);
     }
 
+    // Sync inventory to Sheets before responding
+    await syncInventoryToSheets();
+
     res.json({ 
       success: true, 
       message: `Invoice ${invoiceNumber} confirmed`,
       deductions: deductions
     });
-
-    // Sync inventory to Sheets in background (don't await)
-    syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 
   } catch (error) {
     console.error('Invoice confirmation error:', error);
@@ -2488,6 +2502,9 @@ async function generateInvoicePDF(data, outputPath) {
 
 app.post('/api/process', async (req, res) => {
   try {
+    // Always fetch fresh inventory from Google Sheets before processing
+    await ensureFreshInventory();
+    
     const { text, context, conversationState } = req.body;
     
     if (!text) {
@@ -2873,7 +2890,8 @@ wss.on('connection', async (clientWs) => {
 // ============ Coffee Inventory API Endpoints ============
 
 // Get all inventory
-app.get('/api/inventory', (req, res) => {
+app.get('/api/inventory', async (req, res) => {
+  await ensureFreshInventory();
   res.json({
     green: greenCoffeeInventory,
     roasted: roastedCoffeeInventory,
@@ -2882,17 +2900,20 @@ app.get('/api/inventory', (req, res) => {
 });
 
 // Get inventory summary formatted
-app.get('/api/inventory/summary', (req, res) => {
+app.get('/api/inventory/summary', async (req, res) => {
+  await ensureFreshInventory();
   res.json({ summary: formatInventorySummary() });
 });
 
 // Get green coffee inventory
-app.get('/api/inventory/green', (req, res) => {
+app.get('/api/inventory/green', async (req, res) => {
+  await ensureFreshInventory();
   res.json(greenCoffeeInventory);
 });
 
 // Update green coffee inventory
-app.post('/api/inventory/green/update', (req, res) => {
+app.post('/api/inventory/green/update', async (req, res) => {
+  await ensureFreshInventory();
   const { id, weight, roastProfile, dropTemp } = req.body;
   const coffee = greenCoffeeInventory.find(c => c.id === id);
   if (!coffee) {
@@ -2901,12 +2922,13 @@ app.post('/api/inventory/green/update', (req, res) => {
   if (weight !== undefined) coffee.weight = weight;
   if (roastProfile !== undefined) coffee.roastProfile = roastProfile;
   if (dropTemp !== undefined) coffee.dropTemp = dropTemp;
+  await syncInventoryToSheets();
   res.json({ success: true, coffee });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Add new green coffee
-app.post('/api/inventory/green/add', (req, res) => {
+app.post('/api/inventory/green/add', async (req, res) => {
+  await ensureFreshInventory();
   const { name, weight, roastProfile, dropTemp } = req.body;
   const id = name.toLowerCase().replace(/\s+/g, '-');
   if (greenCoffeeInventory.find(c => c.id === id)) {
@@ -2914,29 +2936,32 @@ app.post('/api/inventory/green/add', (req, res) => {
   }
   const newCoffee = { id, name, weight, roastProfile, dropTemp };
   greenCoffeeInventory.push(newCoffee);
+  await syncInventoryToSheets();
   res.json({ success: true, coffee: newCoffee });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Remove green coffee
-app.post('/api/inventory/green/remove', (req, res) => {
+app.post('/api/inventory/green/remove', async (req, res) => {
+  await ensureFreshInventory();
   const { id } = req.body;
   const index = greenCoffeeInventory.findIndex(c => c.id === id);
   if (index === -1) {
     return res.status(404).json({ error: 'Green coffee not found' });
   }
   greenCoffeeInventory.splice(index, 1);
+  await syncInventoryToSheets();
   res.json({ success: true });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Get roasted coffee inventory
-app.get('/api/inventory/roasted', (req, res) => {
+app.get('/api/inventory/roasted', async (req, res) => {
+  await ensureFreshInventory();
   res.json(roastedCoffeeInventory);
 });
 
 // Update roasted coffee inventory
-app.post('/api/inventory/roasted/update', (req, res) => {
+app.post('/api/inventory/roasted/update', async (req, res) => {
+  await ensureFreshInventory();
   const { id, weight, type, recipe } = req.body;
   const coffee = roastedCoffeeInventory.find(c => c.id === id);
   if (!coffee) {
@@ -2945,39 +2970,43 @@ app.post('/api/inventory/roasted/update', (req, res) => {
   if (weight !== undefined) coffee.weight = weight;
   if (type !== undefined) coffee.type = type;
   if (recipe !== undefined) coffee.recipe = recipe;
+  await syncInventoryToSheets();
   res.json({ success: true, coffee });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Add new roasted coffee
-app.post('/api/inventory/roasted/add', (req, res) => {
+app.post('/api/inventory/roasted/add', async (req, res) => {
+  await ensureFreshInventory();
   const { name, weight, type, recipe } = req.body;
   const id = name.toLowerCase().replace(/\s+/g, '-') + '-roasted';
   const newCoffee = { id, name, weight, type, recipe };
   roastedCoffeeInventory.push(newCoffee);
+  await syncInventoryToSheets();
   res.json({ success: true, coffee: newCoffee });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Remove roasted coffee
-app.post('/api/inventory/roasted/remove', (req, res) => {
+app.post('/api/inventory/roasted/remove', async (req, res) => {
+  await ensureFreshInventory();
   const { id } = req.body;
   const index = roastedCoffeeInventory.findIndex(c => c.id === id);
   if (index === -1) {
     return res.status(404).json({ error: 'Roasted coffee not found' });
   }
   roastedCoffeeInventory.splice(index, 1);
+  await syncInventoryToSheets();
   res.json({ success: true });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Get en route inventory
-app.get('/api/inventory/enroute', (req, res) => {
+app.get('/api/inventory/enroute', async (req, res) => {
+  await ensureFreshInventory();
   res.json(enRouteCoffeeInventory);
 });
 
 // Add to en route inventory
-app.post('/api/inventory/enroute/add', (req, res) => {
+app.post('/api/inventory/enroute/add', async (req, res) => {
+  await ensureFreshInventory();
   const { name, weight, type, recipe, orderDate } = req.body;
   const id = `enroute-${Date.now()}`;
   const newItem = {
@@ -2992,12 +3021,13 @@ app.post('/api/inventory/enroute/add', (req, res) => {
     status: 'ordered'
   };
   enRouteCoffeeInventory.push(newItem);
+  await syncInventoryToSheets();
   res.json({ success: true, item: newItem });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Update tracking number and fetch estimated delivery
 app.post('/api/inventory/enroute/tracking', async (req, res) => {
+  await ensureFreshInventory();
   const { id, trackingNumber } = req.body;
   const item = enRouteCoffeeInventory.find(c => c.id === id);
   if (!item) {
@@ -3015,12 +3045,13 @@ app.post('/api/inventory/enroute/tracking', async (req, res) => {
     }
   }
   
+  await syncInventoryToSheets();
   res.json({ success: true, item });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // Mark en route item as delivered (moves to roasted inventory)
-app.post('/api/inventory/enroute/deliver', (req, res) => {
+app.post('/api/inventory/enroute/deliver', async (req, res) => {
+  await ensureFreshInventory();
   const { id, confirmedBy } = req.body;
   const index = enRouteCoffeeInventory.findIndex(c => c.id === id);
   if (index === -1) {
@@ -3052,8 +3083,8 @@ app.post('/api/inventory/enroute/deliver', (req, res) => {
   // Remove from en route
   enRouteCoffeeInventory.splice(index, 1);
   
+  await syncInventoryToSheets();
   res.json({ success: true, message: `${item.name} (${item.weight}lb) added to roasted inventory` });
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // ============ UPS Tracking API ============
@@ -3164,6 +3195,9 @@ Respond with just the message text, no JSON or formatting.`;
 
 // Process general chat input
 app.post('/api/chat/process', async (req, res) => {
+  // Always fetch fresh inventory from Google Sheets before processing
+  await ensureFreshInventory();
+  
   const { userInput, currentState } = req.body;
   
   const roastedCoffeeNames = roastedCoffeeInventory.map(c => c.name);
@@ -3209,6 +3243,9 @@ Determine what the user wants. Respond with JSON:
 
 // Parse roast order request
 app.post('/api/roast-order/parse', async (req, res) => {
+  // Always fetch fresh inventory from Google Sheets before processing
+  await ensureFreshInventory();
+  
   const { userInput, previousQuestion, previousSuggestion } = req.body;
   
   const roastedCoffeeNames = roastedCoffeeInventory.map(c => c.name);
@@ -3388,6 +3425,9 @@ app.post('/api/roast-order/generate-email', async (req, res) => {
 
 // Confirm roast order (deduct green inventory, add to en route)
 app.post('/api/roast-order/confirm', async (req, res) => {
+  // Always fetch fresh inventory from Google Sheets before modifying
+  await ensureFreshInventory();
+  
   const { orderItems, emailData } = req.body;
   
   const deductions = [];
@@ -3466,6 +3506,9 @@ app.post('/api/roast-order/confirm', async (req, res) => {
     }
   }
   
+  // Sync inventory to Sheets before responding
+  await syncInventoryToSheets();
+  
   res.json({
     success: true,
     deductions,
@@ -3473,9 +3516,6 @@ app.post('/api/roast-order/confirm', async (req, res) => {
     draftCreated,
     message: `Order confirmed! ${deductions.length > 0 ? 'Green coffee inventory updated.' : ''} ${enRouteItems.length} item(s) added to en route.${draftCreated ? ' Email draft created in Gmail.' : ''}`
   });
-
-  // Sync inventory to Sheets in background (don't await)
-  syncInventoryToSheets().catch(err => console.error('Background sync error:', err));
 });
 
 // ============ Start Server ============

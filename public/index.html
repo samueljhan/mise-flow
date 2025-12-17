@@ -783,6 +783,21 @@
         </div>
     </div>
 
+    <!-- Edit Roast Order Modal -->
+    <div class="modal-overlay" id="editOrderModal">
+        <div class="modal" style="max-width: 450px; max-height: 85vh; overflow-y: auto;">
+            <h3>Edit Roast Order</h3>
+            <p style="color: #888; margin-bottom: 15px;">Adjust the roasted coffee amounts:</p>
+            
+            <div id="editOrderList"></div>
+            
+            <div class="modal-buttons">
+                <button class="modal-btn cancel" onclick="closeEditOrderModal()">Cancel</button>
+                <button class="modal-btn send" onclick="applyOrderEdits()">Apply Changes</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const chatContainer = document.getElementById('chatContainer');
         const userInput = document.getElementById('userInput');
@@ -1244,7 +1259,7 @@
                 return { batches, batchWeight };
             };
             
-            let html = '<strong>Default Order:</strong><br><br>';
+            let html = '<strong>Order:</strong><br><br>';
             let hasValidationError = false;
             
             pendingRoastOrder.forEach((item, index) => {
@@ -1296,9 +1311,10 @@
                 html += '</div>';
             }
             
-            html += 'Is this amount ok? <em style="color:#707070;">(yes to confirm, or specify changes)</em>';
+            html += '<div style="color:#888; font-size:12px; margin-bottom:12px;">*Using max 65lb batches minimizes roasting costs</div>';
             html += '<div class="response-buttons" style="margin-top: 12px;">';
-            html += '<button class="action-btn" onclick="confirmDefaultOrder()">Yes, generate email</button>';
+            html += '<button class="action-btn" onclick="confirmDefaultOrder()">Confirm</button>';
+            html += '<button class="action-btn" onclick="openEditOrderModal()">Edit Order</button>';
             html += '<button class="action-btn" onclick="cancelRoastOrder()">Cancel</button>';
             html += '</div>';
             
@@ -1434,6 +1450,124 @@
                 }
                 window.waitingForOrderConfirmation = true;
             }
+        }
+
+        // Open edit order modal
+        function openEditOrderModal() {
+            window.waitingForOrderConfirmation = false;
+            
+            // Build the edit form with current order items
+            let html = '';
+            
+            // Get available roasted coffees for the dropdown
+            const availableCoffees = roastedCoffeeInventory.map(c => c.name);
+            
+            pendingRoastOrder.forEach((item, index) => {
+                html += `<div style="background:#1a1a1a; padding:12px; border-radius:8px; margin-bottom:8px;">`;
+                html += `<div style="display:flex; gap:10px; align-items:center;">`;
+                html += `<select style="flex:1; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-order-coffee="${index}">`;
+                availableCoffees.forEach(name => {
+                    html += `<option value="${name}" ${item.name === name ? 'selected' : ''}>${name}</option>`;
+                });
+                html += `</select>`;
+                html += `<label style="font-size:12px; color:white; display:flex; align-items:center; gap:4px;">`;
+                html += `<input type="number" value="${item.weight}" style="width:70px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-order-weight="${index}"> lb</label>`;
+                html += `<button onclick="removeOrderItem(${index})" style="background:#6a4141; border:none; color:white; padding:6px 10px; border-radius:4px; cursor:pointer;">×</button>`;
+                html += `</div></div>`;
+            });
+            
+            html += `<button onclick="addOrderItem()" style="background:#28a745; border:none; color:white; padding:8px 16px; border-radius:4px; cursor:pointer; margin-top:8px;">+ Add Coffee</button>`;
+            
+            document.getElementById('editOrderList').innerHTML = html;
+            document.getElementById('editOrderModal').style.display = 'flex';
+        }
+
+        // Close edit order modal
+        function closeEditOrderModal() {
+            document.getElementById('editOrderModal').style.display = 'none';
+            window.waitingForOrderConfirmation = true;
+        }
+
+        // Add new item to order
+        function addOrderItem() {
+            const defaultCoffee = roastedCoffeeInventory[0];
+            if (defaultCoffee) {
+                pendingRoastOrder.push({
+                    name: defaultCoffee.name,
+                    type: defaultCoffee.type || 'Single Origin',
+                    recipe: defaultCoffee.recipe,
+                    weight: 55
+                });
+                openEditOrderModal(); // Re-render
+            }
+        }
+
+        // Remove item from order
+        function removeOrderItem(index) {
+            pendingRoastOrder.splice(index, 1);
+            openEditOrderModal(); // Re-render
+        }
+
+        // Apply edits from modal and regenerate summary
+        async function applyOrderEdits() {
+            // Collect updates from the form
+            const updatedOrder = [];
+            
+            pendingRoastOrder.forEach((item, index) => {
+                const coffeeEl = document.querySelector(`[data-order-coffee="${index}"]`);
+                const weightEl = document.querySelector(`[data-order-weight="${index}"]`);
+                
+                if (coffeeEl && weightEl) {
+                    const coffeeName = coffeeEl.value;
+                    const weight = parseFloat(weightEl.value) || 0;
+                    
+                    if (weight > 0) {
+                        const roasted = roastedCoffeeInventory.find(c => c.name === coffeeName);
+                        const nameLower = coffeeName.toLowerCase();
+                        
+                        // Get recipe from inventory or use fallback
+                        let recipe = roasted?.recipe;
+                        let type = roasted?.type;
+                        
+                        // Fallback recipes
+                        if (!recipe) {
+                            if (nameLower.includes('archives') || nameLower.includes('blend')) {
+                                recipe = [
+                                    { greenCoffeeId: 'brazil-mogiano', name: 'Brazil Mogiano', percentage: 66.6667 },
+                                    { greenCoffeeId: 'ethiopia-yirgacheffe', name: 'Ethiopia Yirgacheffe', percentage: 33.3333 }
+                                ];
+                                type = 'Blend';
+                            } else if (nameLower.includes('ethiopia') && nameLower.includes('gera')) {
+                                recipe = [{ greenCoffeeId: 'ethiopia-gera', name: 'Ethiopia Gera', percentage: 100 }];
+                                type = 'Single Origin';
+                            } else if (nameLower.includes('colombia') && !nameLower.includes('decaf')) {
+                                recipe = [{ greenCoffeeId: 'colombia-antioquia', name: 'Colombia Antioquia', percentage: 100 }];
+                                type = 'Single Origin';
+                            } else if (nameLower.includes('decaf')) {
+                                type = 'Private Label';
+                            }
+                        }
+                        
+                        updatedOrder.push({
+                            name: coffeeName,
+                            type: type || 'Single Origin',
+                            recipe: recipe,
+                            weight: weight
+                        });
+                    }
+                }
+            });
+            
+            if (updatedOrder.length === 0) {
+                alert('Please add at least one coffee to the order.');
+                return;
+            }
+            
+            pendingRoastOrder = updatedOrder;
+            closeEditOrderModal();
+            
+            // Regenerate the summary in chat
+            showDefaultOrderInChat();
         }
 
         // Finalize roast order (shared by chat and modal confirm)

@@ -3431,7 +3431,7 @@ Respond with JSON only:
     
     // Build order items with proper recipe data
     const orderItems = [];
-    let summaryHtml = '<strong>Updated Order:</strong><br><br>';
+    let summaryHtml = '<strong>Order:</strong><br><br>';
     
     for (const item of parsed.items) {
       const roastedCoffee = roastedCoffeeInventory.find(c => 
@@ -3513,9 +3513,10 @@ Respond with JSON only:
       return res.json({ success: false, message: "I couldn't match those coffees to our inventory. Available: " + roastedCoffeeNames.join(', ') });
     }
     
-    summaryHtml += 'Is this amount ok? <em style="color:#707070;">(yes to confirm, or specify changes)</em>';
+    summaryHtml += '<div style="color:#888; font-size:12px; margin-bottom:12px;">*Using max 65lb batches minimizes roasting costs</div>';
     summaryHtml += '<div class="response-buttons" style="margin-top: 12px;">';
-    summaryHtml += '<button class="action-btn" onclick="confirmDefaultOrder()">Yes, generate email</button>';
+    summaryHtml += '<button class="action-btn" onclick="confirmDefaultOrder()">Confirm</button>';
+    summaryHtml += '<button class="action-btn" onclick="openEditOrderModal()">Edit Order</button>';
     summaryHtml += '<button class="action-btn" onclick="cancelRoastOrder()">Cancel</button>';
     summaryHtml += '</div>';
     

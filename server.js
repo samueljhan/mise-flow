@@ -17,6 +17,8 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 8080;
+// Trust proxy for Railway (required for secure cookies behind proxy)
+app.set('trust proxy', 1);
 
 // Session configuration
 const session = require('express-session');
@@ -27,6 +29,7 @@ app.use(session({
   cookie: {
     secure: process.env.NODE_ENV === 'production',
     httpOnly: true,
+    sameSite: 'lax',
     maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
   }
 }));
@@ -132,7 +135,15 @@ app.get('/auth/google/callback', async (req, res) => {
     };
 
     console.log(`✅ User authenticated: ${userInfo.data.email}`);
-    res.redirect('/');
+    
+    // Explicitly save session before redirect
+    req.session.save((err) => {
+      if (err) {
+        console.error('Session save error:', err);
+        return res.redirect('/login?error=session_failed');
+      }
+      res.redirect('/');
+    });
   } catch (error) {
     console.error('Auth callback error:', error);
     res.redirect('/login?error=auth_failed');

@@ -3355,6 +3355,182 @@ Respond with JSON only:
   }
 });
 
+// Modify roast order - parse user's modification request and recalculate
+app.post('/api/roast-order/modify', async (req, res) => {
+  // Fetch fresh inventory from Sheets
+  await ensureFreshInventory();
+  
+  const { userRequest, currentOrder } = req.body;
+  
+  const roastedCoffeeNames = roastedCoffeeInventory.map(c => c.name);
+  const roastedCoffeeTypes = roastedCoffeeInventory.map(c => ({ name: c.name, type: c.type }));
+  
+  const prompt = `You are parsing a coffee roast order modification for Archives of Us Coffee.
+
+Available roasted coffees: ${JSON.stringify(roastedCoffeeTypes)}
+
+Current order: ${JSON.stringify(currentOrder.map(o => ({ name: o.name, weight: o.weight })))}
+
+User modification request: "${userRequest}"
+
+NICKNAME RECOGNITION:
+- "Blend" or "Archives" → Archives Blend
+- "Ethiopia" or "Gera" → Ethiopia Gera
+- "Colombia" or "Excelso" → Colombia Excelso
+- "Decaf" → Colombia Decaf
+
+Parse the user's request to extract the desired roasted coffee weights.
+The user may specify amounts like "80lb Archives Blend" or "60 pounds Ethiopia".
+
+Respond with JSON only:
+{
+  "success": true/false,
+  "items": [
+    { "name": "exact coffee name from available list", "weight": number_in_pounds }
+  ],
+  "message": "optional message if clarification needed"
+}`;
+
+  try {
+    const response = await callGeminiWithRetry(prompt);
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    
+    if (!jsonMatch) {
+      return res.json({ success: false, message: "I couldn't understand that. Please specify amounts like: '80lb Archives Blend and 60lb Ethiopia Gera'" });
+    }
+    
+    const parsed = JSON.parse(jsonMatch[0]);
+    
+    if (!parsed.success || !parsed.items || parsed.items.length === 0) {
+      return res.json({ success: false, message: parsed.message || "I couldn't understand that modification." });
+    }
+    
+    // Nickname mapping for display
+    const getNickname = (name) => {
+      const nicknames = {
+        'Archives Blend': 'Archives',
+        'Brazil Mogiano': 'Brazil',
+        'Colombia Decaf': 'Decaf',
+        'Colombia Antioquia': 'Colombia',
+        'Colombia Excelso': 'Colombia',
+        'Ethiopia Yirgacheffe': 'Yirgacheffe',
+        'Ethiopia Gera': 'Ethiopia'
+      };
+      return nicknames[name] || name;
+    };
+    
+    // Helper to calculate batches (max 65lb per batch)
+    const calcBatches = (totalWeight) => {
+      if (totalWeight <= 65) {
+        return { batches: 1, batchWeight: Math.round(totalWeight) };
+      }
+      const batches = Math.ceil(totalWeight / 65);
+      const batchWeight = Math.round(totalWeight / batches);
+      return { batches, batchWeight };
+    };
+    
+    // Build order items with proper recipe data
+    const orderItems = [];
+    let summaryHtml = '<strong>Updated Order:</strong><br><br>';
+    
+    for (const item of parsed.items) {
+      const roastedCoffee = roastedCoffeeInventory.find(c => 
+        c.name.toLowerCase() === item.name.toLowerCase() ||
+        c.name.toLowerCase().includes(item.name.toLowerCase()) ||
+        item.name.toLowerCase().includes(c.name.toLowerCase())
+      );
+      
+      if (!roastedCoffee) continue;
+      
+      // Get recipe from inventory or use fallback
+      let recipe = roastedCoffee.recipe;
+      const nameLower = roastedCoffee.name.toLowerCase();
+      
+      // Fallback recipes if not in Sheet
+      if (!recipe) {
+        if (nameLower.includes('archives') || nameLower.includes('blend')) {
+          recipe = [
+            { greenCoffeeId: 'brazil-mogiano', name: 'Brazil Mogiano', percentage: 66.6667 },
+            { greenCoffeeId: 'ethiopia-yirgacheffe', name: 'Ethiopia Yirgacheffe', percentage: 33.3333 }
+          ];
+        } else if (nameLower.includes('ethiopia') && nameLower.includes('gera')) {
+          recipe = [{ greenCoffeeId: 'ethiopia-gera', name: 'Ethiopia Gera', percentage: 100 }];
+        } else if (nameLower.includes('colombia') && !nameLower.includes('decaf')) {
+          recipe = [{ greenCoffeeId: 'colombia-antioquia', name: 'Colombia Antioquia', percentage: 100 }];
+        }
+      }
+      
+      // Determine type
+      let type = roastedCoffee.type;
+      if (!type) {
+        if (nameLower.includes('decaf')) type = 'Private Label';
+        else if (recipe && recipe.length > 1) type = 'Blend';
+        else type = 'Single Origin';
+      }
+      
+      const orderItem = {
+        name: roastedCoffee.name,
+        type: type,
+        recipe: recipe,
+        weight: item.weight
+      };
+      orderItems.push(orderItem);
+      
+      // Generate summary HTML
+      if (type === 'Blend' && recipe) {
+        const totalGreenWeight = Math.round(item.weight / 0.85);
+        let blendParts = [];
+        
+        recipe.forEach((comp) => {
+          const green = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
+          const compGreenWeight = Math.round(totalGreenWeight * comp.percentage / 100);
+          const { batches, batchWeight } = calcBatches(compGreenWeight);
+          const nickname = getNickname(comp.name);
+          
+          blendParts.push(`${batches} batch${batches > 1 ? 'es' : ''} of ${nickname} (${batchWeight}lb - profile ${green ? green.roastProfile : '?'} - drop temp ${green ? green.dropTemp : '?'})`);
+        });
+        
+        summaryHtml += `- ${blendParts.join(' blended with ')}<br>`;
+        summaryHtml += `<em style="color:#888; margin-left:12px;">~${Math.round(item.weight)}lb roasted total</em><br><br>`;
+        
+      } else if (type === 'Single Origin' && recipe) {
+        const green = greenCoffeeInventory.find(g => g.id === recipe[0].greenCoffeeId);
+        const greenWeight = Math.round(item.weight / 0.85);
+        const { batches, batchWeight } = calcBatches(greenWeight);
+        const nickname = getNickname(roastedCoffee.name);
+        
+        summaryHtml += `- ${batches} batch${batches > 1 ? 'es' : ''} of ${nickname} (${batchWeight}lb - profile ${green ? green.roastProfile : '?'} - drop temp ${green ? green.dropTemp : '?'})<br>`;
+        summaryHtml += `<em style="color:#888; margin-left:12px;">~${Math.round(item.weight)}lb roasted</em><br><br>`;
+        
+      } else {
+        // Private Label
+        const nickname = getNickname(roastedCoffee.name);
+        summaryHtml += `- ${Math.round(item.weight)}lb private label ${nickname}<br><br>`;
+      }
+    }
+    
+    if (orderItems.length === 0) {
+      return res.json({ success: false, message: "I couldn't match those coffees to our inventory. Available: " + roastedCoffeeNames.join(', ') });
+    }
+    
+    summaryHtml += 'Is this amount ok? <em style="color:#707070;">(yes to confirm, or specify changes)</em>';
+    summaryHtml += '<div class="response-buttons" style="margin-top: 12px;">';
+    summaryHtml += '<button class="action-btn" onclick="confirmDefaultOrder()">Yes, generate email</button>';
+    summaryHtml += '<button class="action-btn" onclick="cancelRoastOrder()">Cancel</button>';
+    summaryHtml += '</div>';
+    
+    res.json({
+      success: true,
+      orderItems: orderItems,
+      summary: summaryHtml
+    });
+    
+  } catch (error) {
+    console.error('Modify roast order error:', error);
+    res.json({ success: false, message: "Error processing modification. Please try again." });
+  }
+});
+
 // Generate roast order email
 app.post('/api/roast-order/generate-email', async (req, res) => {
   const { orderItems } = req.body;

@@ -1387,6 +1387,55 @@
             addConversationalFollowUp('order_cancelled');
         }
 
+        // Modify roast order based on user input
+        async function modifyRoastOrder(userRequest) {
+            addMessage('Updating order...', false);
+            
+            try {
+                const response = await fetch('/api/roast-order/modify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        userRequest,
+                        currentOrder: pendingRoastOrder
+                    })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success && data.orderItems) {
+                    pendingRoastOrder = data.orderItems;
+                    
+                    // Update last message with new order summary
+                    const messages = chatContainer.querySelectorAll('.message');
+                    const lastMsg = messages[messages.length - 1];
+                    if (lastMsg) {
+                        const content = lastMsg.querySelector('.message-content') || lastMsg;
+                        content.innerHTML = data.summary;
+                    }
+                    
+                    window.waitingForOrderConfirmation = true;
+                } else {
+                    const messages = chatContainer.querySelectorAll('.message');
+                    const lastMsg = messages[messages.length - 1];
+                    if (lastMsg) {
+                        const content = lastMsg.querySelector('.message-content') || lastMsg;
+                        content.innerHTML = data.message || "I couldn't understand that modification. Please try again with format like: '80lb Archives Blend and 60lb Ethiopia Gera'";
+                    }
+                    window.waitingForOrderConfirmation = true;
+                }
+            } catch (error) {
+                console.error('Error modifying order:', error);
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML = 'Error processing modification. Please try again.';
+                }
+                window.waitingForOrderConfirmation = true;
+            }
+        }
+
         // Finalize roast order (shared by chat and modal confirm)
         async function finalizeRoastOrder(emailData) {
             addMessage('Confirming order...', false);
@@ -2635,6 +2684,29 @@
                     });
                     return;
                 }
+            }
+
+            // Check if we're waiting for order confirmation (user can modify amounts here)
+            if (window.waitingForOrderConfirmation) {
+                const yesResponses = ['yes', 'yeah', 'yep', 'confirm', 'ok', 'sure', 'looks good', 'good', 'correct'];
+                if (yesResponses.some(y => lowerMsg === y || lowerMsg.startsWith(y + ','))) {
+                    confirmDefaultOrder();
+                    return;
+                }
+                if (wantsToSwitch) {
+                    window.waitingForOrderConfirmation = false;
+                    pendingRoastOrder = [];
+                    addMessage('<div class="loader" style="width:24px;height:24px;border:2px solid #404040;border-top-color:#28a745;border-radius:50%;animation:spin 1s linear infinite;"></div>', false);
+                    processMessage(message).then(response => {
+                        const messages = chatContainer.querySelectorAll('.message');
+                        messages[messages.length - 1].remove();
+                        addMessage(response, false);
+                    });
+                    return;
+                }
+                // User wants to modify the order - parse their request
+                modifyRoastOrder(message);
+                return;
             }
 
             // Check if we're waiting for roast order input

@@ -637,8 +637,8 @@
                 </div>
                 <button class="logout-btn" id="logoutBtn" onclick="logout()" style="display: none;">Logout</button>
             </div>
-            <div class="google-status connected" id="googleStatus" style="display: none;">
-                ✓ Google Connected
+            <div class="google-status disconnected" id="googleStatus" onclick="connectGoogle()" style="display: none;">
+                🔗 Connect Google
             </div>
         </div>
 
@@ -867,11 +867,16 @@
                 googleStatusEl.textContent = '✓ Google Connected';
                 googleStatusEl.classList.remove('disconnected');
                 googleStatusEl.classList.add('connected');
-                googleStatusEl.style.display = 'block';
+                googleStatusEl.onclick = null;
+                googleStatusEl.style.cursor = 'default';
             } else {
-                // User is logged in but Google might have disconnected
-                googleStatusEl.style.display = 'none';
+                googleStatusEl.textContent = '🔗 Connect Google';
+                googleStatusEl.classList.remove('connected');
+                googleStatusEl.classList.add('disconnected');
+                googleStatusEl.onclick = () => connectGoogle();
+                googleStatusEl.style.cursor = 'pointer';
             }
+            googleStatusEl.style.display = 'block';
         }
         
         // Call this when we get a 401 to redirect to login

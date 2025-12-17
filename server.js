@@ -33,6 +33,7 @@ app.use(session({
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Auth middleware - protects routes
 function requireAuth(req, res, next) {
@@ -54,6 +55,34 @@ app.get('/login', (req, res) => {
     return res.redirect('/');
   }
   res.send(getLoginPage());
+});
+
+// Password authentication
+app.post('/auth/password', (req, res) => {
+  const { username, password } = req.body;
+  
+  // Check against environment variables
+  const validUser = process.env.APP_USERNAME || 'admin';
+  const validPass = process.env.APP_PASSWORD;
+  
+  if (!validPass) {
+    console.log('⚠️ APP_PASSWORD not set - password login disabled');
+    return res.redirect('/login?error=password_disabled');
+  }
+  
+  if (username === validUser && password === validPass) {
+    req.session.authenticated = true;
+    req.session.user = {
+      name: username,
+      email: '',
+      authMethod: 'password'
+    };
+    console.log(`✅ Password auth successful: ${username}`);
+    return res.redirect('/');
+  }
+  
+  console.log(`❌ Password auth failed for: ${username}`);
+  res.redirect('/login?error=invalid');
 });
 
 // Logout endpoint
@@ -158,7 +187,7 @@ app.use((req, res, next) => {
 app.use(express.static('public'));
 
 // Login page HTML
-function getLoginPage() {
+function getLoginPage(error = '') {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -169,112 +198,149 @@ function getLoginPage() {
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      background: #1a1a1a;
       min-height: 100vh;
       display: flex;
       align-items: center;
       justify-content: center;
     }
     .login-container {
-      background: #252540;
-      border-radius: 16px;
-      padding: 48px;
-      max-width: 420px;
+      background: #2a2a2a;
+      border-radius: 12px;
+      padding: 40px;
+      max-width: 360px;
       width: 90%;
-      text-align: center;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-    }
-    .logo {
-      font-size: 3rem;
-      margin-bottom: 8px;
     }
     h1 {
-      color: #fff;
-      font-size: 1.8rem;
-      margin-bottom: 8px;
+      color: #e0e0e0;
+      font-size: 1.6rem;
+      margin-bottom: 6px;
+      font-weight: 600;
     }
     .subtitle {
       color: #888;
-      margin-bottom: 32px;
+      margin-bottom: 28px;
+      font-size: 0.85rem;
+      line-height: 1.4;
+    }
+    .form-group {
+      margin-bottom: 16px;
+    }
+    .form-group label {
+      display: block;
+      color: #aaa;
+      font-size: 0.8rem;
+      margin-bottom: 6px;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 12px;
+      background: #1a1a1a;
+      border: 1px solid #3a3a3a;
+      border-radius: 6px;
+      color: #e0e0e0;
       font-size: 0.95rem;
+    }
+    .form-group input:focus {
+      outline: none;
+      border-color: #555;
+    }
+    .login-btn {
+      width: 100%;
+      padding: 12px;
+      background: #3a3a3a;
+      border: none;
+      border-radius: 6px;
+      color: #e0e0e0;
+      font-size: 0.95rem;
+      cursor: pointer;
+      margin-bottom: 16px;
+      transition: background 0.2s;
+    }
+    .login-btn:hover {
+      background: #4a4a4a;
+    }
+    .divider {
+      display: flex;
+      align-items: center;
+      margin: 20px 0;
+      color: #555;
+      font-size: 0.8rem;
+    }
+    .divider::before, .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: #3a3a3a;
+    }
+    .divider span {
+      padding: 0 12px;
     }
     .google-btn {
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 12px;
-      background: #fff;
-      color: #333;
-      border: none;
-      border-radius: 8px;
-      padding: 14px 24px;
-      font-size: 1rem;
-      font-weight: 500;
-      cursor: pointer;
+      gap: 10px;
       width: 100%;
-      transition: all 0.2s;
+      padding: 12px;
+      background: #fff;
+      border: none;
+      border-radius: 6px;
+      color: #333;
+      font-size: 0.95rem;
+      cursor: pointer;
       text-decoration: none;
+      transition: background 0.2s;
     }
     .google-btn:hover {
-      background: #f1f1f1;
-      transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      background: #f0f0f0;
     }
     .google-btn svg {
-      width: 20px;
-      height: 20px;
+      width: 18px;
+      height: 18px;
     }
-    .permissions {
-      margin-top: 32px;
-      text-align: left;
-      background: rgba(255,255,255,0.05);
-      border-radius: 8px;
-      padding: 16px;
-    }
-    .permissions h3 {
-      color: #aaa;
-      font-size: 0.8rem;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      margin-bottom: 12px;
-    }
-    .permission-item {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      color: #ccc;
-      font-size: 0.9rem;
-      margin-bottom: 8px;
-    }
-    .permission-item:last-child { margin-bottom: 0; }
-    .permission-item span.icon { font-size: 1.1rem; }
     .error-msg {
-      background: #ff4444;
-      color: white;
-      padding: 12px;
-      border-radius: 8px;
+      background: #442222;
+      color: #ff6b6b;
+      padding: 10px 12px;
+      border-radius: 6px;
       margin-bottom: 20px;
-      font-size: 0.9rem;
+      font-size: 0.85rem;
     }
     .footer {
       margin-top: 24px;
-      color: #666;
-      font-size: 0.8rem;
+      text-align: center;
     }
     .footer a {
-      color: #888;
+      color: #666;
+      font-size: 0.75rem;
       text-decoration: none;
     }
-    .footer a:hover { text-decoration: underline; }
+    .footer a:hover {
+      color: #888;
+    }
   </style>
 </head>
 <body>
   <div class="login-container">
-    <div class="logo">☕</div>
     <h1>Mise Flow</h1>
-    <p class="subtitle">Inventory & Invoice Management for Archives of Us Coffee</p>
+    <p class="subtitle">AI-powered Work Flow for AOU Coffee, Inc.</p>
     
-    ${new URL('http://localhost?error=auth_failed').searchParams.get('error') ? '<div class="error-msg">Authentication failed. Please try again.</div>' : ''}
+    <div class="error-msg" id="errorMsg" style="display: none;">Authentication failed. Please try again.</div>
+    
+    <form action="/auth/password" method="POST">
+      <div class="form-group">
+        <label>User</label>
+        <input type="text" name="username" autocomplete="username" required>
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" name="password" autocomplete="current-password" required>
+      </div>
+      <button type="submit" class="login-btn">Sign In</button>
+    </form>
+    
+    <div class="divider"><span>or</span></div>
     
     <a href="/auth/google" class="google-btn">
       <svg viewBox="0 0 24 24">
@@ -286,32 +352,15 @@ function getLoginPage() {
       Sign in with Google
     </a>
     
-    <div class="permissions">
-      <h3>Permissions Requested</h3>
-      <div class="permission-item">
-        <span class="icon">📧</span>
-        <span>Send & read emails (for customer invoices)</span>
-      </div>
-      <div class="permission-item">
-        <span class="icon">📊</span>
-        <span>Access Google Sheets (inventory & pricing)</span>
-      </div>
-      <div class="permission-item">
-        <span class="icon">👤</span>
-        <span>View your email address & name</span>
-      </div>
-    </div>
-    
     <div class="footer">
       <a href="/privacy">Privacy Policy</a>
     </div>
   </div>
   
   <script>
-    // Check for error param
     const urlParams = new URLSearchParams(window.location.search);
     if (urlParams.get('error')) {
-      document.querySelector('.error-msg')?.style.display = 'block';
+      document.getElementById('errorMsg').style.display = 'block';
     }
   </script>
 </body>

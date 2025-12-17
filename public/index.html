@@ -637,6 +637,9 @@
                 </div>
                 <button class="logout-btn" id="logoutBtn" onclick="logout()" style="display: none;">Logout</button>
             </div>
+            <div class="google-status disconnected" id="googleStatus" onclick="connectGoogle()" style="display: none;">
+                🔗 Connect Google
+            </div>
         </div>
 
         <div class="microphone-status">
@@ -860,7 +863,6 @@
         }
 
         function updateGoogleUI() {
-            if (!googleStatusEl) return;
             if (googleConnected) {
                 googleStatusEl.textContent = '✓ Google Connected';
                 googleStatusEl.classList.remove('disconnected');
@@ -1151,24 +1153,47 @@
                     // Build default order based on coffee types
                     pendingRoastOrder = matchedCoffees.map(c => {
                         const roasted = roastedCoffeeInventory.find(r => r.name === c.name);
-                        if (roasted && roasted.type === 'Blend' && roasted.recipe) {
+                        const nameLower = c.name.toLowerCase();
+                        
+                        // Archives Blend - default 155lb
+                        if (nameLower.includes('archives') || nameLower.includes('blend')) {
                             return {
                                 name: c.name,
-                                type: roasted.type,
-                                recipe: roasted.recipe,
-                                weight: 166
+                                type: 'Blend',
+                                recipe: roasted?.recipe || [
+                                    { greenCoffeeId: 'brazil-mogiano', name: 'Brazil Mogiano', percentage: 66.6667 },
+                                    { greenCoffeeId: 'ethiopia-yirgacheffe', name: 'Ethiopia Yirgacheffe', percentage: 33.3333 }
+                                ],
+                                weight: 155
                             };
-                        } else if (roasted && roasted.type === 'Single Origin') {
+                        }
+                        // Ethiopia Gera - default 55lb  
+                        else if (nameLower.includes('ethiopia') && nameLower.includes('gera')) {
                             return {
                                 name: c.name,
-                                type: roasted.type,
-                                recipe: roasted.recipe,
+                                type: 'Single Origin',
+                                recipe: roasted?.recipe || [
+                                    { greenCoffeeId: 'ethiopia-gera', name: 'Ethiopia Gera', percentage: 100 }
+                                ],
                                 weight: 55
                             };
-                        } else {
+                        }
+                        // Colombia Excelso - Single Origin
+                        else if (nameLower.includes('colombia') && !nameLower.includes('decaf')) {
                             return {
                                 name: c.name,
-                                type: roasted ? roasted.type : 'Private Label',
+                                type: 'Single Origin',
+                                recipe: roasted?.recipe || [
+                                    { greenCoffeeId: 'colombia-antioquia', name: 'Colombia Antioquia', percentage: 100 }
+                                ],
+                                weight: 55
+                            };
+                        }
+                        // Decaf or other Private Label
+                        else {
+                            return {
+                                name: c.name,
+                                type: roasted?.type || 'Private Label',
                                 recipe: null,
                                 weight: 20
                             };
@@ -1198,9 +1223,11 @@
             // Nickname mapping for coffees
             const getNickname = (name) => {
                 const nicknames = {
+                    'Archives Blend': 'Archives',
                     'Brazil Mogiano': 'Brazil',
                     'Colombia Decaf': 'Decaf',
                     'Colombia Antioquia': 'Colombia',
+                    'Colombia Excelso': 'Colombia',
                     'Ethiopia Yirgacheffe': 'Yirgacheffe',
                     'Ethiopia Gera': 'Ethiopia'
                 };

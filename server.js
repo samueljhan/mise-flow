@@ -921,7 +921,7 @@ async function loadInventoryFromSheets() {
 
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Inventory!A:F'
+      range: 'Inventory!A:G'
     });
     
     const rows = response.data.values || [];
@@ -935,6 +935,34 @@ async function loadInventoryFromSheets() {
     const tempGreen = [];
     const tempRoasted = [];
     const tempEnRoute = [];
+
+    // Helper to parse Recipe string like "66.6667% Brazil Mogiano + 33.3333% Ethiopia Yirgacheffe"
+    const parseRecipeString = (recipeStr) => {
+      if (!recipeStr || recipeStr === 'N/A' || recipeStr.toLowerCase() === 'n/a') {
+        return null;
+      }
+      
+      const recipe = [];
+      // Split by " + " to get each component
+      const parts = recipeStr.split(/\s*\+\s*/);
+      
+      for (const part of parts) {
+        // Match pattern like "66.6667% Brazil Mogiano" or "100% Ethiopia Gera"
+        const match = part.match(/^([\d.]+)%\s+(.+)$/);
+        if (match) {
+          const percentage = parseFloat(match[1]);
+          const name = match[2].trim();
+          const greenCoffeeId = name.toLowerCase().replace(/\s+/g, '-');
+          recipe.push({
+            greenCoffeeId,
+            name,
+            percentage
+          });
+        }
+      }
+      
+      return recipe.length > 0 ? recipe : null;
+    };
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -961,20 +989,29 @@ async function loadInventoryFromSheets() {
           id: row[1].toLowerCase().replace(/\s+/g, '-'),
           name: row[1],
           weight: parseFloat(row[2]) || 0,
-          roastProfile: row[3] || '',
+          roastProfile: String(row[3] || '').replace(/\.0$/, ''), // Remove trailing .0
           dropTemp: parseFloat(row[4]) || 0
         });
       } else if (currentSection === 'roasted' && row[1]) {
+        const recipeStr = row[4] || '';
+        const recipe = parseRecipeString(recipeStr);
+        
+        // Determine type based on recipe or column value
+        let type = row[3] || '';
+        if (!type && recipe) {
+          type = recipe.length > 1 ? 'Blend' : 'Single Origin';
+        }
+        
         tempRoasted.push({
           id: row[1].toLowerCase().replace(/\s+/g, '-'),
           name: row[1],
           weight: parseFloat(row[2]) || 0,
-          type: row[3] || '',
-          recipe: null
+          type: type,
+          recipe: recipe
         });
       } else if (currentSection === 'enroute' && row[1]) {
         tempEnRoute.push({
-          id: row[1].toLowerCase().replace(/\s+/g, '-') + '-' + Date.now(),
+          id: row[1].toLowerCase().replace(/\s+/g, '-') + '-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
           name: row[1],
           weight: parseFloat(row[2]) || 0,
           type: row[3] || '',
@@ -994,8 +1031,9 @@ async function loadInventoryFromSheets() {
       roastedCoffeeInventory = tempRoasted;
       console.log(`📕 Loaded ${roastedCoffeeInventory.length} roasted coffees from Sheets`);
     }
+    // For en route, update even if empty (might have been cleared)
+    enRouteCoffeeInventory = tempEnRoute;
     if (tempEnRoute.length > 0) {
-      enRouteCoffeeInventory = tempEnRoute;
       console.log(`📦 Loaded ${enRouteCoffeeInventory.length} en route items from Sheets`);
     }
 

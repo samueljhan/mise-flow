@@ -718,17 +718,17 @@
 
     <!-- Manage Inventory Modal -->
     <div class="modal-overlay" id="inventoryModal">
-        <div class="modal" style="max-width: 700px; max-height: 85vh; overflow-y: auto;">
-            <h3>📦 Manage Coffee Inventory</h3>
+        <div class="modal" style="max-width: 500px; max-height: 85vh; overflow-y: auto;">
+            <h3>Manage Coffee Inventory</h3>
             
             <div style="margin-bottom: 20px;">
-                <h4 style="color: #90EE90; margin-bottom: 10px;">🌿 Green Coffee (Unroasted)</h4>
+                <h4 style="color: #90EE90; margin-bottom: 10px;">Green Coffee (Unroasted)</h4>
                 <div id="greenCoffeeList"></div>
                 <button class="modal-btn send" onclick="addGreenCoffee()" style="margin-top: 10px; width: auto; padding: 8px 16px;">+ Add Green Coffee</button>
             </div>
             
             <div style="margin-bottom: 20px;">
-                <h4 style="color: #90EE90; margin-bottom: 10px;">🔥 Roasted Coffee</h4>
+                <h4 style="color: #90EE90; margin-bottom: 10px;">Roasted Coffee</h4>
                 <div id="roastedCoffeeList"></div>
                 <button class="modal-btn send" onclick="addRoastedCoffee()" style="margin-top: 10px; width: auto; padding: 8px 16px;">+ Add Roasted Coffee</button>
             </div>
@@ -1594,36 +1594,27 @@
         }
 
         function renderInventoryModal() {
-            // Green coffee list
+            // Green coffee list - simplified to just name and weight
             let greenHtml = '';
             greenCoffeeInventory.forEach((coffee, index) => {
                 greenHtml += `<div style="background:#1a1a1a; padding:12px; border-radius:8px; margin-bottom:8px;">`;
-                greenHtml += `<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">`;
+                greenHtml += `<div style="display:flex; gap:10px; align-items:center;">`;
                 greenHtml += `<input type="text" value="${coffee.name}" style="flex:1; min-width:150px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-green-name="${index}">`;
-                greenHtml += `<label style="font-size:12px;">Weight: <input type="number" value="${coffee.weight}" style="width:60px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-green-weight="${index}"> lb</label>`;
-                greenHtml += `<label style="font-size:12px;">Profile: <input type="text" value="${coffee.roastProfile}" style="width:70px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-green-profile="${index}"></label>`;
-                greenHtml += `<label style="font-size:12px;">Drop: <input type="number" value="${coffee.dropTemp}" style="width:50px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-green-temp="${index}">°F</label>`;
+                greenHtml += `<label style="font-size:12px; color:white; display:flex; align-items:center; gap:4px;">Weight: <input type="number" value="${coffee.weight}" style="width:60px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-green-weight="${index}"> lb</label>`;
                 greenHtml += `<button onclick="removeGreenCoffee(${index})" style="background:#6a4141; border:none; color:white; padding:6px 10px; border-radius:4px; cursor:pointer;">×</button>`;
                 greenHtml += `</div></div>`;
             });
             document.getElementById('greenCoffeeList').innerHTML = greenHtml || '<div style="color:#888;">No green coffee in inventory</div>';
             
-            // Roasted coffee list
+            // Roasted coffee list - simplified to just name and weight
             let roastedHtml = '';
             roastedCoffeeInventory.forEach((coffee, index) => {
-                const recipeStr = coffee.recipe ? coffee.recipe.map(r => `${r.percentage}% ${r.name}`).join(', ') : 'N/A';
                 roastedHtml += `<div style="background:#1a1a1a; padding:12px; border-radius:8px; margin-bottom:8px;">`;
-                roastedHtml += `<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">`;
+                roastedHtml += `<div style="display:flex; gap:10px; align-items:center;">`;
                 roastedHtml += `<input type="text" value="${coffee.name}" style="flex:1; min-width:150px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-roasted-name="${index}">`;
-                roastedHtml += `<label style="font-size:12px;">Weight: <input type="number" value="${coffee.weight}" style="width:60px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-roasted-weight="${index}"> lb</label>`;
-                roastedHtml += `<select style="padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-roasted-type="${index}">`;
-                roastedHtml += `<option value="Single Origin" ${coffee.type === 'Single Origin' ? 'selected' : ''}>Single Origin</option>`;
-                roastedHtml += `<option value="Blend" ${coffee.type === 'Blend' ? 'selected' : ''}>Blend</option>`;
-                roastedHtml += `<option value="Private Label" ${coffee.type === 'Private Label' ? 'selected' : ''}>Private Label</option>`;
-                roastedHtml += `</select>`;
+                roastedHtml += `<label style="font-size:12px; color:white; display:flex; align-items:center; gap:4px;">Weight: <input type="number" value="${coffee.weight}" style="width:60px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-roasted-weight="${index}"> lb</label>`;
                 roastedHtml += `<button onclick="removeRoastedCoffee(${index})" style="background:#6a4141; border:none; color:white; padding:6px 10px; border-radius:4px; cursor:pointer;">×</button>`;
                 roastedHtml += `</div>`;
-                roastedHtml += `<div style="font-size:12px; color:#888;">Recipe: ${recipeStr}</div>`;
                 roastedHtml += `</div>`;
             });
             document.getElementById('roastedCoffeeList').innerHTML = roastedHtml || '<div style="color:#888;">No roasted coffee in inventory</div>';
@@ -1662,33 +1653,27 @@
         }
 
         async function saveInventoryChanges() {
-            // Collect green coffee updates
+            // Collect green coffee updates (only name and weight from UI)
             greenCoffeeInventory.forEach((coffee, index) => {
                 const nameEl = document.querySelector(`[data-green-name="${index}"]`);
                 const weightEl = document.querySelector(`[data-green-weight="${index}"]`);
-                const profileEl = document.querySelector(`[data-green-profile="${index}"]`);
-                const tempEl = document.querySelector(`[data-green-temp="${index}"]`);
                 
                 if (nameEl) coffee.name = nameEl.value;
                 if (weightEl) coffee.weight = parseFloat(weightEl.value) || 0;
-                if (profileEl) coffee.roastProfile = profileEl.value;
-                if (tempEl) coffee.dropTemp = parseInt(tempEl.value) || 400;
                 coffee.id = coffee.name.toLowerCase().replace(/\s+/g, '-');
             });
             
-            // Collect roasted coffee updates
+            // Collect roasted coffee updates (only name and weight from UI)
             roastedCoffeeInventory.forEach((coffee, index) => {
                 const nameEl = document.querySelector(`[data-roasted-name="${index}"]`);
                 const weightEl = document.querySelector(`[data-roasted-weight="${index}"]`);
-                const typeEl = document.querySelector(`[data-roasted-type="${index}"]`);
                 
                 if (nameEl) coffee.name = nameEl.value;
                 if (weightEl) coffee.weight = parseFloat(weightEl.value) || 0;
-                if (typeEl) coffee.type = typeEl.value;
                 coffee.id = coffee.name.toLowerCase().replace(/\s+/g, '-') + '-roasted';
             });
             
-            // Save to server - for now we'll update each item
+            // Save to server
             try {
                 for (const coffee of greenCoffeeInventory) {
                     await fetch('/api/inventory/green/update', {

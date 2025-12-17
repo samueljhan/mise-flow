@@ -637,9 +637,6 @@
                 </div>
                 <button class="logout-btn" id="logoutBtn" onclick="logout()" style="display: none;">Logout</button>
             </div>
-            <div class="google-status disconnected" id="googleStatus" onclick="connectGoogle()" style="display: none;">
-                🔗 Connect Google
-            </div>
         </div>
 
         <div class="microphone-status">
@@ -863,6 +860,7 @@
         }
 
         function updateGoogleUI() {
+            if (!googleStatusEl) return;
             if (googleConnected) {
                 googleStatusEl.textContent = '✓ Google Connected';
                 googleStatusEl.classList.remove('disconnected');

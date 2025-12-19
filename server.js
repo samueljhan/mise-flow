@@ -3684,13 +3684,13 @@ Respond with JSON only:
     }
     
     // Helper to calculate batches (default/max 65lb per batch, min 25lb - not encouraged due to high per-pound roast fee)
+    // Returns 65lb as default batch weight
     const calcBatches = (totalWeight) => {
       if (totalWeight <= 65) {
-        return { batches: 1, batchWeight: Math.round(totalWeight) };
+        return { batches: 1, batchWeight: Math.min(65, Math.round(totalWeight)) };
       }
       const batches = Math.ceil(totalWeight / 65);
-      const batchWeight = Math.round(totalWeight / batches);
-      return { batches, batchWeight };
+      return { batches, batchWeight: 65 }; // Default to 65lb batches
     };
     
     // Build order items with proper recipe data
@@ -3754,29 +3754,43 @@ Respond with JSON only:
         const brazilGreen = greenCoffeeInventory.find(g => g.id === 'brazil-mogiano');
         const yirgGreen = greenCoffeeInventory.find(g => g.id === 'ethiopia-yirgacheffe');
         
-        const brazilWeight = Math.round(totalGreenWeight * (brazilComp?.percentage || 66.67) / 100);
-        const yirgWeight = Math.round(totalGreenWeight * (yirgComp?.percentage || 33.33) / 100);
+        const brazilWeightNeeded = Math.round(totalGreenWeight * (brazilComp?.percentage || 66.67) / 100);
+        const yirgWeightNeeded = Math.round(totalGreenWeight * (yirgComp?.percentage || 33.33) / 100);
         
-        const { batches: brazilBatches, batchWeight: brazilBatchWeight } = calcBatches(brazilWeight);
-        const { batches: yirgBatches, batchWeight: yirgBatchWeight } = calcBatches(yirgWeight);
+        const { batches: brazilBatches, batchWeight: brazilBatchWeight } = calcBatches(brazilWeightNeeded);
+        const { batches: yirgBatches, batchWeight: yirgBatchWeight } = calcBatches(yirgWeightNeeded);
         
-        summaryHtml += `<strong>Archives Blend</strong> (~${Math.round(item.weight)}lb roasted):<br>`;
+        // Recalculate actual roasted output based on 65lb batches
+        const actualGreenWeight = (brazilBatches * brazilBatchWeight) + (yirgBatches * yirgBatchWeight);
+        const actualRoastedWeight = Math.floor(actualGreenWeight * 0.85);
+        
+        summaryHtml += `<strong>Archives Blend</strong> (~${actualRoastedWeight}lb roasted):<br>`;
+        summaryHtml += `<div style="margin-left: 8px;">`;
         summaryHtml += `- ${brazilBatches} batch${brazilBatches > 1 ? 'es' : ''} of Brazil Mogiano (${brazilBatchWeight}lb - profile ${brazilGreen?.roastProfile || '199503'} - drop temp ${brazilGreen?.dropTemp || 419})<br>`;
-        summaryHtml += `- blended with ${yirgBatches} batch${yirgBatches > 1 ? 'es' : ''} of Ethiopia Yirgacheffe (${yirgBatchWeight}lb - profile ${yirgGreen?.roastProfile || '141402'} - drop temp ${yirgGreen?.dropTemp || 415})<br><br>`;
+        summaryHtml += `<span style="color: #888; font-style: italic; margin-left: 4px;">blended with</span><br>`;
+        summaryHtml += `- ${yirgBatches} batch${yirgBatches > 1 ? 'es' : ''} of Ethiopia Yirgacheffe (${yirgBatchWeight}lb - profile ${yirgGreen?.roastProfile || '141402'} - drop temp ${yirgGreen?.dropTemp || 415})`;
+        summaryHtml += `</div><br><br>`;
         
       } else if (roastedCoffee.name === 'Ethiopia Gera') {
         // Ethiopia Gera: Special 50/50 split between two lots per batch
+        // Default batch is 65lb, split into 33lb + 33lb (round UP both - exception to max rule)
         const totalGreenWeight = Math.round(item.weight / 0.85);
         const { batches, batchWeight } = calcBatches(totalGreenWeight);
-        const halfBatchWeight = Math.round(batchWeight / 2);
+        const halfBatchWeight = Math.ceil(batchWeight / 2); // Round UP to 33lb each
+        
+        // Recalculate actual roasted output based on 65lb batches
+        const actualGreenWeight = batches * batchWeight;
+        const actualRoastedWeight = Math.floor(actualGreenWeight * 0.85);
         
         // Find either lot to get roast profile (they should be the same)
         const geraGreen = greenCoffeeInventory.find(g => g.id === 'ethiopia-gera-58484' || g.id === 'ethiopia-gera-58479' || g.id === 'ethiopia-gera');
         const profile = geraGreen?.roastProfile || '061901';
         const dropTemp = geraGreen?.dropTemp || 414;
         
-        summaryHtml += `<strong>Ethiopia Gera</strong> (~${Math.round(item.weight)}lb roasted):<br>`;
-        summaryHtml += `- ${batches} batch${batches > 1 ? 'es' : ''} of Ethiopia Gera (${halfBatchWeight}lb lot 58484 + ${halfBatchWeight}lb lot 58479 - profile ${profile} - drop temp ${dropTemp})<br><br>`;
+        summaryHtml += `<strong>Ethiopia Gera</strong> (~${actualRoastedWeight}lb roasted):<br>`;
+        summaryHtml += `<div style="margin-left: 8px;">`;
+        summaryHtml += `- ${batches} batch${batches > 1 ? 'es' : ''} of Ethiopia Gera (${halfBatchWeight}lb lot 58484 + ${halfBatchWeight}lb lot 58479 - profile ${profile} - drop temp ${dropTemp})`;
+        summaryHtml += `</div><br><br>`;
         
       } else if (type === 'Single Origin' && recipe) {
         // Other single origins
@@ -3784,13 +3798,21 @@ Respond with JSON only:
         const greenWeight = Math.round(item.weight / 0.85);
         const { batches, batchWeight } = calcBatches(greenWeight);
         
-        summaryHtml += `<strong>${roastedCoffee.name}</strong> (~${Math.round(item.weight)}lb roasted):<br>`;
-        summaryHtml += `- ${batches} batch${batches > 1 ? 'es' : ''} of ${roastedCoffee.name} (${batchWeight}lb - profile ${green?.roastProfile || '?'} - drop temp ${green?.dropTemp || '?'})<br><br>`;
+        // Recalculate actual roasted output
+        const actualGreenWeight = batches * batchWeight;
+        const actualRoastedWeight = Math.floor(actualGreenWeight * 0.85);
+        
+        summaryHtml += `<strong>${roastedCoffee.name}</strong> (~${actualRoastedWeight}lb roasted):<br>`;
+        summaryHtml += `<div style="margin-left: 8px;">`;
+        summaryHtml += `- ${batches} batch${batches > 1 ? 'es' : ''} of ${roastedCoffee.name} (${batchWeight}lb - profile ${green?.roastProfile || '?'} - drop temp ${green?.dropTemp || '?'})`;
+        summaryHtml += `</div><br><br>`;
         
       } else {
         // Private Label
         summaryHtml += `<strong>${roastedCoffee.name}</strong>:<br>`;
-        summaryHtml += `- ${Math.round(item.weight)}lb private label<br><br>`;
+        summaryHtml += `<div style="margin-left: 8px;">`;
+        summaryHtml += `- ${Math.round(item.weight)}lb private label`;
+        summaryHtml += `</div><br><br>`;
       }
     }
     
@@ -3829,13 +3851,13 @@ app.post('/api/roast-order/generate-email', async (req, res) => {
   let packagingItems = [];
   
   // Helper to calculate batches (default/max 65lb per batch, min 25lb - not encouraged due to high per-pound roast fee)
+  // Returns 65lb as default batch weight
   const calcBatches = (totalWeight) => {
     if (totalWeight <= 65) {
-      return { batches: 1, batchWeight: Math.round(totalWeight) };
+      return { batches: 1, batchWeight: Math.min(65, Math.round(totalWeight)) };
     }
     const batches = Math.ceil(totalWeight / 65);
-    const batchWeight = Math.round(totalWeight / batches);
-    return { batches, batchWeight };
+    return { batches, batchWeight: 65 }; // Default to 65lb batches
   };
   
   orderItems.forEach(item => {
@@ -3844,7 +3866,6 @@ app.post('/api/roast-order/generate-email', async (req, res) => {
     if (roastedCoffee && roastedCoffee.name === 'Archives Blend' && roastedCoffee.recipe) {
       // Archives Blend: Brazil batches blended with Yirgacheffe batches
       const totalGreenWeight = Math.round(item.weight / 0.85);
-      const roastedOutput = item.weight;
       
       const brazilComp = roastedCoffee.recipe.find(r => r.name.includes('Brazil'));
       const yirgComp = roastedCoffee.recipe.find(r => r.name.includes('Yirgacheffe'));
@@ -3852,34 +3873,43 @@ app.post('/api/roast-order/generate-email', async (req, res) => {
       const brazilGreen = greenCoffeeInventory.find(g => g.id === 'brazil-mogiano');
       const yirgGreen = greenCoffeeInventory.find(g => g.id === 'ethiopia-yirgacheffe');
       
-      const brazilWeight = Math.round(totalGreenWeight * (brazilComp?.percentage || 66.67) / 100);
-      const yirgWeight = Math.round(totalGreenWeight * (yirgComp?.percentage || 33.33) / 100);
+      const brazilWeightNeeded = Math.round(totalGreenWeight * (brazilComp?.percentage || 66.67) / 100);
+      const yirgWeightNeeded = Math.round(totalGreenWeight * (yirgComp?.percentage || 33.33) / 100);
       
-      const { batches: brazilBatches, batchWeight: brazilBatchWeight } = calcBatches(brazilWeight);
-      const { batches: yirgBatches, batchWeight: yirgBatchWeight } = calcBatches(yirgWeight);
+      const { batches: brazilBatches, batchWeight: brazilBatchWeight } = calcBatches(brazilWeightNeeded);
+      const { batches: yirgBatches, batchWeight: yirgBatchWeight } = calcBatches(yirgWeightNeeded);
       
-      emailBody += `Archives Blend (~${Math.round(roastedOutput)}lb roasted):\n`;
+      // Recalculate actual roasted output based on 65lb batches
+      const actualGreenWeight = (brazilBatches * brazilBatchWeight) + (yirgBatches * yirgBatchWeight);
+      const actualRoastedWeight = Math.floor(actualGreenWeight * 0.85);
+      
+      emailBody += `Archives Blend (~${actualRoastedWeight}lb roasted):\n`;
       emailBody += `- ${brazilBatches} batch${brazilBatches > 1 ? 'es' : ''} of Brazil Mogiano (${brazilBatchWeight}lb - profile ${brazilGreen?.roastProfile || '199503'} - drop temp ${brazilGreen?.dropTemp || 419})\n`;
-      emailBody += `- blended with ${yirgBatches} batch${yirgBatches > 1 ? 'es' : ''} of Ethiopia Yirgacheffe (${yirgBatchWeight}lb - profile ${yirgGreen?.roastProfile || '141402'} - drop temp ${yirgGreen?.dropTemp || 415})\n\n`;
+      emailBody += `blended with\n`;
+      emailBody += `- ${yirgBatches} batch${yirgBatches > 1 ? 'es' : ''} of Ethiopia Yirgacheffe (${yirgBatchWeight}lb - profile ${yirgGreen?.roastProfile || '141402'} - drop temp ${yirgGreen?.dropTemp || 415})\n\n`;
       
-      packagingItems.push(`~${Math.round(roastedOutput)}lb roasted Archives Blend`);
+      packagingItems.push(`~${actualRoastedWeight}lb roasted Archives Blend`);
       
     } else if (roastedCoffee && roastedCoffee.name === 'Ethiopia Gera') {
       // Ethiopia Gera: Special 50/50 split between two lots per batch
+      // Default batch is 65lb, split into 33lb + 33lb (round UP both - exception to max rule)
       const totalGreenWeight = Math.round(item.weight / 0.85);
       const { batches, batchWeight } = calcBatches(totalGreenWeight);
-      const halfBatchWeight = Math.round(batchWeight / 2);
-      const roastedOutput = item.weight;
+      const halfBatchWeight = Math.ceil(batchWeight / 2); // Round UP to 33lb each
+      
+      // Recalculate actual roasted output based on 65lb batches
+      const actualGreenWeight = batches * batchWeight;
+      const actualRoastedWeight = Math.floor(actualGreenWeight * 0.85);
       
       // Find either lot to get roast profile
       const geraGreen = greenCoffeeInventory.find(g => g.id === 'ethiopia-gera-58484' || g.id === 'ethiopia-gera-58479' || g.id === 'ethiopia-gera');
       const profile = geraGreen?.roastProfile || '061901';
       const dropTemp = geraGreen?.dropTemp || 414;
       
-      emailBody += `Ethiopia Gera (~${Math.round(roastedOutput)}lb roasted):\n`;
+      emailBody += `Ethiopia Gera (~${actualRoastedWeight}lb roasted):\n`;
       emailBody += `- ${batches} batch${batches > 1 ? 'es' : ''} of Ethiopia Gera (${halfBatchWeight}lb lot 58484 + ${halfBatchWeight}lb lot 58479 - profile ${profile} - drop temp ${dropTemp})\n\n`;
       
-      packagingItems.push(`~${Math.round(roastedOutput)}lb Ethiopia Gera`);
+      packagingItems.push(`~${actualRoastedWeight}lb Ethiopia Gera`);
       
     } else if (roastedCoffee && roastedCoffee.type === 'Single Origin' && roastedCoffee.recipe) {
       // Other Single Origins
@@ -3887,14 +3917,17 @@ app.post('/api/roast-order/generate-email', async (req, res) => {
       const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
       const greenWeight = Math.round(item.weight / 0.85);
       const { batches, batchWeight } = calcBatches(greenWeight);
-      const roastedOutput = item.weight;
+      
+      // Recalculate actual roasted output
+      const actualGreenWeight = batches * batchWeight;
+      const actualRoastedWeight = Math.floor(actualGreenWeight * 0.85);
       
       if (greenCoffee) {
-        emailBody += `${roastedCoffee.name} (~${Math.round(roastedOutput)}lb roasted):\n`;
+        emailBody += `${roastedCoffee.name} (~${actualRoastedWeight}lb roasted):\n`;
         emailBody += `- ${batches} batch${batches > 1 ? 'es' : ''} of ${roastedCoffee.name} (${batchWeight}lb - profile ${greenCoffee.roastProfile} - drop temp ${greenCoffee.dropTemp})\n\n`;
       }
       
-      packagingItems.push(`~${Math.round(roastedOutput)}lb ${roastedCoffee.name}`);
+      packagingItems.push(`~${actualRoastedWeight}lb ${roastedCoffee.name}`);
       
     } else if (roastedCoffee && roastedCoffee.type === 'Private Label') {
       // Private Label - output = input (comes roasted)

@@ -809,6 +809,7 @@ function addOrUpdateCustomer(name, code, emails = []) {
 // ============ Coffee Inventory Data ============
 
 // Green Coffee Inventory (unroasted beans)
+// Note: Ethiopia Gera has TWO lots (58484, 58479) that should be split 50/50 for each batch
 let greenCoffeeInventory = [
   {
     id: 'colombia-antioquia',
@@ -818,9 +819,16 @@ let greenCoffeeInventory = [
     dropTemp: 410
   },
   {
-    id: 'ethiopia-gera',
-    name: 'Ethiopia Gera',
-    weight: 100,
+    id: 'ethiopia-gera-58484',
+    name: 'Ethiopia Gera 58484',
+    weight: 50,
+    roastProfile: '061901',
+    dropTemp: 414
+  },
+  {
+    id: 'ethiopia-gera-58479',
+    name: 'Ethiopia Gera 58479',
+    weight: 50,
     roastProfile: '061901',
     dropTemp: 414
   },
@@ -841,6 +849,8 @@ let greenCoffeeInventory = [
 ];
 
 // Roasted Coffee Inventory
+// Archives Blend: 66.67% Brazil Mogiano + 33.33% Ethiopia Yirgacheffe
+// Ethiopia Gera: 50% lot 58484 + 50% lot 58479 (both roasted together per batch)
 let roastedCoffeeInventory = [
   {
     id: 'archives-blend',
@@ -857,9 +867,12 @@ let roastedCoffeeInventory = [
     name: 'Ethiopia Gera',
     weight: 40,
     type: 'Single Origin',
+    // Special: Ethiopia Gera uses TWO lots split 50/50 per batch
     recipe: [
-      { greenCoffeeId: 'ethiopia-gera', name: 'Ethiopia Gera', percentage: 100 }
-    ]
+      { greenCoffeeId: 'ethiopia-gera-58484', name: 'Ethiopia Gera 58484', percentage: 50 },
+      { greenCoffeeId: 'ethiopia-gera-58479', name: 'Ethiopia Gera 58479', percentage: 50 }
+    ],
+    specialInstructions: 'Split 50/50 between lot 58484 and 58479 for each batch'
   },
   {
     id: 'colombia-excelso',
@@ -2024,6 +2037,53 @@ app.post('/api/invoice/confirm', async (req, res) => {
       return res.status(400).json({ error: 'Missing invoice details' });
     }
 
+    // VALIDATION: Check if we have enough roasted coffee BEFORE making any changes
+    const shortages = [];
+    
+    if (items && items.length > 0) {
+      for (const item of items) {
+        const productName = item.description ? item.description.replace(' (units in lbs)', '') : item.product;
+        const quantity = item.quantity || 0;
+        
+        // Search for matching roasted coffee with flexible matching
+        const roastedMatch = roastedCoffeeInventory.find(c => {
+          const cName = c.name.toLowerCase();
+          const pName = productName.toLowerCase();
+          if (cName === pName) return true;
+          if (cName.includes(pName) || pName.includes(cName)) return true;
+          if (pName.includes('archives') && cName.includes('archives')) return true;
+          if (pName.includes('ethiopia') && cName.includes('ethiopia')) return true;
+          if (pName.includes('decaf') && cName.includes('decaf')) return true;
+          return false;
+        });
+        
+        if (roastedMatch && quantity > 0) {
+          if (quantity > roastedMatch.weight) {
+            shortages.push({
+              name: roastedMatch.name,
+              required: quantity,
+              available: roastedMatch.weight,
+              shortage: quantity - roastedMatch.weight
+            });
+          }
+        }
+      }
+    }
+    
+    // If there are shortages, reject the invoice
+    if (shortages.length > 0) {
+      const shortageList = shortages.map(s => 
+        `${s.name}: need ${s.required}lb but only ${s.available}lb available (short ${s.shortage}lb)`
+      ).join('; ');
+      
+      return res.json({
+        success: false,
+        error: 'insufficient_inventory',
+        message: `Not enough roasted coffee to complete this invoice. ${shortageList}. Please reduce the quantity or choose a different product. What would you like to do?`,
+        shortages
+      });
+    }
+
     oauth2Client.setCredentials(userTokens);
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
 
@@ -2066,7 +2126,7 @@ app.post('/api/invoice/confirm', async (req, res) => {
         
         if (roastedMatch && quantity > 0) {
           const previousWeight = roastedMatch.weight;
-          roastedMatch.weight = Math.max(0, roastedMatch.weight - quantity);
+          roastedMatch.weight -= quantity; // Already validated, won't go negative
           
           deductions.push({
             product: roastedMatch.name,
@@ -3082,11 +3142,19 @@ app.post('/api/inventory/green/update', async (req, res) => {
   if (!coffee) {
     return res.status(404).json({ error: 'Green coffee not found' });
   }
+  // Prevent negative inventory
+  if (weight !== undefined && weight < 0) {
+    return res.json({ 
+      success: false, 
+      error: 'invalid_weight',
+      message: `Cannot set negative inventory. Current ${coffee.name} weight is ${coffee.weight}lb. What would you like to do?`
+    });
+  }
   if (weight !== undefined) coffee.weight = weight;
   if (roastProfile !== undefined) coffee.roastProfile = roastProfile;
   if (dropTemp !== undefined) coffee.dropTemp = dropTemp;
   await syncInventoryToSheets();
-  res.json({ success: true, coffee });
+  res.json({ success: true, coffee, message: `${coffee.name} updated to ${coffee.weight}lb. What else can I help you with?` });
 });
 
 // Add new green coffee
@@ -3130,11 +3198,19 @@ app.post('/api/inventory/roasted/update', async (req, res) => {
   if (!coffee) {
     return res.status(404).json({ error: 'Roasted coffee not found' });
   }
+  // Prevent negative inventory
+  if (weight !== undefined && weight < 0) {
+    return res.json({ 
+      success: false, 
+      error: 'invalid_weight',
+      message: `Cannot set negative inventory. Current ${coffee.name} weight is ${coffee.weight}lb. What would you like to do?`
+    });
+  }
   if (weight !== undefined) coffee.weight = weight;
   if (type !== undefined) coffee.type = type;
   if (recipe !== undefined) coffee.recipe = recipe;
   await syncInventoryToSheets();
-  res.json({ success: true, coffee });
+  res.json({ success: true, coffee, message: `${coffee.name} updated to ${coffee.weight}lb. What else can I help you with?` });
 });
 
 // Add new roasted coffee
@@ -3464,40 +3540,39 @@ If the user says "yes", "yeah", "correct", "that's right", "yep", etc., they are
   
   const systemPrompt = `You are parsing a coffee roast order request for Archives of Us Coffee.
 
-Available roasted coffees with types: ${JSON.stringify(roastedCoffeeTypes)}
+Available roasted coffees: ${JSON.stringify(roastedCoffeeNames)}
 ${contextInfo}
-NICKNAME/SHORTHAND RECOGNITION - BE SMART AND ASSUME INTENT:
-- "Blend" or "Archives" → Archives Blend (ONLY blend in inventory, no need to clarify)
-- "Ethiopia" alone → If only ONE Ethiopia coffee exists in roasted inventory, use it. Otherwise ask.
-- "Colombia" alone → If only ONE Colombia coffee exists in roasted inventory, use it. Otherwise ask.
-- "Gera" → Ethiopia Gera
-- "Yirgacheffe" or "Yirg" → Ethiopia Yirgacheffe  
-- "Decaf" → Colombia Decaf
-- "Antioquia" → Colombia Antioquia
-- "Brazil" or "Mogiano" → Note: Brazil Mogiano is green coffee only, not a roasted product
 
-SMART MATCHING RULES:
-1. If user mentions a term that matches ONLY ONE coffee, use it without asking for clarification.
-2. Only ask for clarification when there are genuinely multiple options that could match.
-3. Be generous in interpretation - if the user says something close to a coffee name, match it.
-4. For partial matches or typos, match to the closest coffee name.
+CRITICAL NICKNAME RECOGNITION - MATCH AUTOMATICALLY WITHOUT ASKING:
+- "Blend", "Archives", "archive", "house blend" → Archives Blend
+- "Ethiopia", "Ethiopi", "ethiopian", "Gera" → Ethiopia Gera (this is the ONLY Ethiopia in roasted coffee)
+- "Decaf", "decaffeinated" → Colombia Decaf
+- "Colombia", "Colombian", "Excelso" → Colombia Excelso
 
-CONFIRMATION HANDLING:
-- If user says "yes", "yeah", "yep", "correct", "that one", "sure", "ok", etc. AND there was a previous suggestion, confirm that suggestion.
+IMPORTANT RULES:
+1. ALWAYS match nicknames automatically - do NOT ask for clarification if the nickname clearly maps to ONE coffee
+2. "Archives and Ethiopia" means TWO coffees: Archives Blend AND Ethiopia Gera
+3. "Archives and Ethiopi" (with typo) still means Archives Blend AND Ethiopia Gera
+4. Parse ALL coffees mentioned in the request, not just one
+5. If user confirms "yes" to a previous suggestion, return that coffee
 
 Respond with JSON only:
 {
   "understood": true/false,
   "needsClarification": true/false,
-  "clarificationQuestion": "string if needs clarification",
-  "suggestedCoffee": "the coffee name being suggested if asking for clarification",
+  "clarificationQuestion": "only ask if GENUINELY ambiguous",
+  "suggestedCoffee": "only if asking for clarification",
   "coffees": [
-    {
-      "name": "exact name from available list",
-      "matched": true/false
-    }
+    {"name": "Archives Blend", "matched": true},
+    {"name": "Ethiopia Gera", "matched": true}
   ]
-}`;
+}
+
+EXAMPLES:
+- "Archives and Ethiopia" → coffees: [{name:"Archives Blend",matched:true}, {name:"Ethiopia Gera",matched:true}]
+- "blend and ethiopi" → coffees: [{name:"Archives Blend",matched:true}, {name:"Ethiopia Gera",matched:true}]
+- "just ethiopia" → coffees: [{name:"Ethiopia Gera",matched:true}]
+- "archives" → coffees: [{name:"Archives Blend",matched:true}]`;
 
   try {
     // Try ChatGPT first
@@ -3515,11 +3590,11 @@ Respond with JSON only:
         const parsed = JSON.parse(jsonMatch[0]);
         res.json(parsed);
       } else {
-        res.json({ understood: false, needsClarification: true, clarificationQuestion: "Which roasted coffees would you like to order? For example: 'Archives Blend and Ethiopia Gera'" });
+        res.json({ understood: false, needsClarification: true, clarificationQuestion: "Which coffees would you like? For example: 'Archives Blend and Ethiopia Gera'" });
       }
     } catch (geminiError) {
       console.error('Gemini fallback also failed:', geminiError);
-      res.json({ understood: false, needsClarification: true, clarificationQuestion: "Which roasted coffees would you like to order? For example: 'Archives Blend and Ethiopia Gera'" });
+      res.json({ understood: false, needsClarification: true, clarificationQuestion: "Which coffees would you like? For example: 'Archives Blend and Ethiopia Gera'" });
     }
   }
 });
@@ -3536,45 +3611,44 @@ app.post('/api/roast-order/modify', async (req, res) => {
   
   const prompt = `You are Mise, an intelligent assistant for Archives of Us Coffee roast orders.
 
-AVAILABLE ROASTED COFFEES: ${JSON.stringify(roastedCoffeeTypes)}
+AVAILABLE ROASTED COFFEES: ${JSON.stringify(roastedCoffeeNames)}
 
 CURRENT ORDER: ${JSON.stringify(currentOrder.map(o => ({ name: o.name, weight: o.weight })))}
 
 USER REQUEST: "${userRequest}"
 
-NICKNAME RECOGNITION (be flexible):
-- "Blend", "Archives", "house" → Archives Blend
-- "Ethiopia", "Gera", "ethiopian" → Ethiopia Gera  
-- "Colombia", "Excelso", "colombian" → Colombia Excelso
+NICKNAME RECOGNITION - MATCH AUTOMATICALLY:
+- "Blend", "Archives", "archive", "house" → Archives Blend
+- "Ethiopia", "Ethiopi", "ethiopian", "Gera" → Ethiopia Gera
+- "Colombia", "Colombian", "Excelso" → Colombia Excelso
 - "Decaf" → Colombia Decaf
 
 YOUR TASK:
 1. Parse the user's request to understand what they want
-2. Extract coffee names and weights (amounts in pounds/lb)
-3. If the request is unclear, ask a helpful clarifying question
+2. If they say "also [coffee]" or "add [coffee]", ADD that coffee to the existing order
+3. Extract coffee names and weights (amounts in pounds/lb)
+4. Return the COMPLETE order (existing items + new items)
 
 PARSING EXAMPLES:
+- "also Archives" with current order Ethiopia 55lb → ADD Archives Blend, ask for weight
+- "155lb" as response to "how many pounds of Archives" → Archives Blend: 155lb (KEEP existing Ethiopia 55lb)
 - "80lb Archives Blend and 60lb Ethiopia" → Archives Blend: 80lb, Ethiopia Gera: 60lb
-- "make it 100 pounds blend" → Archives Blend: 100lb
-- "just 50 ethiopia" → Ethiopia Gera: 50lb
-- "No, make it just a total of 80lb Archives Blend and Ethiopia Gera 60lb" → Archives Blend: 80lb, Ethiopia Gera: 60lb
 - "change archives to 100" → Keep other items, change Archives Blend to 100lb
-- "less ethiopia, maybe 40" → Keep other items, change Ethiopia Gera to 40lb
 
 IMPORTANT: 
-- The user is modifying their roast order, so interpret their request in that context
-- "No" at the start usually means they're rejecting the current amounts and specifying new ones
-- If you can extract ANY amounts, return success: true with those items
-- Only return success: false if you truly cannot understand what they want
+- When user adds a coffee, KEEP the existing items and ADD the new one
+- Return ALL items in the order, not just the modified one
+- If asking for weight, set needsClarification: true
 
 Respond with JSON only:
 {
   "success": true/false,
   "items": [
-    { "name": "exact coffee name from available list", "weight": number_in_pounds }
+    { "name": "exact coffee name", "weight": number_in_pounds }
   ],
   "needsClarification": true/false,
-  "clarificationQuestion": "helpful question if you need more info (stay in order context)"
+  "clarificationQuestion": "How many pounds of [coffee]?",
+  "addingCoffee": "coffee name being added if asking for weight"
 }`;
 
   try {
@@ -3591,39 +3665,25 @@ Respond with JSON only:
     
     const parsed = JSON.parse(jsonMatch[0]);
     
-    // If Gemini needs clarification, return that question
+    // If Gemini needs clarification (e.g., asking for weight), return that question
     if (parsed.needsClarification && parsed.clarificationQuestion) {
       return res.json({ 
         success: false, 
         needsClarification: true,
-        message: parsed.clarificationQuestion
+        message: parsed.clarificationQuestion,
+        addingCoffee: parsed.addingCoffee
       });
     }
     
     if (!parsed.success || !parsed.items || parsed.items.length === 0) {
-      // Instead of giving up, ask a clarifying question
       return res.json({ 
         success: false, 
         needsClarification: true,
-        message: parsed.clarificationQuestion || "How much of each coffee would you like? For example: '80lb Archives Blend and 60lb Ethiopia'"
+        message: parsed.clarificationQuestion || "How much of each coffee would you like? For example: '80lb Archives Blend and 60lb Ethiopia Gera'"
       });
     }
     
-    // Nickname mapping for display
-    const getNickname = (name) => {
-      const nicknames = {
-        'Archives Blend': 'Archives',
-        'Brazil Mogiano': 'Brazil',
-        'Colombia Decaf': 'Decaf',
-        'Colombia Antioquia': 'Colombia',
-        'Colombia Excelso': 'Colombia',
-        'Ethiopia Yirgacheffe': 'Yirgacheffe',
-        'Ethiopia Gera': 'Ethiopia'
-      };
-      return nicknames[name] || name;
-    };
-    
-    // Helper to calculate batches (max 65lb per batch)
+    // Helper to calculate batches (default/max 65lb per batch, min 25lb - not encouraged due to high per-pound roast fee)
     const calcBatches = (totalWeight) => {
       if (totalWeight <= 65) {
         return { batches: 1, batchWeight: Math.round(totalWeight) };
@@ -3635,7 +3695,7 @@ Respond with JSON only:
     
     // Build order items with proper recipe data
     const orderItems = [];
-    let summaryHtml = '<strong>Order:</strong><br><br>';
+    let summaryHtml = '<strong>Order Summary:</strong><br><br>';
     
     for (const item of parsed.items) {
       const roastedCoffee = roastedCoffeeInventory.find(c => 
@@ -3658,7 +3718,11 @@ Respond with JSON only:
             { greenCoffeeId: 'ethiopia-yirgacheffe', name: 'Ethiopia Yirgacheffe', percentage: 33.3333 }
           ];
         } else if (nameLower.includes('ethiopia') && nameLower.includes('gera')) {
-          recipe = [{ greenCoffeeId: 'ethiopia-gera', name: 'Ethiopia Gera', percentage: 100 }];
+          // Ethiopia Gera: 50/50 split between two lots
+          recipe = [
+            { greenCoffeeId: 'ethiopia-gera-58484', name: 'Ethiopia Gera 58484', percentage: 50 },
+            { greenCoffeeId: 'ethiopia-gera-58479', name: 'Ethiopia Gera 58479', percentage: 50 }
+          ];
         } else if (nameLower.includes('colombia') && !nameLower.includes('decaf')) {
           recipe = [{ greenCoffeeId: 'colombia-antioquia', name: 'Colombia Antioquia', percentage: 100 }];
         }
@@ -3680,36 +3744,53 @@ Respond with JSON only:
       };
       orderItems.push(orderItem);
       
-      // Generate summary HTML
-      if (type === 'Blend' && recipe) {
+      // Generate summary HTML using FULL coffee names
+      if (roastedCoffee.name === 'Archives Blend' && recipe) {
+        // Archives Blend: Show Brazil batches blended with Yirgacheffe batches
         const totalGreenWeight = Math.round(item.weight / 0.85);
-        let blendParts = [];
+        const brazilComp = recipe.find(r => r.name.includes('Brazil'));
+        const yirgComp = recipe.find(r => r.name.includes('Yirgacheffe'));
         
-        recipe.forEach((comp) => {
-          const green = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
-          const compGreenWeight = Math.round(totalGreenWeight * comp.percentage / 100);
-          const { batches, batchWeight } = calcBatches(compGreenWeight);
-          const nickname = getNickname(comp.name);
-          
-          blendParts.push(`${batches} batch${batches > 1 ? 'es' : ''} of ${nickname} (${batchWeight}lb - profile ${green ? green.roastProfile : '?'} - drop temp ${green ? green.dropTemp : '?'})`);
-        });
+        const brazilGreen = greenCoffeeInventory.find(g => g.id === 'brazil-mogiano');
+        const yirgGreen = greenCoffeeInventory.find(g => g.id === 'ethiopia-yirgacheffe');
         
-        summaryHtml += `- ${blendParts.join(' blended with ')}<br>`;
-        summaryHtml += `<em style="color:#888; margin-left:12px;">~${Math.round(item.weight)}lb roasted total</em><br><br>`;
+        const brazilWeight = Math.round(totalGreenWeight * (brazilComp?.percentage || 66.67) / 100);
+        const yirgWeight = Math.round(totalGreenWeight * (yirgComp?.percentage || 33.33) / 100);
+        
+        const { batches: brazilBatches, batchWeight: brazilBatchWeight } = calcBatches(brazilWeight);
+        const { batches: yirgBatches, batchWeight: yirgBatchWeight } = calcBatches(yirgWeight);
+        
+        summaryHtml += `<strong>Archives Blend</strong> (~${Math.round(item.weight)}lb roasted):<br>`;
+        summaryHtml += `- ${brazilBatches} batch${brazilBatches > 1 ? 'es' : ''} of Brazil Mogiano (${brazilBatchWeight}lb - profile ${brazilGreen?.roastProfile || '199503'} - drop temp ${brazilGreen?.dropTemp || 419})<br>`;
+        summaryHtml += `- blended with ${yirgBatches} batch${yirgBatches > 1 ? 'es' : ''} of Ethiopia Yirgacheffe (${yirgBatchWeight}lb - profile ${yirgGreen?.roastProfile || '141402'} - drop temp ${yirgGreen?.dropTemp || 415})<br><br>`;
+        
+      } else if (roastedCoffee.name === 'Ethiopia Gera') {
+        // Ethiopia Gera: Special 50/50 split between two lots per batch
+        const totalGreenWeight = Math.round(item.weight / 0.85);
+        const { batches, batchWeight } = calcBatches(totalGreenWeight);
+        const halfBatchWeight = Math.round(batchWeight / 2);
+        
+        // Find either lot to get roast profile (they should be the same)
+        const geraGreen = greenCoffeeInventory.find(g => g.id === 'ethiopia-gera-58484' || g.id === 'ethiopia-gera-58479' || g.id === 'ethiopia-gera');
+        const profile = geraGreen?.roastProfile || '061901';
+        const dropTemp = geraGreen?.dropTemp || 414;
+        
+        summaryHtml += `<strong>Ethiopia Gera</strong> (~${Math.round(item.weight)}lb roasted):<br>`;
+        summaryHtml += `- ${batches} batch${batches > 1 ? 'es' : ''} of Ethiopia Gera (${halfBatchWeight}lb lot 58484 + ${halfBatchWeight}lb lot 58479 - profile ${profile} - drop temp ${dropTemp})<br><br>`;
         
       } else if (type === 'Single Origin' && recipe) {
+        // Other single origins
         const green = greenCoffeeInventory.find(g => g.id === recipe[0].greenCoffeeId);
         const greenWeight = Math.round(item.weight / 0.85);
         const { batches, batchWeight } = calcBatches(greenWeight);
-        const nickname = getNickname(roastedCoffee.name);
         
-        summaryHtml += `- ${batches} batch${batches > 1 ? 'es' : ''} of ${nickname} (${batchWeight}lb - profile ${green ? green.roastProfile : '?'} - drop temp ${green ? green.dropTemp : '?'})<br>`;
-        summaryHtml += `<em style="color:#888; margin-left:12px;">~${Math.round(item.weight)}lb roasted</em><br><br>`;
+        summaryHtml += `<strong>${roastedCoffee.name}</strong> (~${Math.round(item.weight)}lb roasted):<br>`;
+        summaryHtml += `- ${batches} batch${batches > 1 ? 'es' : ''} of ${roastedCoffee.name} (${batchWeight}lb - profile ${green?.roastProfile || '?'} - drop temp ${green?.dropTemp || '?'})<br><br>`;
         
       } else {
         // Private Label
-        const nickname = getNickname(roastedCoffee.name);
-        summaryHtml += `- ${Math.round(item.weight)}lb private label ${nickname}<br><br>`;
+        summaryHtml += `<strong>${roastedCoffee.name}</strong>:<br>`;
+        summaryHtml += `- ${Math.round(item.weight)}lb private label<br><br>`;
       }
     }
     
@@ -3747,20 +3828,7 @@ app.post('/api/roast-order/generate-email', async (req, res) => {
   
   let packagingItems = [];
   
-  // Nickname mapping for coffees
-  const getNickname = (name) => {
-    const nicknames = {
-      'Brazil Mogiano': 'Brazil',
-      'Colombia Decaf': 'Decaf',
-      'Colombia Antioquia': 'Colombia',
-      'Ethiopia Yirgacheffe': 'Yirgacheffe',
-      'Ethiopia Gera': 'Ethiopia'
-    };
-    return nicknames[name] || name;
-  };
-  
-  // Helper to calculate batches (max 65lb, min 25lb per batch)
-  // Maximize 65lb batches to save costs
+  // Helper to calculate batches (default/max 65lb per batch, min 25lb - not encouraged due to high per-pound roast fee)
   const calcBatches = (totalWeight) => {
     if (totalWeight <= 65) {
       return { batches: 1, batchWeight: Math.round(totalWeight) };
@@ -3773,54 +3841,71 @@ app.post('/api/roast-order/generate-email', async (req, res) => {
   orderItems.forEach(item => {
     const roastedCoffee = roastedCoffeeInventory.find(c => c.name === item.name);
     
-    if (roastedCoffee && roastedCoffee.type === 'Blend' && roastedCoffee.recipe) {
-      // Blend - calculate green weights and batches
+    if (roastedCoffee && roastedCoffee.name === 'Archives Blend' && roastedCoffee.recipe) {
+      // Archives Blend: Brazil batches blended with Yirgacheffe batches
       const totalGreenWeight = Math.round(item.weight / 0.85);
       const roastedOutput = item.weight;
       
-      let blendParts = [];
-      roastedCoffee.recipe.forEach((comp) => {
-        const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
-        const compGreenWeight = Math.round(totalGreenWeight * comp.percentage / 100);
-        const { batches, batchWeight } = calcBatches(compGreenWeight);
-        
-        if (greenCoffee) {
-          const nickname = getNickname(comp.name);
-          blendParts.push(`${batches} batch${batches > 1 ? 'es' : ''} of ${nickname} (${batchWeight}lb - profile ${greenCoffee.roastProfile} - drop temp ${greenCoffee.dropTemp})`);
-        }
-      });
+      const brazilComp = roastedCoffee.recipe.find(r => r.name.includes('Brazil'));
+      const yirgComp = roastedCoffee.recipe.find(r => r.name.includes('Yirgacheffe'));
       
-      emailBody += `- ${blendParts.join(' blended with ')}\n`;
+      const brazilGreen = greenCoffeeInventory.find(g => g.id === 'brazil-mogiano');
+      const yirgGreen = greenCoffeeInventory.find(g => g.id === 'ethiopia-yirgacheffe');
       
-      // Get component nicknames for packaging
-      const compNames = roastedCoffee.recipe.map(r => getNickname(r.name)).join('/');
-      packagingItems.push(`~${Math.round(roastedOutput)}lb roasted ${compNames}`);
+      const brazilWeight = Math.round(totalGreenWeight * (brazilComp?.percentage || 66.67) / 100);
+      const yirgWeight = Math.round(totalGreenWeight * (yirgComp?.percentage || 33.33) / 100);
+      
+      const { batches: brazilBatches, batchWeight: brazilBatchWeight } = calcBatches(brazilWeight);
+      const { batches: yirgBatches, batchWeight: yirgBatchWeight } = calcBatches(yirgWeight);
+      
+      emailBody += `Archives Blend (~${Math.round(roastedOutput)}lb roasted):\n`;
+      emailBody += `- ${brazilBatches} batch${brazilBatches > 1 ? 'es' : ''} of Brazil Mogiano (${brazilBatchWeight}lb - profile ${brazilGreen?.roastProfile || '199503'} - drop temp ${brazilGreen?.dropTemp || 419})\n`;
+      emailBody += `- blended with ${yirgBatches} batch${yirgBatches > 1 ? 'es' : ''} of Ethiopia Yirgacheffe (${yirgBatchWeight}lb - profile ${yirgGreen?.roastProfile || '141402'} - drop temp ${yirgGreen?.dropTemp || 415})\n\n`;
+      
+      packagingItems.push(`~${Math.round(roastedOutput)}lb roasted Archives Blend`);
+      
+    } else if (roastedCoffee && roastedCoffee.name === 'Ethiopia Gera') {
+      // Ethiopia Gera: Special 50/50 split between two lots per batch
+      const totalGreenWeight = Math.round(item.weight / 0.85);
+      const { batches, batchWeight } = calcBatches(totalGreenWeight);
+      const halfBatchWeight = Math.round(batchWeight / 2);
+      const roastedOutput = item.weight;
+      
+      // Find either lot to get roast profile
+      const geraGreen = greenCoffeeInventory.find(g => g.id === 'ethiopia-gera-58484' || g.id === 'ethiopia-gera-58479' || g.id === 'ethiopia-gera');
+      const profile = geraGreen?.roastProfile || '061901';
+      const dropTemp = geraGreen?.dropTemp || 414;
+      
+      emailBody += `Ethiopia Gera (~${Math.round(roastedOutput)}lb roasted):\n`;
+      emailBody += `- ${batches} batch${batches > 1 ? 'es' : ''} of Ethiopia Gera (${halfBatchWeight}lb lot 58484 + ${halfBatchWeight}lb lot 58479 - profile ${profile} - drop temp ${dropTemp})\n\n`;
+      
+      packagingItems.push(`~${Math.round(roastedOutput)}lb Ethiopia Gera`);
       
     } else if (roastedCoffee && roastedCoffee.type === 'Single Origin' && roastedCoffee.recipe) {
-      // Single Origin
+      // Other Single Origins
       const comp = roastedCoffee.recipe[0];
       const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
       const greenWeight = Math.round(item.weight / 0.85);
       const { batches, batchWeight } = calcBatches(greenWeight);
       const roastedOutput = item.weight;
-      const nickname = getNickname(item.name);
       
       if (greenCoffee) {
-        emailBody += `- ${batches} batch${batches > 1 ? 'es' : ''} of ${nickname} (${batchWeight}lb - profile ${greenCoffee.roastProfile} - drop temp ${greenCoffee.dropTemp})\n`;
+        emailBody += `${roastedCoffee.name} (~${Math.round(roastedOutput)}lb roasted):\n`;
+        emailBody += `- ${batches} batch${batches > 1 ? 'es' : ''} of ${roastedCoffee.name} (${batchWeight}lb - profile ${greenCoffee.roastProfile} - drop temp ${greenCoffee.dropTemp})\n\n`;
       }
       
-      packagingItems.push(`~${Math.round(roastedOutput)}lb ${nickname}`);
+      packagingItems.push(`~${Math.round(roastedOutput)}lb ${roastedCoffee.name}`);
       
     } else if (roastedCoffee && roastedCoffee.type === 'Private Label') {
       // Private Label - output = input (comes roasted)
-      const nickname = getNickname(item.name);
-      emailBody += `- ${Math.round(item.weight)}lb private label ${nickname}\n`;
-      packagingItems.push(`${Math.round(item.weight)}lb ${nickname}`);
+      emailBody += `${roastedCoffee.name}:\n`;
+      emailBody += `- ${Math.round(item.weight)}lb private label\n\n`;
+      packagingItems.push(`${Math.round(item.weight)}lb ${roastedCoffee.name}`);
     }
   });
   
   // Packaging instructions - format list with 'and' before last item
-  emailBody += '\nCan we have the ';
+  emailBody += 'Can we have the ';
   if (packagingItems.length === 1) {
     emailBody += packagingItems[0];
   } else if (packagingItems.length === 2) {
@@ -3848,6 +3933,56 @@ app.post('/api/roast-order/confirm', async (req, res) => {
   await ensureFreshInventory();
   
   const { orderItems, emailData } = req.body;
+  
+  // VALIDATION: Check if we have enough green coffee BEFORE making any changes
+  const shortages = [];
+  const requiredGreen = {}; // Track total needed per green coffee
+  
+  orderItems.forEach(item => {
+    const roastedCoffee = roastedCoffeeInventory.find(c => c.name === item.name);
+    
+    if (roastedCoffee && roastedCoffee.recipe) {
+      roastedCoffee.recipe.forEach(comp => {
+        const compRoastedWeight = item.weight * comp.percentage / 100;
+        const greenWeight = Math.round(compRoastedWeight / 0.85);
+        
+        const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
+        if (greenCoffee) {
+          // Accumulate total required for this green coffee
+          if (!requiredGreen[greenCoffee.id]) {
+            requiredGreen[greenCoffee.id] = { name: greenCoffee.name, required: 0, available: greenCoffee.weight };
+          }
+          requiredGreen[greenCoffee.id].required += greenWeight;
+        }
+      });
+    }
+  });
+  
+  // Check for shortages
+  Object.values(requiredGreen).forEach(gc => {
+    if (gc.required > gc.available) {
+      shortages.push({
+        name: gc.name,
+        required: gc.required,
+        available: gc.available,
+        shortage: gc.required - gc.available
+      });
+    }
+  });
+  
+  // If there are shortages, reject the order
+  if (shortages.length > 0) {
+    const shortageList = shortages.map(s => 
+      `${s.name}: need ${s.required}lb but only ${s.available}lb available (short ${s.shortage}lb)`
+    ).join('; ');
+    
+    return res.json({
+      success: false,
+      error: 'insufficient_inventory',
+      message: `Not enough green coffee to complete this order. ${shortageList}. Please reduce the order quantity or choose different coffees. What would you like to do?`,
+      shortages
+    });
+  }
   
   const deductions = [];
   const enRouteItems = [];

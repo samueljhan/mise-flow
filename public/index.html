@@ -78,28 +78,6 @@
             color: #909090;
         }
 
-        .google-status {
-            font-size: 12px;
-            padding: 6px 12px;
-            border-radius: 6px;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-
-        .google-status.connected {
-            background: #1f3a2e;
-            color: #a0e0b0;
-        }
-
-        .google-status.disconnected {
-            background: #3a3a3a;
-            color: #909090;
-        }
-
-        .google-status:hover {
-            opacity: 0.8;
-        }
-
         .user-profile {
             display: flex;
             align-items: center;
@@ -554,11 +532,6 @@
             .header p {
                 font-size: 11px;
             }
-
-            .google-status {
-                font-size: 10px;
-                padding: 4px 8px;
-            }
             
             .microphone-status {
                 padding: 5px 15px;
@@ -636,9 +609,6 @@
                     <span class="user-email" id="userEmail"></span>
                 </div>
                 <button class="logout-btn" id="logoutBtn" onclick="logout()" style="display: none;">Logout</button>
-            </div>
-            <div class="google-status disconnected" id="googleStatus" onclick="connectGoogle()" style="display: none;">
-                🔗 Connect Google
             </div>
         </div>
 
@@ -820,7 +790,6 @@
         const voiceBtn = document.getElementById('voiceBtn');
         const micIndicator = document.getElementById('micIndicator');
         const micStatus = document.getElementById('micStatus');
-        const googleStatusEl = document.getElementById('googleStatus');
         
         let ws = null;
         let audioContext = null;
@@ -861,7 +830,6 @@
                 const response = await fetch('/api/google/status');
                 const data = await response.json();
                 googleConnected = data.connected;
-                updateGoogleUI();
             } catch (error) {
                 console.error('Error checking auth status:', error);
                 // If error, might be auth issue - redirect to login
@@ -892,23 +860,6 @@
             }
         }
 
-        function updateGoogleUI() {
-            if (googleConnected) {
-                googleStatusEl.textContent = '✓ Google Connected';
-                googleStatusEl.classList.remove('disconnected');
-                googleStatusEl.classList.add('connected');
-                googleStatusEl.onclick = null;
-                googleStatusEl.style.cursor = 'default';
-            } else {
-                googleStatusEl.textContent = '🔗 Connect Google';
-                googleStatusEl.classList.remove('connected');
-                googleStatusEl.classList.add('disconnected');
-                googleStatusEl.onclick = () => connectGoogle();
-                googleStatusEl.style.cursor = 'pointer';
-            }
-            googleStatusEl.style.display = 'block';
-        }
-        
         // Call this when we get a 401 to redirect to login
         function handleAuthError() {
             window.location.href = '/login';
@@ -946,7 +897,6 @@
         const urlParams = new URLSearchParams(window.location.search);
         if (urlParams.get('google') === 'connected') {
             googleConnected = true;
-            updateGoogleUI();
             window.history.replaceState({}, document.title, window.location.pathname);
             
             // Check if there's a pending action to restore
@@ -1185,7 +1135,7 @@
                         const roasted = roastedCoffeeInventory.find(r => r.name === c.name);
                         const nameLower = c.name.toLowerCase();
                         
-                        // Archives Blend - default 155lb
+                        // Archives Blend - default to full batches: 2x65lb Brazil + 1x65lb Yirg = 195lb green → 165lb roasted
                         if (nameLower.includes('archives') || nameLower.includes('blend')) {
                             return {
                                 name: c.name,
@@ -1194,7 +1144,7 @@
                                     { greenCoffeeId: 'brazil-mogiano', name: 'Brazil Mogiano', percentage: 66.6667 },
                                     { greenCoffeeId: 'ethiopia-yirgacheffe', name: 'Ethiopia Yirgacheffe', percentage: 33.3333 }
                                 ],
-                                weight: 155
+                                weight: 165  // Full batches: 195lb green * 0.85 = 165lb roasted
                             };
                         }
                         // Ethiopia Gera - default 55lb  
@@ -1203,7 +1153,8 @@
                                 name: c.name,
                                 type: 'Single Origin',
                                 recipe: roasted?.recipe || [
-                                    { greenCoffeeId: 'ethiopia-gera', name: 'Ethiopia Gera', percentage: 100 }
+                                    { greenCoffeeId: 'ethiopia-gera-58484', name: 'Ethiopia Gera 58484', percentage: 50 },
+                                    { greenCoffeeId: 'ethiopia-gera-58479', name: 'Ethiopia Gera 58479', percentage: 50 }
                                 ],
                                 weight: 55
                             };
@@ -1250,14 +1201,21 @@
 
         // Show default order in chat
         function showDefaultOrderInChat() {
-            // Helper to calculate batches (default/max 65lb per batch, min 25lb)
-            // Returns 65lb as default batch weight, calculates number of batches needed
-            const calcBatches = (totalWeight) => {
-                if (totalWeight <= 65) {
-                    return { batches: 1, batchWeight: Math.min(65, Math.round(totalWeight)) };
-                }
+            // Helper to calculate batches
+            // For defaults: use full 65lb batches to maximize batch weights
+            // For user adjustments: distribute weight evenly across batches (25-65lb range)
+            const calcBatches = (totalWeight, forceMax = false) => {
                 const batches = Math.ceil(totalWeight / 65);
-                return { batches, batchWeight: 65 }; // Default to 65lb batches
+                if (forceMax) {
+                    // For default orders, use max 65lb batches
+                    return { batches, batchWeight: 65 };
+                }
+                // For user-specified weights, distribute evenly
+                if (totalWeight <= 65) {
+                    return { batches: 1, batchWeight: Math.round(totalWeight) };
+                }
+                const batchWeight = Math.round(totalWeight / batches);
+                return { batches, batchWeight };
             };
             
             let html = '<strong>Order Summary:</strong><br><br>';
@@ -1291,7 +1249,7 @@
                     html += `<strong>Archives Blend</strong> (~${actualRoastedWeight}lb roasted):<br>`;
                     html += `<div style="margin-left: 8px;">`;
                     html += `- ${brazilBatch.batches} batch${brazilBatch.batches > 1 ? 'es' : ''} of Brazil Mogiano (${brazilBatch.batchWeight}lb - profile ${brazilGreen?.roastProfile || '199503'} - drop temp ${brazilGreen?.dropTemp || 419})<br>`;
-                    html += `<span style="color: #888; font-style: italic; margin-left: 4px;">blended with</span><br>`;
+                    html += `<span style="margin-left: 4px;">blended with</span><br>`;
                     html += `- ${yirgBatch.batches} batch${yirgBatch.batches > 1 ? 'es' : ''} of Ethiopia Yirgacheffe (${yirgBatch.batchWeight}lb - profile ${yirgGreen?.roastProfile || '141402'} - drop temp ${yirgGreen?.dropTemp || 415})`;
                     html += `</div><br><br>`;
                     
@@ -1366,7 +1324,7 @@
                     
                     html += `<strong>${item.name}</strong> (~${actualRoastedWeight}lb roasted):<br>`;
                     html += `<div style="margin-left: 8px;">`;
-                    html += blendLines.join('<br><span style="color: #888; font-style: italic; margin-left: 4px;">blended with</span><br>');
+                    html += blendLines.join('<br><span style="margin-left: 4px;">blended with</span><br>');
                     html += `</div><br><br>`;
                 }
             });
@@ -1705,6 +1663,17 @@
                     return;
                 }
                 
+                // Handle order errors (insufficient inventory, etc.)
+                if (!data.success) {
+                    const messages = chatContainer.querySelectorAll('.message');
+                    const lastMsg = messages[messages.length - 1];
+                    if (lastMsg) {
+                        const content = lastMsg.querySelector('.message-content') || lastMsg;
+                        content.innerHTML = `<div style="color: #dc3545;">⚠️ ${data.message || 'Error confirming order.'}</div>`;
+                    }
+                    return;
+                }
+                
                 // Show confirmation message
                 let confirmHtml = '<strong>Roast Order Confirmed</strong><br><br>';
                 
@@ -1716,7 +1685,7 @@
                     confirmHtml += '<br>';
                 }
                 
-                confirmHtml += `Added ${data.enRouteItems.length} item(s) to en route.`;
+                confirmHtml += `Added ${data.enRouteItems?.length || 0} item(s) to en route.`;
                 
                 if (data.draftCreated) {
                     confirmHtml += '<br>Email draft created in Gmail.';

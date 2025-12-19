@@ -3683,14 +3683,21 @@ Respond with JSON only:
       });
     }
     
-    // Helper to calculate batches (default/max 65lb per batch, min 25lb - not encouraged due to high per-pound roast fee)
-    // Returns 65lb as default batch weight
-    const calcBatches = (totalWeight) => {
-      if (totalWeight <= 65) {
-        return { batches: 1, batchWeight: Math.min(65, Math.round(totalWeight)) };
-      }
+    // Helper to calculate batches
+    // For defaults: use full 65lb batches to maximize batch weights
+    // For user adjustments: distribute weight evenly across batches (25-65lb range)
+    const calcBatches = (totalWeight, forceMax = false) => {
       const batches = Math.ceil(totalWeight / 65);
-      return { batches, batchWeight: 65 }; // Default to 65lb batches
+      if (forceMax) {
+        // For default orders, use max 65lb batches
+        return { batches, batchWeight: 65 };
+      }
+      // For user-specified weights, distribute evenly
+      if (totalWeight <= 65) {
+        return { batches: 1, batchWeight: Math.round(totalWeight) };
+      }
+      const batchWeight = Math.round(totalWeight / batches);
+      return { batches, batchWeight };
     };
     
     // Build order items with proper recipe data
@@ -3767,7 +3774,7 @@ Respond with JSON only:
         summaryHtml += `<strong>Archives Blend</strong> (~${actualRoastedWeight}lb roasted):<br>`;
         summaryHtml += `<div style="margin-left: 8px;">`;
         summaryHtml += `- ${brazilBatches} batch${brazilBatches > 1 ? 'es' : ''} of Brazil Mogiano (${brazilBatchWeight}lb - profile ${brazilGreen?.roastProfile || '199503'} - drop temp ${brazilGreen?.dropTemp || 419})<br>`;
-        summaryHtml += `<span style="color: #888; font-style: italic; margin-left: 4px;">blended with</span><br>`;
+        summaryHtml += `<span style="margin-left: 4px;">blended with</span><br>`;
         summaryHtml += `- ${yirgBatches} batch${yirgBatches > 1 ? 'es' : ''} of Ethiopia Yirgacheffe (${yirgBatchWeight}lb - profile ${yirgGreen?.roastProfile || '141402'} - drop temp ${yirgGreen?.dropTemp || 415})`;
         summaryHtml += `</div><br><br>`;
         
@@ -3850,14 +3857,21 @@ app.post('/api/roast-order/generate-email', async (req, res) => {
   
   let packagingItems = [];
   
-  // Helper to calculate batches (default/max 65lb per batch, min 25lb - not encouraged due to high per-pound roast fee)
-  // Returns 65lb as default batch weight
-  const calcBatches = (totalWeight) => {
-    if (totalWeight <= 65) {
-      return { batches: 1, batchWeight: Math.min(65, Math.round(totalWeight)) };
-    }
+  // Helper to calculate batches
+  // For defaults: use full 65lb batches to maximize batch weights
+  // For user adjustments: distribute weight evenly across batches (25-65lb range)
+  const calcBatches = (totalWeight, forceMax = false) => {
     const batches = Math.ceil(totalWeight / 65);
-    return { batches, batchWeight: 65 }; // Default to 65lb batches
+    if (forceMax) {
+      // For default orders, use max 65lb batches
+      return { batches, batchWeight: 65 };
+    }
+    // For user-specified weights, distribute evenly
+    if (totalWeight <= 65) {
+      return { batches: 1, batchWeight: Math.round(totalWeight) };
+    }
+    const batchWeight = Math.round(totalWeight / batches);
+    return { batches, batchWeight };
   };
   
   orderItems.forEach(item => {

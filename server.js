@@ -1424,7 +1424,7 @@ app.post('/api/gmail/send', async (req, res) => {
     console.log(`📝 Draft created for ${to}${attachmentPath ? ' with attachment' : ''}`);
     res.json({ 
       success: true, 
-      message: `Draft created! Check your Gmail drafts folder.`,
+      message: `Draft created! Check your Gmail drafts folder. What else can I help you with?`,
       draftId: draft.data.id
     });
     
@@ -2089,7 +2089,7 @@ app.post('/api/invoice/confirm', async (req, res) => {
 
     res.json({ 
       success: true, 
-      message: `Invoice ${invoiceNumber} confirmed`,
+      message: `Invoice ${invoiceNumber} confirmed and added to spreadsheet.${deductions.length > 0 ? ' Roasted inventory updated.' : ''} What else can I help you with?`,
       deductions: deductions
     });
 
@@ -3207,7 +3207,11 @@ app.post('/api/inventory/enroute/tracking', async (req, res) => {
   }
   
   await syncInventoryToSheets();
-  res.json({ success: true, item });
+  res.json({ 
+    success: true, 
+    item,
+    message: `Tracking updated for ${item.name}.${item.estimatedDelivery ? ` Estimated delivery: ${item.estimatedDelivery}.` : ''} What else can I help you with?`
+  });
 });
 
 // Mark en route item as delivered (moves to roasted inventory)
@@ -3245,7 +3249,7 @@ app.post('/api/inventory/enroute/deliver', async (req, res) => {
   enRouteCoffeeInventory.splice(index, 1);
   
   await syncInventoryToSheets();
-  res.json({ success: true, message: `${item.name} (${item.weight}lb) added to roasted inventory` });
+  res.json({ success: true, message: `${item.name} (${item.weight}lb) added to roasted inventory. What else can I help you with?` });
 });
 
 // ============ UPS Tracking API ============
@@ -3928,7 +3932,7 @@ app.post('/api/roast-order/confirm', async (req, res) => {
     deductions,
     enRouteItems,
     draftCreated,
-    message: `Order confirmed! ${deductions.length > 0 ? 'Green coffee inventory updated.' : ''} ${enRouteItems.length} item(s) added to en route.${draftCreated ? ' Email draft created in Gmail.' : ''}`
+    message: `Order confirmed! ${deductions.length > 0 ? 'Green coffee inventory updated.' : ''} ${enRouteItems.length} item(s) added to en route.${draftCreated ? ' Email draft created in Gmail.' : ''} What else can I help you with?`
   });
 });
 

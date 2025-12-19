@@ -614,6 +614,14 @@ app.get('/api/user', requireAuth, (req, res) => {
   res.json({ authenticated: true, user: req.session.user });
 });
 
+// Google connection status - required by frontend
+app.get('/api/google/status', requireAuth, (req, res) => {
+  res.json({ 
+    connected: !!userTokens,
+    hasRefreshToken: !!process.env.GOOGLE_REFRESH_TOKEN
+  });
+});
+
 // ============ Main Chat Processing - ChatGPT with Sheet Visibility ============
 
 /**
@@ -1063,6 +1071,111 @@ Available products: ${roastedCoffeeInventory.map(c => c.name).join(', ')}
   }
 });
 
+// Generate invoice PDF and data
+app.post('/api/invoice/generate', requireAuth, async (req, res) => {
+  const { customer, items, pricing } = req.body;
+  
+  if (!customer || !items || items.length === 0) {
+    return res.status(400).json({ error: 'Customer and items required' });
+  }
+  
+  try {
+    const customerCode = getCustomerCode(customer);
+    const invoiceNumber = `C-${customerCode}-${Date.now().toString().slice(-4)}`;
+    const date = new Date().toLocaleDateString();
+    
+    // Determine pricing tier
+    const isAtCost = customer.toLowerCase().includes('archives of us');
+    const pricePerLb = isAtCost ? 6.50 : 8.00; // At-Cost vs Wholesale
+    
+    let total = 0;
+    const lineItems = items.map(item => {
+      const amount = item.quantity * pricePerLb;
+      total += amount;
+      return {
+        product: item.product,
+        quantity: item.quantity,
+        unit: item.unit || 'lb',
+        price: pricePerLb,
+        amount
+      };
+    });
+    
+    res.json({
+      success: true,
+      invoice: {
+        invoiceNumber,
+        date,
+        customer,
+        customerCode,
+        lineItems,
+        subtotal: total,
+        total,
+        pricing: isAtCost ? 'At-Cost' : 'Wholesale'
+      }
+    });
+  } catch (error) {
+    console.error('Invoice generate error:', error);
+    res.status(500).json({ error: 'Failed to generate invoice' });
+  }
+});
+
+// Confirm invoice and record it
+app.post('/api/invoice/confirm', requireAuth, async (req, res) => {
+  const { invoice, sendEmail } = req.body;
+  
+  if (!invoice) {
+    return res.status(400).json({ error: 'Invoice data required' });
+  }
+  
+  try {
+    // Record invoice to Google Sheets if connected
+    if (userTokens) {
+      oauth2Client.setCredentials(userTokens);
+      const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+      
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Invoices!A:F',
+        valueInputOption: 'USER_ENTERED',
+        insertDataOption: 'INSERT_ROWS',
+        requestBody: {
+          values: [[
+            invoice.date,
+            invoice.invoiceNumber,
+            invoice.customer,
+            invoice.total,
+            '', // Paid status - empty initially
+            invoice.pricing
+          ]]
+        }
+      }).catch(err => console.log('Could not record invoice to Sheets:', err.message));
+    }
+    
+    // Deduct from roasted inventory
+    for (const item of invoice.lineItems) {
+      const roasted = roastedCoffeeInventory.find(c => 
+        c.name.toLowerCase() === item.product.toLowerCase()
+      );
+      if (roasted) {
+        roasted.weight -= item.quantity;
+        if (roasted.weight < 0) roasted.weight = 0;
+      }
+    }
+    
+    await syncInventoryToSheets();
+    
+    res.json({
+      success: true,
+      invoiceNumber: invoice.invoiceNumber,
+      message: `Invoice ${invoice.invoiceNumber} confirmed and recorded`
+    });
+  } catch (error) {
+    console.error('Invoice confirm error:', error);
+    res.status(500).json({ error: 'Failed to confirm invoice' });
+  }
+});
+
 // ============ Interpret Yes/No - ChatGPT ============
 
 app.post('/api/interpret-confirmation', async (req, res) => {
@@ -1383,6 +1496,138 @@ app.post('/api/inventory/load', async (req, res) => {
   console.log('📥 Manual inventory load triggered');
   const result = await loadInventoryFromSheets();
   res.json(result);
+});
+
+// Update green coffee inventory
+app.post('/api/inventory/green/update', requireAuth, async (req, res) => {
+  const { id, weight } = req.body;
+  
+  const coffee = greenCoffeeInventory.find(c => c.id === id);
+  if (coffee) {
+    coffee.weight = parseFloat(weight) || 0;
+    await syncInventoryToSheets();
+    res.json({ success: true, coffee });
+  } else {
+    res.status(404).json({ error: 'Coffee not found' });
+  }
+});
+
+// Update roasted coffee inventory
+app.post('/api/inventory/roasted/update', requireAuth, async (req, res) => {
+  const { id, weight } = req.body;
+  
+  const coffee = roastedCoffeeInventory.find(c => c.id === id);
+  if (coffee) {
+    coffee.weight = parseFloat(weight) || 0;
+    await syncInventoryToSheets();
+    res.json({ success: true, coffee });
+  } else {
+    res.status(404).json({ error: 'Coffee not found' });
+  }
+});
+
+// Update en route tracking number
+app.post('/api/inventory/enroute/tracking', requireAuth, async (req, res) => {
+  const { id, trackingNumber } = req.body;
+  
+  const item = enRouteCoffeeInventory.find(c => c.id === id);
+  if (item) {
+    item.trackingNumber = trackingNumber || '';
+    await syncInventoryToSheets();
+    res.json({ success: true, item });
+  } else {
+    res.status(404).json({ error: 'En route item not found' });
+  }
+});
+
+// Mark en route item as delivered (move to roasted inventory)
+app.post('/api/inventory/enroute/deliver', requireAuth, async (req, res) => {
+  const { id, actualWeight } = req.body;
+  
+  const index = enRouteCoffeeInventory.findIndex(c => c.id === id);
+  if (index === -1) {
+    return res.status(404).json({ error: 'En route item not found' });
+  }
+  
+  const item = enRouteCoffeeInventory[index];
+  const deliveredWeight = parseFloat(actualWeight) || item.weight;
+  
+  // Find or create roasted coffee entry
+  const roasted = roastedCoffeeInventory.find(c => c.name === item.name);
+  if (roasted) {
+    roasted.weight += deliveredWeight;
+  } else {
+    roastedCoffeeInventory.push({
+      id: item.name.toLowerCase().replace(/\s+/g, '-'),
+      name: item.name,
+      weight: deliveredWeight,
+      type: item.type || 'Unknown',
+      recipe: item.recipe || null
+    });
+  }
+  
+  // Remove from en route
+  enRouteCoffeeInventory.splice(index, 1);
+  
+  await syncInventoryToSheets();
+  
+  res.json({ 
+    success: true, 
+    delivered: item.name, 
+    weight: deliveredWeight,
+    message: `${deliveredWeight}lb of ${item.name} added to roasted inventory`
+  });
+});
+
+// UPS tracking lookup (placeholder - integrate with UPS API if needed)
+app.post('/api/tracking/lookup', async (req, res) => {
+  const { trackingNumber } = req.body;
+  
+  if (!trackingNumber) {
+    return res.status(400).json({ error: 'Tracking number required' });
+  }
+  
+  // For now, return a placeholder response
+  // You can integrate with UPS/FedEx API here
+  res.json({
+    trackingNumber,
+    status: 'In Transit',
+    estimatedDelivery: 'Check carrier website for details',
+    message: `Tracking ${trackingNumber} - please check UPS.com for live updates`
+  });
+});
+
+// Legacy /api/process endpoint - redirect to new chat/process
+app.post('/api/process', async (req, res) => {
+  // Forward to the new chat process endpoint
+  const { message } = req.body;
+  
+  await ensureFreshInventory();
+  
+  const sheetContext = await buildSheetContextForChatGPT();
+
+  try {
+    const response = await callChatGPT(
+      INTENT_CLASSIFIER_PROMPT,
+      message,
+      { 
+        jsonMode: true,
+        includeSheetContext: true,
+        sheetContext: sheetContext
+      }
+    );
+    
+    const parsed = JSON.parse(response);
+    res.json({
+      action: parsed.intent,
+      parameters: parsed.parameters,
+      response: parsed.response,
+      confidence: parsed.confidence
+    });
+  } catch (error) {
+    console.error('Process error:', error);
+    res.json({ action: 'chat', response: "I'm having trouble understanding. Could you try rephrasing?" });
+  }
 });
 
 // ============ Customers API ============

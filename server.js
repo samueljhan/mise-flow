@@ -3458,10 +3458,11 @@ app.get('/api/retail/data', async (req, res) => {
     oauth2Client.setCredentials(userTokens);
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
     
-    // Read the Retail Sales sheet
+    // Read the Retail Sales sheet - use valueRenderOption to get calculated values
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Retail Sales!A1:Z100'
+      range: 'Retail Sales!A1:Z100',
+      valueRenderOption: 'UNFORMATTED_VALUE' // Get actual numbers, not formatted strings
     });
     
     const rows = response.data.values || [];
@@ -3469,9 +3470,10 @@ app.get('/api/retail/data', async (req, res) => {
     // Row 2 (index 1) has headers
     const headerRow = rows[1] || [];
     
-    // Find product columns (start at C, end before Total Retail Sales)
+    // Find column indices dynamically
     const products = [];
     let totalColIndex = -1;
+    let productStartColIndex = -1;
     
     for (let i = 0; i < headerRow.length; i++) {
       const header = headerRow[i];
@@ -3479,11 +3481,15 @@ app.get('/api/retail/data', async (req, res) => {
         totalColIndex = i;
         break;
       }
-      if (header && header !== 'Date' && i >= 2) { // Products start at column C (index 2)
+      // First non-empty, non-Date header is the start of products
+      if (header && header !== 'Date' && header !== '') {
+        if (productStartColIndex === -1) {
+          productStartColIndex = i;
+        }
         products.push({
           index: i,
           name: header,
-          column: String.fromCharCode(65 + i) // Convert to letter
+          column: String.fromCharCode(65 + i)
         });
       }
     }
@@ -3492,12 +3498,17 @@ app.get('/api/retail/data', async (req, res) => {
     const weeks = [];
     for (let i = 2; i < rows.length; i++) {
       const row = rows[i];
-      if (!row || !row[1]) continue; // Skip if no date in column B
+      if (!row) continue;
       
-      const dateStr = row[1];
+      // Find the date - it should be in column B (index 1), but check a few positions
+      let dateStr = row[1]; // Column B
+      if (!dateStr && row[0]) dateStr = row[0]; // Fallback to A if B is empty
+      
+      if (!dateStr) continue; // Skip rows without a date
+      
       const weekData = {
         rowIndex: i + 1, // Excel row (1-indexed)
-        dateRange: dateStr,
+        dateRange: String(dateStr),
         sales: {}
       };
       
@@ -3505,18 +3516,22 @@ app.get('/api/retail/data', async (req, res) => {
       let hasAnySales = false;
       products.forEach((product) => {
         const value = row[product.index];
-        const numVal = value ? parseFloat(value) : null;
+        const numVal = (value !== undefined && value !== null && value !== '') ? parseFloat(value) : null;
         weekData.sales[product.name] = numVal;
-        if (numVal !== null && !isNaN(numVal)) hasAnySales = true;
+        if (numVal !== null && !isNaN(numVal) && numVal !== 0) hasAnySales = true;
       });
       
       weekData.hasData = hasAnySales;
       
       // Get totals if available
       if (totalColIndex > -1) {
-        weekData.totalSales = row[totalColIndex] ? parseFloat(row[totalColIndex]) : null;
-        weekData.transactionFee = row[totalColIndex + 1] ? parseFloat(row[totalColIndex + 1]) : null;
-        weekData.netPayout = row[totalColIndex + 2] ? parseFloat(row[totalColIndex + 2]) : null;
+        const totalVal = row[totalColIndex];
+        const feeVal = row[totalColIndex + 1];
+        const netVal = row[totalColIndex + 2];
+        
+        weekData.totalSales = (totalVal !== undefined && totalVal !== null && totalVal !== '') ? parseFloat(totalVal) : 0;
+        weekData.transactionFee = (feeVal !== undefined && feeVal !== null && feeVal !== '') ? parseFloat(feeVal) : 0;
+        weekData.netPayout = (netVal !== undefined && netVal !== null && netVal !== '') ? parseFloat(netVal) : 0;
       }
       
       weeks.push(weekData);
@@ -3560,6 +3575,7 @@ app.get('/api/retail/data', async (req, res) => {
       incompleteWeeks,
       currentWeek: currentWeekRange,
       totalColIndex,
+      productStartColIndex,
       lastDataRow: weeks.length > 0 ? weeks[weeks.length - 1].rowIndex : 2
     });
     
@@ -3590,20 +3606,33 @@ app.post('/api/retail/add-weeks', async (req, res) => {
     const rows = response.data.values || [];
     const headerRow = rows[1] || [];
     
-    // Find total column index
+    // Find column indices dynamically
     let totalColIndex = -1;
+    let productStartColIndex = -1;
+    let productEndColIndex = -1;
+    
     for (let i = 0; i < headerRow.length; i++) {
-      if (headerRow[i] === 'Total Retail Sales') {
+      const header = headerRow[i];
+      if (header === 'Total Retail Sales') {
         totalColIndex = i;
+        productEndColIndex = i - 1;
         break;
+      }
+      // First non-empty, non-Date header is the start of products
+      if (header && header !== 'Date' && header !== '' && productStartColIndex === -1) {
+        productStartColIndex = i;
       }
     }
     
-    // Find product range (C to column before Total)
-    const productStartCol = 2; // Column C
-    const productEndCol = totalColIndex - 1;
+    if (totalColIndex === -1 || productStartColIndex === -1) {
+      return res.status(400).json({ error: 'Could not find sheet structure' });
+    }
+    
+    const startCol = String.fromCharCode(65 + productStartColIndex);
+    const endCol = String.fromCharCode(65 + productEndColIndex);
     const totalCol = String.fromCharCode(65 + totalColIndex);
     const feeCol = String.fromCharCode(65 + totalColIndex + 1);
+    const netCol = String.fromCharCode(65 + totalColIndex + 2);
     
     // Find last data row
     let lastDataRow = 2;
@@ -3616,19 +3645,27 @@ app.post('/api/retail/add-weeks', async (req, res) => {
     // Build rows to append
     const newRows = weeks.map((weekRange, idx) => {
       const rowNum = lastDataRow + idx + 1;
-      const row = ['', weekRange]; // Column A empty, Column B = date
+      const row = [];
       
-      // Empty cells for each product
-      for (let i = productStartCol; i <= productEndCol; i++) {
-        row.push('');
+      // Fill columns up to and including net payout
+      for (let i = 0; i <= totalColIndex + 2; i++) {
+        if (i === 1) {
+          // Column B = date
+          row.push(weekRange);
+        } else if (i === totalColIndex) {
+          // Total Retail Sales formula
+          row.push(`=SUM(${startCol}${rowNum}:${endCol}${rowNum})`);
+        } else if (i === totalColIndex + 1) {
+          // Transaction Fee formula
+          row.push(`=${totalCol}${rowNum}*0.03`);
+        } else if (i === totalColIndex + 2) {
+          // Net Payout formula
+          row.push(`=${totalCol}${rowNum}-${feeCol}${rowNum}`);
+        } else {
+          // Empty cell
+          row.push('');
+        }
       }
-      
-      // Formulas for totals
-      const startCol = String.fromCharCode(65 + productStartCol);
-      const endCol = String.fromCharCode(65 + productEndCol);
-      row.push(`=SUM(${startCol}${rowNum}:${endCol}${rowNum})`); // Total Retail Sales
-      row.push(`=${totalCol}${rowNum}*0.03`); // Transaction Fee
-      row.push(`=${totalCol}${rowNum}-${feeCol}${rowNum}`); // Net Payout
       
       return row;
     });
@@ -3675,7 +3712,24 @@ app.post('/api/retail/sales', async (req, res) => {
     
     const headerRow = headerResponse.data.values?.[0] || [];
     
-    // Build updates
+    // Find Total Retail Sales column and product range
+    let totalColIndex = -1;
+    let productStartColIndex = -1;
+    let productEndColIndex = -1;
+    
+    for (let i = 0; i < headerRow.length; i++) {
+      const header = headerRow[i];
+      if (header === 'Total Retail Sales') {
+        totalColIndex = i;
+        productEndColIndex = i - 1;
+        break;
+      }
+      if (header && header !== 'Date' && header !== '' && productStartColIndex === -1) {
+        productStartColIndex = i;
+      }
+    }
+    
+    // Build updates for sales values
     const updates = [];
     for (const [productName, value] of Object.entries(sales)) {
       const colIndex = headerRow.findIndex(h => h === productName);
@@ -3686,6 +3740,29 @@ app.post('/api/retail/sales', async (req, res) => {
           values: [[value !== null && value !== '' ? parseFloat(value) : '']]
         });
       }
+    }
+    
+    // Also ensure formulas are set for Total, Fee, and Net Payout
+    if (totalColIndex > -1 && productStartColIndex > -1) {
+      const startCol = String.fromCharCode(65 + productStartColIndex);
+      const endCol = String.fromCharCode(65 + productEndColIndex);
+      const totalCol = String.fromCharCode(65 + totalColIndex);
+      const feeCol = String.fromCharCode(65 + totalColIndex + 1);
+      const netCol = String.fromCharCode(65 + totalColIndex + 2);
+      
+      // Add formula updates
+      updates.push({
+        range: `Retail Sales!${totalCol}${rowIndex}`,
+        values: [[`=SUM(${startCol}${rowIndex}:${endCol}${rowIndex})`]]
+      });
+      updates.push({
+        range: `Retail Sales!${feeCol}${rowIndex}`,
+        values: [[`=${totalCol}${rowIndex}*0.03`]]
+      });
+      updates.push({
+        range: `Retail Sales!${netCol}${rowIndex}`,
+        values: [[`=${totalCol}${rowIndex}-${feeCol}${rowIndex}`]]
+      });
     }
     
     if (updates.length > 0) {
@@ -3977,6 +4054,104 @@ app.post('/api/retail/products/rename', async (req, res) => {
   } catch (error) {
     console.error('Rename product error:', error);
     res.status(500).json({ error: 'Failed to rename product: ' + error.message });
+  }
+});
+
+// Fix/repair formulas for all retail rows
+app.post('/api/retail/fix-formulas', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Get current sheet structure
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Retail Sales!A1:Z100'
+    });
+    
+    const rows = response.data.values || [];
+    const headerRow = rows[1] || [];
+    
+    // Find column indices
+    let totalColIndex = -1;
+    let productStartColIndex = -1;
+    let productEndColIndex = -1;
+    
+    for (let i = 0; i < headerRow.length; i++) {
+      const header = headerRow[i];
+      if (header === 'Total Retail Sales') {
+        totalColIndex = i;
+        productEndColIndex = i - 1;
+        break;
+      }
+      if (header && header !== 'Date' && header !== '' && productStartColIndex === -1) {
+        productStartColIndex = i;
+      }
+    }
+    
+    if (totalColIndex === -1 || productStartColIndex === -1) {
+      return res.status(400).json({ error: 'Could not find sheet structure' });
+    }
+    
+    const startCol = String.fromCharCode(65 + productStartColIndex);
+    const endCol = String.fromCharCode(65 + productEndColIndex);
+    const totalCol = String.fromCharCode(65 + totalColIndex);
+    const feeCol = String.fromCharCode(65 + totalColIndex + 1);
+    const netCol = String.fromCharCode(65 + totalColIndex + 2);
+    
+    // Build formula updates for all data rows
+    const updates = [];
+    let rowsFixed = 0;
+    
+    for (let i = 2; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row) continue;
+      
+      // Check if row has a date (meaning it's a data row)
+      const hasDate = row[1] || row[0];
+      if (!hasDate) continue;
+      
+      const rowNum = i + 1; // 1-indexed
+      
+      updates.push({
+        range: `Retail Sales!${totalCol}${rowNum}`,
+        values: [[`=SUM(${startCol}${rowNum}:${endCol}${rowNum})`]]
+      });
+      updates.push({
+        range: `Retail Sales!${feeCol}${rowNum}`,
+        values: [[`=${totalCol}${rowNum}*0.03`]]
+      });
+      updates.push({
+        range: `Retail Sales!${netCol}${rowNum}`,
+        values: [[`=${totalCol}${rowNum}-${feeCol}${rowNum}`]]
+      });
+      
+      rowsFixed++;
+    }
+    
+    if (updates.length > 0) {
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: updates
+        }
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: `Fixed formulas for ${rowsFixed} row(s)`,
+      rowsFixed
+    });
+    
+  } catch (error) {
+    console.error('Fix formulas error:', error);
+    res.status(500).json({ error: 'Failed to fix formulas: ' + error.message });
   }
 });
 

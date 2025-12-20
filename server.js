@@ -3403,6 +3403,583 @@ app.post('/api/ups/track', async (req, res) => {
   });
 });
 
+// ============ Retail Sales Management API ============
+
+// Helper to get week date range string (MM/DD-MM/DD format) for a given date
+function getWeekRangeString(date) {
+  const d = new Date(date);
+  const day = d.getDay();
+  const start = new Date(d);
+  start.setDate(d.getDate() - day); // Sunday
+  const end = new Date(start);
+  end.setDate(start.getDate() + 6); // Saturday
+  
+  const formatDate = (dt) => {
+    return `${(dt.getMonth() + 1).toString().padStart(2, '0')}/${dt.getDate().toString().padStart(2, '0')}`;
+  };
+  
+  return `${formatDate(start)}-${formatDate(end)}`;
+}
+
+// Helper to parse week range string back to end date
+function parseWeekRangeEndDate(weekStr) {
+  // Format: "11/28-12/04" or "12/05-12/11"
+  const parts = weekStr.split('-');
+  if (parts.length !== 2) return null;
+  
+  const currentYear = new Date().getFullYear();
+  const endParts = parts[1].split('/');
+  
+  if (endParts.length !== 2) return null;
+  
+  const endMonth = parseInt(endParts[0]) - 1;
+  const endDay = parseInt(endParts[1]);
+  
+  // Determine year based on context
+  const startParts = parts[0].split('/');
+  const startMonth = parseInt(startParts[0]) - 1;
+  
+  let endYear = currentYear;
+  // Handle year rollover (e.g., 12/28-01/03)
+  if (endMonth < startMonth) {
+    endYear = currentYear + 1;
+  }
+  
+  return new Date(endYear, endMonth, endDay);
+}
+
+// Get retail data (products and weeks)
+app.get('/api/retail/data', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Read the Retail Sales sheet
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Retail Sales!A1:Z100'
+    });
+    
+    const rows = response.data.values || [];
+    
+    // Row 2 (index 1) has headers
+    const headerRow = rows[1] || [];
+    
+    // Find product columns (start at C, end before Total Retail Sales)
+    const products = [];
+    let totalColIndex = -1;
+    
+    for (let i = 0; i < headerRow.length; i++) {
+      const header = headerRow[i];
+      if (header === 'Total Retail Sales') {
+        totalColIndex = i;
+        break;
+      }
+      if (header && header !== 'Date' && i >= 2) { // Products start at column C (index 2)
+        products.push({
+          index: i,
+          name: header,
+          column: String.fromCharCode(65 + i) // Convert to letter
+        });
+      }
+    }
+    
+    // Get existing weeks (rows 3+, index 2+)
+    const weeks = [];
+    for (let i = 2; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || !row[1]) continue; // Skip if no date in column B
+      
+      const dateStr = row[1];
+      const weekData = {
+        rowIndex: i + 1, // Excel row (1-indexed)
+        dateRange: dateStr,
+        sales: {}
+      };
+      
+      // Get sales for each product
+      let hasAnySales = false;
+      products.forEach((product) => {
+        const value = row[product.index];
+        const numVal = value ? parseFloat(value) : null;
+        weekData.sales[product.name] = numVal;
+        if (numVal !== null && !isNaN(numVal)) hasAnySales = true;
+      });
+      
+      weekData.hasData = hasAnySales;
+      
+      // Get totals if available
+      if (totalColIndex > -1) {
+        weekData.totalSales = row[totalColIndex] ? parseFloat(row[totalColIndex]) : null;
+        weekData.transactionFee = row[totalColIndex + 1] ? parseFloat(row[totalColIndex + 1]) : null;
+        weekData.netPayout = row[totalColIndex + 2] ? parseFloat(row[totalColIndex + 2]) : null;
+      }
+      
+      weeks.push(weekData);
+    }
+    
+    // Calculate weeks that need to be added up to current date
+    const today = new Date();
+    const currentWeekRange = getWeekRangeString(today);
+    
+    // Find the last week end date in the sheet
+    let lastWeekEndDate = null;
+    if (weeks.length > 0) {
+      const lastWeek = weeks[weeks.length - 1];
+      lastWeekEndDate = parseWeekRangeEndDate(lastWeek.dateRange);
+    }
+    
+    // Generate missing weeks
+    const missingWeeks = [];
+    if (lastWeekEndDate) {
+      let nextWeekStart = new Date(lastWeekEndDate);
+      nextWeekStart.setDate(nextWeekStart.getDate() + 1);
+      
+      // Add weeks until we reach the current week
+      while (nextWeekStart <= today) {
+        const weekRange = getWeekRangeString(nextWeekStart);
+        // Don't add if it's already in the list
+        if (!weeks.find(w => w.dateRange === weekRange) && !missingWeeks.includes(weekRange)) {
+          missingWeeks.push(weekRange);
+        }
+        nextWeekStart.setDate(nextWeekStart.getDate() + 7);
+      }
+    }
+    
+    // Find weeks without sales data (incomplete)
+    const incompleteWeeks = weeks.filter(w => !w.hasData);
+    
+    res.json({
+      products,
+      weeks,
+      missingWeeks,
+      incompleteWeeks,
+      currentWeek: currentWeekRange,
+      totalColIndex,
+      lastDataRow: weeks.length > 0 ? weeks[weeks.length - 1].rowIndex : 2
+    });
+    
+  } catch (error) {
+    console.error('Retail data fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch retail data: ' + error.message });
+  }
+});
+
+// Add missing weeks to the sheet
+app.post('/api/retail/add-weeks', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { weeks } = req.body; // Array of week range strings to add
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Get current sheet structure
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Retail Sales!A1:Z100'
+    });
+    
+    const rows = response.data.values || [];
+    const headerRow = rows[1] || [];
+    
+    // Find total column index
+    let totalColIndex = -1;
+    for (let i = 0; i < headerRow.length; i++) {
+      if (headerRow[i] === 'Total Retail Sales') {
+        totalColIndex = i;
+        break;
+      }
+    }
+    
+    // Find product range (C to column before Total)
+    const productStartCol = 2; // Column C
+    const productEndCol = totalColIndex - 1;
+    const totalCol = String.fromCharCode(65 + totalColIndex);
+    const feeCol = String.fromCharCode(65 + totalColIndex + 1);
+    
+    // Find last data row
+    let lastDataRow = 2;
+    for (let i = 2; i < rows.length; i++) {
+      if (rows[i] && rows[i][1]) {
+        lastDataRow = i + 1;
+      }
+    }
+    
+    // Build rows to append
+    const newRows = weeks.map((weekRange, idx) => {
+      const rowNum = lastDataRow + idx + 1;
+      const row = ['', weekRange]; // Column A empty, Column B = date
+      
+      // Empty cells for each product
+      for (let i = productStartCol; i <= productEndCol; i++) {
+        row.push('');
+      }
+      
+      // Formulas for totals
+      const startCol = String.fromCharCode(65 + productStartCol);
+      const endCol = String.fromCharCode(65 + productEndCol);
+      row.push(`=SUM(${startCol}${rowNum}:${endCol}${rowNum})`); // Total Retail Sales
+      row.push(`=${totalCol}${rowNum}*0.03`); // Transaction Fee
+      row.push(`=${totalCol}${rowNum}-${feeCol}${rowNum}`); // Net Payout
+      
+      return row;
+    });
+    
+    // Append the new rows
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Retail Sales!A${lastDataRow + 1}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: newRows
+      }
+    });
+    
+    res.json({ 
+      success: true, 
+      message: `Added ${weeks.length} week(s) to Retail Sales sheet`,
+      weeksAdded: weeks
+    });
+    
+  } catch (error) {
+    console.error('Add weeks error:', error);
+    res.status(500).json({ error: 'Failed to add weeks: ' + error.message });
+  }
+});
+
+// Update sales for a specific week
+app.post('/api/retail/sales', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { rowIndex, sales } = req.body; // rowIndex is 1-indexed, sales is {productName: value}
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Get current header row to find column mappings
+    const headerResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Retail Sales!A2:Z2'
+    });
+    
+    const headerRow = headerResponse.data.values?.[0] || [];
+    
+    // Build updates
+    const updates = [];
+    for (const [productName, value] of Object.entries(sales)) {
+      const colIndex = headerRow.findIndex(h => h === productName);
+      if (colIndex > -1) {
+        const col = String.fromCharCode(65 + colIndex);
+        updates.push({
+          range: `Retail Sales!${col}${rowIndex}`,
+          values: [[value !== null && value !== '' ? parseFloat(value) : '']]
+        });
+      }
+    }
+    
+    if (updates.length > 0) {
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: updates
+        }
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Sales data updated',
+      updatedCells: updates.length
+    });
+    
+  } catch (error) {
+    console.error('Update sales error:', error);
+    res.status(500).json({ error: 'Failed to update sales: ' + error.message });
+  }
+});
+
+// Add a new retail product
+app.post('/api/retail/products/add', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { productName } = req.body;
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Get current structure
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Retail Sales!A1:Z100'
+    });
+    
+    const rows = response.data.values || [];
+    const headerRow = rows[1] || [];
+    
+    // Find Total Retail Sales column
+    let totalColIndex = -1;
+    for (let i = 0; i < headerRow.length; i++) {
+      if (headerRow[i] === 'Total Retail Sales') {
+        totalColIndex = i;
+        break;
+      }
+    }
+    
+    if (totalColIndex === -1) {
+      return res.status(400).json({ error: 'Could not find Total Retail Sales column' });
+    }
+    
+    // Get spreadsheet to find sheet ID
+    const spreadsheet = await sheets.spreadsheets.get({
+      spreadsheetId: SPREADSHEET_ID
+    });
+    
+    const retailSheet = spreadsheet.data.sheets.find(s => s.properties.title === 'Retail Sales');
+    if (!retailSheet) {
+      return res.status(400).json({ error: 'Retail Sales sheet not found' });
+    }
+    
+    const sheetId = retailSheet.properties.sheetId;
+    
+    // Insert column at totalColIndex (before Total Retail Sales)
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: {
+        requests: [{
+          insertDimension: {
+            range: {
+              sheetId: sheetId,
+              dimension: 'COLUMNS',
+              startIndex: totalColIndex,
+              endIndex: totalColIndex + 1
+            },
+            inheritFromBefore: true
+          }
+        }]
+      }
+    });
+    
+    // Update the new column header
+    const newCol = String.fromCharCode(65 + totalColIndex);
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Retail Sales!${newCol}2`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[productName]]
+      }
+    });
+    
+    // Update Total formulas to include new column
+    const newTotalCol = String.fromCharCode(65 + totalColIndex + 1);
+    const startCol = 'C';
+    const endCol = newCol;
+    
+    const formulaUpdates = [];
+    for (let i = 3; i <= rows.length + 5; i++) { // Add some buffer
+      if (rows[i - 1] && rows[i - 1][1]) { // Has date
+        formulaUpdates.push({
+          range: `Retail Sales!${newTotalCol}${i}`,
+          values: [[`=SUM(${startCol}${i}:${endCol}${i})`]]
+        });
+      }
+    }
+    
+    if (formulaUpdates.length > 0) {
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: formulaUpdates
+        }
+      });
+    }
+    
+    res.json({ 
+      success: true, 
+      message: `Added product "${productName}"`,
+      column: newCol
+    });
+    
+  } catch (error) {
+    console.error('Add product error:', error);
+    res.status(500).json({ error: 'Failed to add product: ' + error.message });
+  }
+});
+
+// Remove a retail product
+app.post('/api/retail/products/remove', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { productName } = req.body;
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Get current header
+    const headerResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Retail Sales!A2:Z2'
+    });
+    
+    const headerRow = headerResponse.data.values?.[0] || [];
+    
+    // Find the column
+    const colIndex = headerRow.findIndex(h => h === productName);
+    if (colIndex === -1) {
+      return res.status(400).json({ error: `Product "${productName}" not found` });
+    }
+    
+    // Get sheet ID
+    const spreadsheet = await sheets.spreadsheets.get({
+      spreadsheetId: SPREADSHEET_ID
+    });
+    
+    const retailSheet = spreadsheet.data.sheets.find(s => s.properties.title === 'Retail Sales');
+    if (!retailSheet) {
+      return res.status(400).json({ error: 'Retail Sales sheet not found' });
+    }
+    
+    const sheetId = retailSheet.properties.sheetId;
+    
+    // Delete the column
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: {
+        requests: [{
+          deleteDimension: {
+            range: {
+              sheetId: sheetId,
+              dimension: 'COLUMNS',
+              startIndex: colIndex,
+              endIndex: colIndex + 1
+            }
+          }
+        }]
+      }
+    });
+    
+    // Update Total formulas after deletion
+    const dataResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Retail Sales!A1:Z100'
+    });
+    
+    const rows = dataResponse.data.values || [];
+    const newHeaderRow = rows[1] || [];
+    
+    // Find new total column index
+    let newTotalColIndex = -1;
+    for (let i = 0; i < newHeaderRow.length; i++) {
+      if (newHeaderRow[i] === 'Total Retail Sales') {
+        newTotalColIndex = i;
+        break;
+      }
+    }
+    
+    if (newTotalColIndex > -1) {
+      const totalCol = String.fromCharCode(65 + newTotalColIndex);
+      const startCol = 'C';
+      const endCol = String.fromCharCode(65 + newTotalColIndex - 1);
+      
+      const formulaUpdates = [];
+      for (let i = 3; i <= rows.length; i++) {
+        if (rows[i - 1] && rows[i - 1][1]) {
+          formulaUpdates.push({
+            range: `Retail Sales!${totalCol}${i}`,
+            values: [[`=SUM(${startCol}${i}:${endCol}${i})`]]
+          });
+        }
+      }
+      
+      if (formulaUpdates.length > 0) {
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: SPREADSHEET_ID,
+          requestBody: {
+            valueInputOption: 'USER_ENTERED',
+            data: formulaUpdates
+          }
+        });
+      }
+    }
+    
+    res.json({ 
+      success: true, 
+      message: `Removed product "${productName}"`
+    });
+    
+  } catch (error) {
+    console.error('Remove product error:', error);
+    res.status(500).json({ error: 'Failed to remove product: ' + error.message });
+  }
+});
+
+// Rename a retail product
+app.post('/api/retail/products/rename', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { oldName, newName } = req.body;
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Get header row
+    const headerResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Retail Sales!A2:Z2'
+    });
+    
+    const headerRow = headerResponse.data.values?.[0] || [];
+    
+    // Find column
+    const colIndex = headerRow.findIndex(h => h === oldName);
+    if (colIndex === -1) {
+      return res.status(400).json({ error: `Product "${oldName}" not found` });
+    }
+    
+    const col = String.fromCharCode(65 + colIndex);
+    
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Retail Sales!${col}2`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[newName]]
+      }
+    });
+    
+    res.json({ 
+      success: true, 
+      message: `Renamed "${oldName}" to "${newName}"`
+    });
+    
+  } catch (error) {
+    console.error('Rename product error:', error);
+    res.status(500).json({ error: 'Failed to rename product: ' + error.message });
+  }
+});
+
 // ============ Conversational Chat API ============
 
 // Generate conversational response using ChatGPT (with sheet context)

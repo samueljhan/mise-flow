@@ -3598,9 +3598,372 @@
             addMessage(html, false);
         }
         
-        function manageRetailPlaceholder() {
-            addMessage('Manage Retail feature coming soon! This will allow you to update retail coffee bag sales.', false);
+        // ============ Retail Sales Management ============
+        
+        let retailProducts = [];
+        let retailWeeks = [];
+        let retailMissingWeeks = [];
+        let retailIncompleteWeeks = [];
+        
+        async function manageRetail() {
+            addMessage('Loading retail sales data...', false);
+            
+            try {
+                const response = await fetch('/api/retail/data');
+                const data = await response.json();
+                
+                if (response.status === 401) {
+                    const messages = chatContainer.querySelectorAll('.message');
+                    const lastMsg = messages[messages.length - 1];
+                    if (lastMsg) {
+                        const content = lastMsg.querySelector('.message-content') || lastMsg;
+                        content.innerHTML = `<div style="color: #dc3545;">⚠️ Google account not connected.</div>
+                            <button class="action-btn" style="margin-top: 12px;" onclick="connectGoogle()">Connect Google Account</button>`;
+                    }
+                    return;
+                }
+                
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                
+                retailProducts = data.products || [];
+                retailWeeks = data.weeks || [];
+                retailMissingWeeks = data.missingWeeks || [];
+                retailIncompleteWeeks = data.incompleteWeeks || [];
+                
+                // Show retail management UI
+                showRetailManagementUI(data);
+                
+            } catch (error) {
+                console.error('Error loading retail data:', error);
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML = `<div style="color: #dc3545;">Error loading retail data: ${error.message}</div>`;
+                }
+            }
+        }
+        
+        function showRetailManagementUI(data) {
+            let html = '<strong>Retail Sales Management</strong><br><br>';
+            
+            // Current products
+            html += '<div style="margin-bottom: 16px;">';
+            html += '<strong>Products:</strong> ';
+            if (retailProducts.length > 0) {
+                html += retailProducts.map(p => p.name).join(', ');
+            } else {
+                html += 'No products found';
+            }
+            html += '</div>';
+            
+            // Missing weeks alert
+            if (retailMissingWeeks.length > 0) {
+                html += `<div style="background: #3a3a20; padding: 10px; border-radius: 8px; margin-bottom: 12px;">`;
+                html += `<strong>📅 ${retailMissingWeeks.length} new week(s) to add:</strong><br>`;
+                html += retailMissingWeeks.join(', ');
+                html += `<br><button class="action-btn" style="margin-top: 8px;" onclick="addMissingRetailWeeks()">Add Missing Weeks</button>`;
+                html += `</div>`;
+            }
+            
+            // Incomplete weeks
+            if (retailIncompleteWeeks.length > 0) {
+                html += `<div style="background: #3a2020; padding: 10px; border-radius: 8px; margin-bottom: 12px;">`;
+                html += `<strong>⚠️ ${retailIncompleteWeeks.length} week(s) need sales data:</strong><br>`;
+                retailIncompleteWeeks.slice(0, 5).forEach(week => {
+                    html += `<div style="margin: 8px 0;">`;
+                    html += `<span style="font-weight: bold;">${week.dateRange}</span> `;
+                    html += `<button class="action-btn" style="padding: 4px 8px; font-size: 11px;" onclick="enterWeekSales(${week.rowIndex}, '${week.dateRange}')">Enter Sales</button>`;
+                    html += `</div>`;
+                });
+                if (retailIncompleteWeeks.length > 5) {
+                    html += `<div style="color: #888; font-size: 11px;">...and ${retailIncompleteWeeks.length - 5} more</div>`;
+                }
+                html += `</div>`;
+            }
+            
+            // Recent weeks with data
+            const weeksWithData = retailWeeks.filter(w => w.hasData).slice(-3).reverse();
+            if (weeksWithData.length > 0) {
+                html += `<div style="margin-bottom: 12px;">`;
+                html += `<strong>Recent Sales:</strong><br>`;
+                weeksWithData.forEach(week => {
+                    html += `<div style="margin: 4px 0; font-size: 12px;">`;
+                    html += `${week.dateRange}: $${week.totalSales?.toFixed(2) || '0.00'} (net: $${week.netPayout?.toFixed(2) || '0.00'})`;
+                    html += `</div>`;
+                });
+                html += `</div>`;
+            }
+            
+            // Action buttons
+            html += '<div class="response-buttons" style="margin-top: 12px;">';
+            html += '<button class="action-btn" onclick="showRetailProductsManager()">Manage Products</button>';
+            html += '<button class="action-btn" onclick="showAllRetailWeeks()">View All Weeks</button>';
+            html += '<button class="action-btn" onclick="cancelRetailMode()">Done</button>';
+            html += '</div>';
+            
+            const messages = chatContainer.querySelectorAll('.message');
+            const lastMsg = messages[messages.length - 1];
+            if (lastMsg) {
+                const content = lastMsg.querySelector('.message-content') || lastMsg;
+                content.innerHTML = html;
+            }
+        }
+        
+        async function addMissingRetailWeeks() {
+            if (retailMissingWeeks.length === 0) return;
+            
+            addMessage('Adding missing weeks...', false);
+            
+            try {
+                const response = await fetch('/api/retail/add-weeks', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ weeks: retailMissingWeeks })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // Reload retail data
+                    await manageRetail();
+                } else {
+                    throw new Error(data.error || 'Failed to add weeks');
+                }
+                
+            } catch (error) {
+                console.error('Error adding weeks:', error);
+                addMessage(`Error: ${error.message}`, false);
+            }
+        }
+        
+        function enterWeekSales(rowIndex, dateRange) {
+            let html = `<strong>Enter Sales for ${dateRange}</strong><br><br>`;
+            html += '<div style="margin-bottom: 12px;">';
+            
+            retailProducts.forEach(product => {
+                html += `<div style="margin: 8px 0; display: flex; align-items: center; gap: 8px;">`;
+                html += `<label style="min-width: 150px;">${product.name}:</label>`;
+                html += `<input type="number" step="0.01" min="0" id="retail-${product.index}" 
+                         style="width: 80px; padding: 6px; background: #2a2a2a; border: 1px solid #404040; color: #fff; border-radius: 4px;"
+                         placeholder="0.00">`;
+                html += `</div>`;
+            });
+            
+            html += '</div>';
+            html += '<div class="response-buttons">';
+            html += `<button class="action-btn" onclick="saveWeekSales(${rowIndex}, '${dateRange}')">Save</button>`;
+            html += '<button class="action-btn" onclick="manageRetail()">Cancel</button>';
+            html += '</div>';
+            
+            addMessage(html, false);
+        }
+        
+        async function saveWeekSales(rowIndex, dateRange) {
+            const sales = {};
+            
+            retailProducts.forEach(product => {
+                const input = document.getElementById(`retail-${product.index}`);
+                if (input && input.value) {
+                    sales[product.name] = parseFloat(input.value);
+                }
+            });
+            
+            if (Object.keys(sales).length === 0) {
+                addMessage('Please enter at least one sales value.', false);
+                return;
+            }
+            
+            addMessage('Saving sales data...', false);
+            
+            try {
+                const response = await fetch('/api/retail/sales', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rowIndex, sales })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addMessage(`Sales for ${dateRange} saved successfully!`, false);
+                    setTimeout(() => manageRetail(), 1000);
+                } else {
+                    throw new Error(data.error || 'Failed to save sales');
+                }
+                
+            } catch (error) {
+                console.error('Error saving sales:', error);
+                addMessage(`Error: ${error.message}`, false);
+            }
+        }
+        
+        function showAllRetailWeeks() {
+            let html = '<strong>All Retail Sales Weeks</strong><br><br>';
+            
+            if (retailWeeks.length === 0) {
+                html += 'No weeks found.';
+            } else {
+                html += '<div style="max-height: 300px; overflow-y: auto;">';
+                retailWeeks.slice().reverse().forEach(week => {
+                    const status = week.hasData ? '✓' : '○';
+                    const statusColor = week.hasData ? '#28a745' : '#888';
+                    html += `<div style="margin: 6px 0; display: flex; align-items: center; gap: 8px;">`;
+                    html += `<span style="color: ${statusColor};">${status}</span>`;
+                    html += `<span style="min-width: 100px;">${week.dateRange}</span>`;
+                    if (week.hasData) {
+                        html += `<span style="color: #888;">$${week.totalSales?.toFixed(2) || '0.00'}</span>`;
+                    }
+                    html += `<button class="action-btn" style="padding: 2px 6px; font-size: 10px;" 
+                             onclick="enterWeekSales(${week.rowIndex}, '${week.dateRange}')">${week.hasData ? 'Edit' : 'Enter'}</button>`;
+                    html += `</div>`;
+                });
+                html += '</div>';
+            }
+            
+            html += '<div class="response-buttons" style="margin-top: 12px;">';
+            html += '<button class="action-btn" onclick="manageRetail()">Back</button>';
+            html += '</div>';
+            
+            addMessage(html, false);
+        }
+        
+        function showRetailProductsManager() {
+            let html = '<strong>Manage Retail Products</strong><br><br>';
+            
+            html += '<div style="margin-bottom: 16px;">';
+            html += '<strong>Current Products:</strong><br>';
+            
+            if (retailProducts.length === 0) {
+                html += '<div style="color: #888;">No products configured</div>';
+            } else {
+                retailProducts.forEach(product => {
+                    html += `<div style="margin: 6px 0; display: flex; align-items: center; gap: 8px;">`;
+                    html += `<span style="min-width: 150px;">${product.name}</span>`;
+                    html += `<button class="action-btn" style="padding: 2px 6px; font-size: 10px;" 
+                             onclick="renameRetailProduct('${product.name}')">Rename</button>`;
+                    html += `<button class="action-btn" style="padding: 2px 6px; font-size: 10px; background: #4a3030;" 
+                             onclick="removeRetailProduct('${product.name}')">Remove</button>`;
+                    html += `</div>`;
+                });
+            }
+            html += '</div>';
+            
+            // Add new product
+            html += '<div style="margin-bottom: 12px;">';
+            html += '<strong>Add New Product:</strong><br>';
+            html += `<div style="display: flex; gap: 8px; margin-top: 8px;">`;
+            html += `<input type="text" id="new-retail-product" placeholder="Product name (e.g., Colombia (S))"
+                     style="flex: 1; padding: 8px; background: #2a2a2a; border: 1px solid #404040; color: #fff; border-radius: 4px;">`;
+            html += `<button class="action-btn" onclick="addRetailProduct()">Add</button>`;
+            html += `</div>`;
+            html += '</div>';
+            
+            html += '<div class="response-buttons" style="margin-top: 12px;">';
+            html += '<button class="action-btn" onclick="manageRetail()">Back</button>';
+            html += '</div>';
+            
+            addMessage(html, false);
+        }
+        
+        async function addRetailProduct() {
+            const input = document.getElementById('new-retail-product');
+            const productName = input?.value?.trim();
+            
+            if (!productName) {
+                alert('Please enter a product name');
+                return;
+            }
+            
+            addMessage(`Adding product "${productName}"...`, false);
+            
+            try {
+                const response = await fetch('/api/retail/products/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ productName })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addMessage(`Product "${productName}" added!`, false);
+                    setTimeout(() => manageRetail(), 1000);
+                } else {
+                    throw new Error(data.error || 'Failed to add product');
+                }
+                
+            } catch (error) {
+                console.error('Error adding product:', error);
+                addMessage(`Error: ${error.message}`, false);
+            }
+        }
+        
+        async function removeRetailProduct(productName) {
+            if (!confirm(`Remove "${productName}"? This will delete all sales data for this product.`)) {
+                return;
+            }
+            
+            addMessage(`Removing product "${productName}"...`, false);
+            
+            try {
+                const response = await fetch('/api/retail/products/remove', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ productName })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addMessage(`Product "${productName}" removed.`, false);
+                    setTimeout(() => manageRetail(), 1000);
+                } else {
+                    throw new Error(data.error || 'Failed to remove product');
+                }
+                
+            } catch (error) {
+                console.error('Error removing product:', error);
+                addMessage(`Error: ${error.message}`, false);
+            }
+        }
+        
+        function renameRetailProduct(oldName) {
+            const newName = prompt(`Rename "${oldName}" to:`, oldName);
+            if (!newName || newName === oldName) return;
+            
+            addMessage(`Renaming "${oldName}" to "${newName}"...`, false);
+            
+            fetch('/api/retail/products/rename', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ oldName, newName })
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.success) {
+                    addMessage(`Renamed to "${newName}"!`, false);
+                    setTimeout(() => manageRetail(), 1000);
+                } else {
+                    throw new Error(data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error renaming product:', error);
+                addMessage(`Error: ${error.message}`, false);
+            });
+        }
+        
+        function cancelRetailMode() {
+            addMessage('Retail management closed.', false);
             addFollowUpMessage();
+        }
+        
+        // Alias for backward compatibility
+        function manageRetailPlaceholder() {
+            manageRetail();
         }
 
         function useQuickAction(prompt) {

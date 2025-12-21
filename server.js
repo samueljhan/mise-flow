@@ -3346,54 +3346,48 @@ app.post('/api/inventory/enroute/add', async (req, res) => {
 // Update tracking number and fetch estimated delivery
 app.post('/api/inventory/enroute/tracking', async (req, res) => {
   await ensureFreshInventory();
-  const { id, trackingNumber } = req.body;
+  const { id, trackingNumber, manualDeliveryDate } = req.body;
   const item = enRouteCoffeeInventory.find(c => c.id === id);
   if (!item) {
     return res.status(404).json({ error: 'En route item not found' });
   }
   item.trackingNumber = trackingNumber;
   
-  // Fetch estimated delivery date from UPS
+  const trackingUrl = `https://www.ups.com/track?tracknum=${trackingNumber}`;
   let deliveryMessage = '';
-  let trackingInfo = null;
   
-  if (trackingNumber) {
-    trackingInfo = await getUPSEstimatedDelivery(trackingNumber);
-    if (trackingInfo) {
-      if (trackingInfo.hasDeliveryDate && trackingInfo.estimatedDelivery) {
-        item.estimatedDelivery = trackingInfo.estimatedDelivery;
-        deliveryMessage = `Estimated delivery: ${trackingInfo.estimatedDelivery}`;
-        if (trackingInfo.status) {
-          deliveryMessage += ` (${trackingInfo.status})`;
-        }
-      } else if (trackingInfo.estimatedDelivery && trackingInfo.isEstimate) {
-        item.estimatedDelivery = trackingInfo.estimatedDelivery;
-        deliveryMessage = `No delivery date available yet. Based on typical UPS Ground shipping, estimated around ${trackingInfo.estimatedDelivery}`;
-      } else if (trackingInfo.status === 'Label Created') {
-        deliveryMessage = 'Label created - package not yet picked up by UPS. Delivery date will be available once shipped.';
-      } else if (trackingInfo.status) {
-        deliveryMessage = `Status: ${trackingInfo.status}. Delivery date not yet available.`;
-      } else {
-        deliveryMessage = 'Tracking saved. Check UPS for delivery updates.';
+  // If user provided a manual delivery date, use it
+  if (manualDeliveryDate) {
+    item.estimatedDelivery = manualDeliveryDate;
+    deliveryMessage = `📦 Estimated delivery: ${manualDeliveryDate}`;
+  } else if (trackingNumber) {
+    // Try to look up from UPS using Gemini with grounding
+    const trackingInfo = await getUPSEstimatedDelivery(trackingNumber);
+    if (trackingInfo && trackingInfo.hasDeliveryDate && trackingInfo.estimatedDelivery) {
+      item.estimatedDelivery = trackingInfo.estimatedDelivery;
+      deliveryMessage = `📦 Estimated delivery: ${trackingInfo.estimatedDelivery}`;
+      if (trackingInfo.status) {
+        deliveryMessage += ` (${trackingInfo.status})`;
       }
-      
-      if (trackingInfo.lastUpdate) {
-        deliveryMessage += `\nLast update: ${trackingInfo.lastUpdate}`;
-      }
-      
-      console.log(`📦 Tracking ${trackingNumber}: ${deliveryMessage}`);
+    } else if (trackingInfo && trackingInfo.status) {
+      deliveryMessage = `Status: ${trackingInfo.status}. Check UPS for delivery date.`;
+    } else {
+      deliveryMessage = 'Tracking saved. Check UPS for delivery date.';
     }
   }
   
   await syncInventoryToSheets();
   
-  const trackingUrl = `https://www.ups.com/track?tracknum=${trackingNumber}`;
+  // Build response message
+  let message = `Tracking saved: ${trackingNumber}\n\n`;
+  message += deliveryMessage;
+  message += `\n\nTrack on UPS: ${trackingUrl}`;
   
   res.json({ 
     success: true, 
     item,
-    trackingInfo,
-    message: `Tracking updated for ${item.name}.\n\n${deliveryMessage}\n\nTrack on UPS: ${trackingUrl}`
+    trackingUrl,
+    message
   });
 });
 
@@ -3445,24 +3439,7 @@ function formatDateMMDDYY(date) {
   return `${month}/${day}/${year}`;
 }
 
-// Calculate estimated delivery (business days from today)
-function calculateBusinessDaysDelivery(businessDays = 6) {
-  const today = new Date();
-  let deliveryDate = new Date(today);
-  let daysAdded = 0;
-  
-  while (daysAdded < businessDays) {
-    deliveryDate.setDate(deliveryDate.getDate() + 1);
-    const dayOfWeek = deliveryDate.getDay();
-    if (dayOfWeek !== 0 && dayOfWeek !== 6) { // Skip weekends
-      daysAdded++;
-    }
-  }
-  
-  return formatDateMMDDYY(deliveryDate);
-}
-
-// Look up UPS tracking info and get estimated delivery date
+// Look up UPS tracking info with Google Search grounding
 async function getUPSEstimatedDelivery(trackingNumber) {
   if (!trackingNumber) return null;
   
@@ -3483,20 +3460,25 @@ async function getUPSEstimatedDelivery(trackingNumber) {
   const trackingUrl = `https://www.ups.com/track?tracknum=${trackingNumber}`;
   
   try {
-    // Use Gemini to search for real UPS tracking info
-    const prompt = `Search for UPS tracking number ${trackingNumber} to find the current delivery status and estimated delivery date.
+    // Use Gemini with Google Search grounding to get real tracking info
+    const model = genAI.getGenerativeModel({ 
+      model: "gemini-2.0-flash",
+      tools: [{ googleSearch: {} }]
+    });
+    
+    const prompt = `Search for UPS tracking number ${trackingNumber} and find the estimated delivery date.
 
-The tracking page is: ${trackingUrl}
+Look up: ${trackingUrl}
 
-Based on what you find, respond with ONLY a JSON object (no markdown, no code blocks):
+Respond with ONLY a JSON object (no markdown, no code blocks):
 {
-  "estimatedDelivery": "the scheduled delivery date if shown in MM/DD/YY format, or null if not yet available",
-  "status": "current status like 'Label Created', 'Shipped', 'In Transit', 'Out for Delivery', 'Delivered'",
-  "hasDeliveryDate": true if a specific delivery date is shown, false if pending,
-  "lastUpdate": "brief description of latest tracking event"
+  "estimatedDelivery": "the scheduled delivery date in MM/DD/YY format, or null if not available",
+  "status": "current status like 'Label Created', 'In Transit', 'Out for Delivery', 'Delivered'",
+  "hasDeliveryDate": true if a specific date is shown, false otherwise
 }`;
 
-    const response = await callGeminiWithRetry(prompt, { maxRetries: 2 });
+    const result = await model.generateContent(prompt);
+    const response = result.response.text().trim();
     const jsonMatch = response.match(/\{[\s\S]*?\}/);
     
     if (jsonMatch) {
@@ -3505,7 +3487,7 @@ Based on what you find, respond with ONLY a JSON object (no markdown, no code bl
       // Format the date to mm/dd/yy if present
       let estDate = data.estimatedDelivery;
       if (estDate && estDate !== 'null' && estDate !== null && estDate !== 'N/A') {
-        // Try to parse and reformat
+        // Try to parse and reformat various date formats
         if (estDate.includes('/')) {
           const parts = estDate.split('/');
           if (parts.length === 3) {
@@ -3525,7 +3507,6 @@ Based on what you find, respond with ONLY a JSON object (no markdown, no code bl
         status: data.status || 'In Transit',
         validFormat: true,
         hasDeliveryDate: data.hasDeliveryDate === true && estDate !== null,
-        lastUpdate: data.lastUpdate || null,
         trackingUrl
       };
     }
@@ -3533,15 +3514,12 @@ Based on what you find, respond with ONLY a JSON object (no markdown, no code bl
     console.error('UPS lookup error:', error);
   }
   
-  // Fallback: estimate ~6 business days
-  const fallbackDate = calculateBusinessDaysDelivery(6);
-  
+  // Fallback: return null for delivery date
   return {
-    estimatedDelivery: fallbackDate,
-    status: 'In Transit',
+    estimatedDelivery: null,
+    status: 'Check UPS for status',
     validFormat: true,
     hasDeliveryDate: false,
-    isEstimate: true,
     trackingUrl
   };
 }
@@ -4905,13 +4883,27 @@ app.post('/api/roast-order/confirm', async (req, res) => {
   const shortages = [];
   const requiredGreen = {}; // Track total needed per green coffee
   
+  // Helper to calculate batches (same as email generation)
+  const calcBatches = (totalWeight) => {
+    const batches = Math.ceil(totalWeight / 65);
+    if (totalWeight <= 65) {
+      return { batches: 1, batchWeight: Math.round(totalWeight) };
+    }
+    const batchWeight = Math.round(totalWeight / batches);
+    return { batches, batchWeight };
+  };
+  
   orderItems.forEach(item => {
     const roastedCoffee = roastedCoffeeInventory.find(c => c.name === item.name);
     
     if (roastedCoffee && roastedCoffee.recipe) {
+      const totalGreenWeight = Math.round(item.weight / 0.85);
+      
       roastedCoffee.recipe.forEach(comp => {
-        const compRoastedWeight = item.weight * comp.percentage / 100;
-        const greenWeight = Math.round(compRoastedWeight / 0.85);
+        const compGreenWeight = Math.round(totalGreenWeight * comp.percentage / 100);
+        // Use batch calculation to get actual green weight used
+        const { batches, batchWeight } = calcBatches(compGreenWeight);
+        const actualGreenWeight = batches * batchWeight;
         
         const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
         if (greenCoffee) {
@@ -4919,7 +4911,7 @@ app.post('/api/roast-order/confirm', async (req, res) => {
           if (!requiredGreen[greenCoffee.id]) {
             requiredGreen[greenCoffee.id] = { name: greenCoffee.name, required: 0, available: greenCoffee.weight };
           }
-          requiredGreen[greenCoffee.id].required += greenWeight;
+          requiredGreen[greenCoffee.id].required += actualGreenWeight;
         }
       });
     }
@@ -4954,22 +4946,26 @@ app.post('/api/roast-order/confirm', async (req, res) => {
   const deductions = [];
   const enRouteItems = [];
   
-  // Calculate green coffee deductions (roasted weight / 0.85 for weight loss)
+  // Calculate green coffee deductions using actual batch weights
   orderItems.forEach(item => {
     const roastedCoffee = roastedCoffeeInventory.find(c => c.name === item.name);
     
     if (roastedCoffee && roastedCoffee.recipe) {
-      // Calculate green coffee needed for each component
+      const totalGreenWeight = Math.round(item.weight / 0.85);
+      
+      // Calculate green coffee needed for each component using batch logic
       roastedCoffee.recipe.forEach(comp => {
-        const compRoastedWeight = item.weight * comp.percentage / 100;
-        const greenWeight = Math.round(compRoastedWeight / 0.85); // Account for 15% weight loss
+        const compGreenWeight = Math.round(totalGreenWeight * comp.percentage / 100);
+        // Use batch calculation to get actual green weight used
+        const { batches, batchWeight } = calcBatches(compGreenWeight);
+        const actualGreenWeight = batches * batchWeight;
         
         const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
         if (greenCoffee) {
-          greenCoffee.weight -= greenWeight;
+          greenCoffee.weight -= actualGreenWeight;
           deductions.push({
             name: greenCoffee.name,
-            deducted: greenWeight,
+            deducted: actualGreenWeight,
             remaining: greenCoffee.weight
           });
         }

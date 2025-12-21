@@ -2012,10 +2012,6 @@
                     html += `<div style="padding:8px; background:#2a3a2a; border-radius:4px; margin-bottom:8px;">`;
                     html += `<span style="color:#90EE90; font-weight:bold;">📦 Est. Delivery: ${firstItem.estimatedDelivery}</span>`;
                     html += `</div>`;
-                } else if (hasTracking) {
-                    html += `<div style="padding:8px; background:#3a3a2a; border-radius:4px; margin-bottom:8px;">`;
-                    html += `<span style="color:#cca;">⏳ Delivery date pending</span>`;
-                    html += `</div>`;
                 }
                 
                 html += `<div style="display:flex; gap:8px; flex-wrap:wrap;">`;
@@ -2076,9 +2072,51 @@
                 html += `</div>`;
             }
             
-            html += `<a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90; font-weight:bold;">View on UPS.com →</a>`;
+            html += `<a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90; font-weight:bold;">📦 View on UPS.com →</a>`;
+            
+            // Show delivery date input if not set
+            if (!item?.estimatedDelivery) {
+                html += `<div style="margin-top:12px; padding:10px; background:#1a1a1a; border-radius:6px;">`;
+                html += `<span style="color:#ccc; font-size:13px;">Enter delivery date from UPS:</span><br>`;
+                html += `<div style="display:flex; gap:8px; margin-top:6px;">`;
+                html += `<input type="text" id="chatDeliveryDate" placeholder="mm/dd/yy" style="padding:8px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px; width:100px;">`;
+                html += `<button class="action-btn" onclick="saveChatDeliveryDate('${itemId}')" style="padding:8px 12px;">Save</button>`;
+                html += `</div></div>`;
+            }
             
             addMessage(html, false);
+        }
+        
+        // Save delivery date from chat view
+        async function saveChatDeliveryDate(itemId) {
+            const input = document.getElementById('chatDeliveryDate');
+            const deliveryDate = input?.value?.trim();
+            const item = enRouteCoffeeInventory.find(i => i.id === itemId);
+            
+            if (!deliveryDate) {
+                alert('Please enter a delivery date');
+                return;
+            }
+            
+            try {
+                await fetch('/api/inventory/enroute/tracking', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        id: itemId, 
+                        trackingNumber: item?.trackingNumber || '',
+                        manualDeliveryDate: deliveryDate 
+                    })
+                });
+                
+                await loadInventory();
+                addMessage(`📦 Delivery date saved: ${deliveryDate}`, false);
+                addConversationalFollowUp('tracking_updated');
+                
+            } catch (error) {
+                console.error('Error saving delivery date:', error);
+                addMessage('Error saving delivery date.', false);
+            }
         }
         
         // Get orders grouped by date that don't have tracking
@@ -2115,46 +2153,30 @@
                 (item.dateOrdered || 'unknown') === dateKey
             );
             
-            // Show loading
-            addMessage('Looking up tracking information...', false);
-            
             try {
-                let lastResponse = null;
                 for (const item of itemsToUpdate) {
-                    const response = await fetch('/api/inventory/enroute/tracking', {
+                    await fetch('/api/inventory/enroute/tracking', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ id: item.id, trackingNumber })
                     });
-                    lastResponse = await response.json();
                 }
                 
                 await loadInventory();
                 
-                // Show tracking info with delivery date
+                // Show tracking saved and prompt for delivery date
                 const trackingUrl = `https://www.ups.com/track?tracknum=${trackingNumber}`;
                 let html = `<strong>Tracking saved!</strong><br><br>`;
                 html += `Tracking #: ${trackingNumber}<br><br>`;
+                html += `<a href="${trackingUrl}" target="_blank" style="color:#90EE90; font-weight:bold;">📦 Check delivery date on UPS →</a><br><br>`;
+                html += `<div style="margin-top:10px; padding:10px; background:#1a1a1a; border-radius:6px;">`;
+                html += `<span style="color:#ccc;">Enter delivery date from UPS:</span><br>`;
+                html += `<div style="display:flex; gap:8px; margin-top:8px;">`;
+                html += `<input type="text" id="manualDeliveryDate" placeholder="mm/dd/yy" style="padding:8px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px; width:100px;">`;
+                html += `<button class="action-btn" onclick="saveManualDeliveryDate('${dateKey}')" style="padding:8px 12px;">Save</button>`;
+                html += `</div></div>`;
                 
-                // Show delivery date if found
-                const updatedItem = enRouteCoffeeInventory.find(i => i.trackingNumber === trackingNumber);
-                if (updatedItem && updatedItem.estimatedDelivery) {
-                    html += `<div style="padding:10px; background:#2a3a2a; border-radius:6px; margin-bottom:12px;">`;
-                    html += `<span style="color:#90EE90; font-size:16px; font-weight:bold;">📦 Est. Delivery: ${updatedItem.estimatedDelivery}</span>`;
-                    html += `</div>`;
-                }
-                
-                html += `<a href="${trackingUrl}" target="_blank" style="color:#90EE90;">View on UPS.com →</a>`;
-                
-                // Replace the "Looking up..." message
-                const messages = chatContainer.querySelectorAll('.message');
-                const lastMsg = messages[messages.length - 1];
-                if (lastMsg) {
-                    const content = lastMsg.querySelector('.message-content') || lastMsg;
-                    content.innerHTML = html;
-                }
-                
-                addConversationalFollowUp('tracking_updated');
+                addMessage(html, false);
                 
             } catch (error) {
                 console.error('Error saving tracking:', error);
@@ -2445,10 +2467,14 @@
                 html += `<button onclick="updateTracking('${item.id}')" style="background:#41576a; border:none; color:white; padding:8px 12px; border-radius:4px; cursor:pointer;">${item.trackingNumber ? 'Update' : 'Save'}</button>`;
                 html += `</div>`;
                 
-                // Show UPS link if tracking exists
+                // If tracking exists, show UPS link and delivery date input
                 if (item.trackingNumber) {
                     html += `<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:8px;">`;
                     html += `<a href="https://www.ups.com/track?tracknum=${item.trackingNumber}" target="_blank" style="background:#6b5b3b; color:white; padding:8px 12px; border-radius:4px; text-decoration:none; font-size:13px;">📦 Track on UPS</a>`;
+                    
+                    // Delivery date input
+                    html += `<input type="text" placeholder="Delivery date" value="${item.estimatedDelivery || ''}" style="width:100px; padding:8px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px; font-size:13px;" id="delivery-${item.id}">`;
+                    html += `<button onclick="saveDeliveryDate('${item.id}')" style="background:#4a5741; border:none; color:white; padding:8px 10px; border-radius:4px; cursor:pointer; font-size:13px;">Save</button>`;
                     html += `</div>`;
                 }
                 
@@ -2459,6 +2485,37 @@
             });
             
             listDiv.innerHTML = html;
+        }
+        
+        // Save delivery date from modal
+        async function saveDeliveryDate(itemId) {
+            const input = document.getElementById(`delivery-${itemId}`);
+            const deliveryDate = input?.value?.trim();
+            const item = enRouteCoffeeInventory.find(i => i.id === itemId);
+            
+            if (!deliveryDate) {
+                alert('Please enter a delivery date');
+                return;
+            }
+            
+            try {
+                await fetch('/api/inventory/enroute/tracking', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        id: itemId, 
+                        trackingNumber: item?.trackingNumber || '',
+                        manualDeliveryDate: deliveryDate 
+                    })
+                });
+                
+                await loadInventory();
+                renderEnRouteModal();
+                
+            } catch (error) {
+                console.error('Error saving delivery date:', error);
+                alert('Error saving delivery date');
+            }
         }
 
         async function updateTracking(itemId) {
@@ -2473,7 +2530,7 @@
             // Show loading state
             const btn = event.target;
             const originalText = btn.textContent;
-            btn.textContent = 'Looking up...';
+            btn.textContent = 'Saving...';
             btn.disabled = true;
             
             try {

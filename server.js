@@ -3353,34 +3353,20 @@ app.post('/api/inventory/enroute/tracking', async (req, res) => {
   }
   item.trackingNumber = trackingNumber;
   
-  const trackingUrl = `https://www.ups.com/track?tracknum=${trackingNumber}`;
-  let deliveryMessage = '';
-  
   // If user provided a manual delivery date, use it
   if (manualDeliveryDate) {
     item.estimatedDelivery = manualDeliveryDate;
-    deliveryMessage = `📦 Estimated delivery: ${manualDeliveryDate}`;
-  } else if (trackingNumber) {
-    // Try to look up from UPS using Gemini with grounding
-    const trackingInfo = await getUPSEstimatedDelivery(trackingNumber);
-    if (trackingInfo && trackingInfo.hasDeliveryDate && trackingInfo.estimatedDelivery) {
-      item.estimatedDelivery = trackingInfo.estimatedDelivery;
-      deliveryMessage = `📦 Estimated delivery: ${trackingInfo.estimatedDelivery}`;
-      if (trackingInfo.status) {
-        deliveryMessage += ` (${trackingInfo.status})`;
-      }
-    } else if (trackingInfo && trackingInfo.status) {
-      deliveryMessage = `Status: ${trackingInfo.status}. Check UPS for delivery date.`;
-    } else {
-      deliveryMessage = 'Tracking saved. Check UPS for delivery date.';
-    }
   }
+  
+  const trackingUrl = `https://www.ups.com/track?tracknum=${trackingNumber}`;
   
   await syncInventoryToSheets();
   
   // Build response message
-  let message = `Tracking saved: ${trackingNumber}\n\n`;
-  message += deliveryMessage;
+  let message = `Tracking saved: ${trackingNumber}`;
+  if (item.estimatedDelivery) {
+    message += `\n📦 Est. Delivery: ${item.estimatedDelivery}`;
+  }
   message += `\n\nTrack on UPS: ${trackingUrl}`;
   
   res.json({ 
@@ -3459,64 +3445,11 @@ async function getUPSEstimatedDelivery(trackingNumber) {
   
   const trackingUrl = `https://www.ups.com/track?tracknum=${trackingNumber}`;
   
-  try {
-    // Use Gemini to look up UPS tracking info
-    const prompt = `Look up UPS tracking number: ${trackingNumber}
-
-Search for this tracking number and find the scheduled delivery date from UPS.
-
-Respond with JSON only (no markdown, no code blocks):
-{
-  "estimatedDelivery": "the scheduled delivery date in MM/DD/YY format",
-  "status": "In Transit" or "Out for Delivery" or "Delivered" or other status,
-  "hasDeliveryDate": true if you found a specific date, false otherwise
-}`;
-
-    console.log(`📦 Looking up UPS tracking: ${trackingNumber}`);
-    const response = await callGeminiWithRetry(prompt);
-    console.log(`📦 Gemini response: ${response}`);
-    
-    const jsonMatch = response.match(/\{[\s\S]*?\}/);
-    
-    if (jsonMatch) {
-      const data = JSON.parse(jsonMatch[0]);
-      console.log(`📦 Parsed data:`, data);
-      
-      // Format the date to mm/dd/yy if present
-      let estDate = data.estimatedDelivery;
-      if (estDate && estDate !== 'null' && estDate !== null && estDate !== 'N/A') {
-        // Try to parse and reformat various date formats
-        if (estDate.includes('/')) {
-          const parts = estDate.split('/');
-          if (parts.length === 3) {
-            const month = parts[0].padStart(2, '0');
-            const day = parts[1].padStart(2, '0');
-            let year = parts[2];
-            if (year.length === 4) year = year.slice(-2);
-            estDate = `${month}/${day}/${year}`;
-          }
-        }
-        console.log(`📦 Formatted delivery date: ${estDate}`);
-      } else {
-        estDate = null;
-      }
-      
-      return {
-        estimatedDelivery: estDate,
-        status: data.status || 'In Transit',
-        validFormat: true,
-        hasDeliveryDate: data.hasDeliveryDate === true && estDate !== null,
-        trackingUrl
-      };
-    }
-  } catch (error) {
-    console.error('📦 UPS lookup error:', error.message);
-  }
-  
-  // Fallback: return null for delivery date
+  // Manual entry - AI cannot access UPS tracking data directly
+  // User will enter delivery date after checking UPS website
   return {
     estimatedDelivery: null,
-    status: 'Check UPS for status',
+    status: 'Saved',
     validFormat: true,
     hasDeliveryDate: false,
     trackingUrl

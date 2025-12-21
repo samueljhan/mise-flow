@@ -1238,15 +1238,12 @@
                     const brazilBatch = calcBatches(brazilWeightNeeded);
                     const yirgBatch = calcBatches(yirgWeightNeeded);
                     
-                    // Recalculate actual roasted output based on 65lb batches
-                    const actualGreenWeight = (brazilBatch.batches * brazilBatch.batchWeight) + (yirgBatch.batches * yirgBatch.batchWeight);
-                    const actualRoastedWeight = Math.floor(actualGreenWeight * 0.85);
-                    
                     // Validate batch weights
                     if (brazilBatch.batchWeight < 25) hasValidationError = true;
                     if (yirgBatch.batchWeight < 25) hasValidationError = true;
                     
-                    html += `<strong>Archives Blend</strong> (~${actualRoastedWeight}lb roasted):<br>`;
+                    // Use user's entered weight, not recalculated
+                    html += `<strong>Archives Blend</strong> (~${Math.round(item.weight)}lb roasted):<br>`;
                     html += `<div style="margin-left: 8px;">`;
                     html += `- ${brazilBatch.batches} batch${brazilBatch.batches > 1 ? 'es' : ''} of Brazil Mogiano (${brazilBatch.batchWeight}lb - profile ${brazilGreen?.roastProfile || '199503'} - drop temp ${brazilGreen?.dropTemp || 419})<br>`;
                     html += `<span style="margin-left: 4px;">blended with</span><br>`;
@@ -1260,10 +1257,6 @@
                     const { batches, batchWeight } = calcBatches(totalGreenWeight);
                     const halfBatchWeight = Math.ceil(batchWeight / 2); // Round UP to 33lb each
                     
-                    // Recalculate actual roasted output based on 65lb batches
-                    const actualGreenWeight = batches * batchWeight;
-                    const actualRoastedWeight = Math.floor(actualGreenWeight * 0.85);
-                    
                     // Find either lot to get roast profile
                     const geraGreen = greenCoffeeInventory.find(g => g.id === 'ethiopia-gera-58484' || g.id === 'ethiopia-gera-58479' || g.id === 'ethiopia-gera');
                     const profile = geraGreen?.roastProfile || '061901';
@@ -1272,7 +1265,8 @@
                     // Validate batch weight
                     if (batchWeight < 25) hasValidationError = true;
                     
-                    html += `<strong>Ethiopia Gera</strong> (~${actualRoastedWeight}lb roasted):<br>`;
+                    // Use user's entered weight, not recalculated
+                    html += `<strong>Ethiopia Gera</strong> (~${Math.round(item.weight)}lb roasted):<br>`;
                     html += `<div style="margin-left: 8px;">`;
                     html += `- ${batches} batch${batches > 1 ? 'es' : ''} of Ethiopia Gera (${halfBatchWeight}lb lot 58484 + ${halfBatchWeight}lb lot 58479 - profile ${profile} - drop temp ${dropTemp})`;
                     html += `</div><br><br>`;
@@ -1283,14 +1277,11 @@
                     const greenWeight = Math.round(item.weight / 0.85);
                     const { batches, batchWeight } = calcBatches(greenWeight);
                     
-                    // Recalculate actual roasted output
-                    const actualGreenWeight = batches * batchWeight;
-                    const actualRoastedWeight = Math.floor(actualGreenWeight * 0.85);
-                    
                     // Validate batch weight
                     if (batchWeight < 25) hasValidationError = true;
                     
-                    html += `<strong>${item.name}</strong> (~${actualRoastedWeight}lb roasted):<br>`;
+                    // Use user's entered weight, not recalculated
+                    html += `<strong>${item.name}</strong> (~${Math.round(item.weight)}lb roasted):<br>`;
                     html += `<div style="margin-left: 8px;">`;
                     html += `- ${batches} batch${batches > 1 ? 'es' : ''} of ${item.name} (${batchWeight}lb - profile ${green?.roastProfile || '?'} - drop temp ${green?.dropTemp || '?'})`;
                     html += `</div><br><br>`;
@@ -1306,7 +1297,6 @@
                     // Generic blend fallback
                     const totalGreenWeight = Math.round(item.weight / 0.85);
                     
-                    let totalActualGreen = 0;
                     let blendLines = [];
                     
                     item.recipe.forEach((comp, idx) => {
@@ -1314,15 +1304,13 @@
                         const compGreenWeight = Math.round(totalGreenWeight * comp.percentage / 100);
                         const { batches, batchWeight } = calcBatches(compGreenWeight);
                         
-                        totalActualGreen += batches * batchWeight;
                         if (batchWeight < 25) hasValidationError = true;
                         
                         blendLines.push(`- ${batches} batch${batches > 1 ? 'es' : ''} of ${comp.name} (${batchWeight}lb - profile ${green?.roastProfile || '?'} - drop temp ${green?.dropTemp || '?'})`);
                     });
                     
-                    const actualRoastedWeight = Math.floor(totalActualGreen * 0.85);
-                    
-                    html += `<strong>${item.name}</strong> (~${actualRoastedWeight}lb roasted):<br>`;
+                    // Use user's entered weight, not recalculated
+                    html += `<strong>${item.name}</strong> (~${Math.round(item.weight)}lb roasted):<br>`;
                     html += `<div style="margin-left: 8px;">`;
                     html += blendLines.join('<br><span style="margin-left: 4px;">blended with</span><br>');
                     html += `</div><br><br>`;

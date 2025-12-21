@@ -1979,12 +1979,15 @@
                 const items = orderGroups[orderDate];
                 const firstItem = items[0];
                 
-                // Format order date
-                let orderDateStr = '';
-                if (orderDate && orderDate !== 'unknown') {
+                // Format order date - handle mm/dd/yy format
+                let orderDateStr = orderDate;
+                if (orderDate && orderDate !== 'unknown' && !orderDate.match(/^\d{2}\/\d{2}\/\d{2}$/)) {
                     const date = new Date(orderDate);
                     if (!isNaN(date.getTime())) {
-                        orderDateStr = date.toLocaleDateString();
+                        const m = String(date.getMonth() + 1).padStart(2, '0');
+                        const d = String(date.getDate()).padStart(2, '0');
+                        const y = String(date.getFullYear()).slice(-2);
+                        orderDateStr = `${m}/${d}/${y}`;
                     }
                 }
                 
@@ -2000,11 +2003,22 @@
                     html += `</div>`;
                 });
                 
-                if (orderDateStr) {
+                if (orderDateStr && orderDateStr !== 'unknown') {
                     html += `<div style="font-size:12px; color:#888; margin-bottom:8px;">Ordered: ${orderDateStr}</div>`;
                 }
                 
-                html += `<div style="display:flex; gap:8px;">`;
+                // Show estimated delivery prominently if available
+                if (firstItem.estimatedDelivery) {
+                    html += `<div style="padding:8px; background:#2a3a2a; border-radius:4px; margin-bottom:8px;">`;
+                    html += `<span style="color:#90EE90; font-weight:bold;">📦 Est. Delivery: ${firstItem.estimatedDelivery}</span>`;
+                    html += `</div>`;
+                } else if (hasTracking) {
+                    html += `<div style="padding:8px; background:#3a3a2a; border-radius:4px; margin-bottom:8px;">`;
+                    html += `<span style="color:#cca;">⏳ Delivery date pending</span>`;
+                    html += `</div>`;
+                }
+                
+                html += `<div style="display:flex; gap:8px; flex-wrap:wrap;">`;
                 // Use first item's ID and tracking for the group
                 html += `<button class="action-btn" onclick="viewTracking('${firstItem.id}', '${firstItem.trackingNumber || ''}')" style="font-size:12px; padding:6px 10px;">Tracking</button>`;
                 html += `<button class="action-btn" onclick="startMarkDeliveredGroup('${orderDate}')" style="font-size:12px; padding:6px 10px; background:#4a6741;">Mark Delivered</button>`;
@@ -2065,16 +2079,29 @@
                 let html = `<strong>Tracking: ${trackingNumber}</strong><br><br>`;
                 
                 if (data.success && data.tracking) {
+                    // Show estimated delivery prominently
                     if (data.tracking.estimatedDelivery) {
-                        html += `<div style="margin-bottom:8px;"><strong>Estimated Arrival:</strong> ${data.tracking.estimatedDelivery}</div>`;
+                        html += `<div style="padding:10px; background:#2a3a2a; border-radius:6px; margin-bottom:12px;">`;
+                        html += `<span style="color:#90EE90; font-size:16px; font-weight:bold;">📦 Est. Delivery: ${data.tracking.estimatedDelivery}</span>`;
+                        html += `</div>`;
+                    } else {
+                        html += `<div style="padding:10px; background:#3a3a2a; border-radius:6px; margin-bottom:12px;">`;
+                        html += `<span style="color:#cca;">⏳ Delivery date not yet available</span>`;
+                        html += `</div>`;
                     }
+                    
                     if (data.tracking.status) {
                         html += `<div style="margin-bottom:8px;"><strong>Status:</strong> ${data.tracking.status}</div>`;
                     }
-                    html += `<a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90;">View full details on UPS.com</a>`;
+                    
+                    if (data.tracking.lastUpdate) {
+                        html += `<div style="margin-bottom:8px; font-size:12px; color:#888;">Last update: ${data.tracking.lastUpdate}</div>`;
+                    }
+                    
+                    html += `<br><a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90;">View full details on UPS.com →</a>`;
                 } else {
-                    html += `<div style="margin-bottom:8px;">Tracking number: ${trackingNumber}</div>`;
-                    html += `<a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90;">View on UPS.com</a>`;
+                    html += `<div style="margin-bottom:8px;">Tracking saved. Check UPS for delivery updates.</div>`;
+                    html += `<a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90;">View on UPS.com →</a>`;
                 }
                 
                 const messages = chatContainer.querySelectorAll('.message');
@@ -2086,7 +2113,7 @@
             } catch (error) {
                 // Fallback - just show link
                 let html = `<strong>Tracking: ${trackingNumber}</strong><br><br>`;
-                html += `<a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90;">View on UPS.com</a>`;
+                html += `<a href="https://www.ups.com/track?tracknum=${trackingNumber}" target="_blank" style="color:#90EE90;">View on UPS.com →</a>`;
                 
                 const messages = chatContainer.querySelectorAll('.message');
                 const lastMsg = messages[messages.length - 1];
@@ -2372,22 +2399,37 @@
                 
                 html += `<div style="background:#1a1a1a; padding:15px; border-radius:8px; margin-bottom:10px;">`;
                 html += `<div style="margin-bottom:10px;">`;
-                html += `<strong style="color:#90EE90;">${item.name}</strong> - ${item.weight}lb<br>`;
+                html += `<strong style="color:#90EE90; font-size:16px;">${item.name}</strong> - ${item.weight}lb<br>`;
+                
+                // Show order date
                 if (orderDateStr) {
                     html += `<span style="font-size:12px; color:#888;">Ordered: ${orderDateStr}</span>`;
                 }
+                
+                // Show estimated delivery prominently if available
                 if (item.estimatedDelivery) {
-                    html += `<span style="font-size:12px; color:#90EE90; margin-left:10px;">Est. Delivery: ${item.estimatedDelivery}</span>`;
+                    html += `<div style="margin-top:8px; padding:8px; background:#2a3a2a; border-radius:4px;">`;
+                    html += `<span style="color:#90EE90; font-weight:bold;">📦 Est. Delivery: ${item.estimatedDelivery}</span>`;
+                    html += `</div>`;
+                } else if (item.trackingNumber) {
+                    html += `<div style="margin-top:8px; padding:8px; background:#3a3a2a; border-radius:4px;">`;
+                    html += `<span style="color:#cca;">⏳ Delivery date pending - check UPS for updates</span>`;
+                    html += `</div>`;
                 }
+                
                 html += `</div>`;
                 
+                // Tracking input and buttons
                 html += `<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">`;
-                html += `<input type="text" placeholder="Tracking number..." value="${item.trackingNumber || ''}" style="flex:1; min-width:150px; padding:8px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" id="tracking-${item.id}">`;
-                html += `<button onclick="updateTracking('${item.id}')" style="background:#41576a; border:none; color:white; padding:8px 12px; border-radius:4px; cursor:pointer;">Save Tracking</button>`;
+                html += `<input type="text" placeholder="Enter tracking number..." value="${item.trackingNumber || ''}" style="flex:1; min-width:150px; padding:8px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" id="tracking-${item.id}">`;
+                html += `<button onclick="updateTracking('${item.id}')" style="background:#41576a; border:none; color:white; padding:8px 12px; border-radius:4px; cursor:pointer;">${item.trackingNumber ? 'Update' : 'Save'} Tracking</button>`;
+                
+                // Show Track on UPS button if tracking number exists
                 if (item.trackingNumber) {
                     html += `<a href="https://www.ups.com/track?tracknum=${item.trackingNumber}" target="_blank" style="background:#6b5b3b; border:none; color:white; padding:8px 12px; border-radius:4px; cursor:pointer; text-decoration:none;">Track on UPS</a>`;
                 }
-                html += `<button onclick="markDelivered('${item.id}')" style="background:#4a6741; border:none; color:white; padding:8px 12px; border-radius:4px; cursor:pointer;">Delivered</button>`;
+                
+                html += `<button onclick="markDelivered('${item.id}')" style="background:#4a6741; border:none; color:white; padding:8px 12px; border-radius:4px; cursor:pointer;">Mark Delivered</button>`;
                 html += `</div>`;
                 html += `</div>`;
             });
@@ -2399,18 +2441,40 @@
             const trackingInput = document.getElementById(`tracking-${itemId}`);
             const trackingNumber = trackingInput.value;
             
+            if (!trackingNumber) {
+                alert('Please enter a tracking number');
+                return;
+            }
+            
+            // Show loading state
+            const btn = event.target;
+            const originalText = btn.textContent;
+            btn.textContent = 'Looking up...';
+            btn.disabled = true;
+            
             try {
-                await fetch('/api/inventory/enroute/tracking', {
+                const response = await fetch('/api/inventory/enroute/tracking', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ id: itemId, trackingNumber })
                 });
                 
+                const data = await response.json();
+                
                 await loadInventory();
                 renderEnRouteModal();
+                
+                // Show the delivery info message
+                if (data.message) {
+                    alert(data.message);
+                }
+                
             } catch (error) {
                 console.error('Error updating tracking:', error);
                 alert('Error updating tracking: ' + error.message);
+            } finally {
+                btn.textContent = originalText;
+                btn.disabled = false;
             }
         }
 

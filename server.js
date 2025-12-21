@@ -997,8 +997,10 @@ async function syncInventoryToSheets() {
     data.push(['', '', '', '', '', '', '', '']);
     
     // EN ROUTE SECTION
+    // Simplified view: Name, Weight, Tracking, Date Ordered, Est. Delivery
+    // ID stored at end of row (column H) for system use but not prominently displayed
     data.push(['', 'En Route Inventory', '', '', '', '', '', '']);
-    data.push(['', 'ID', 'Name', 'Weight (lb)', 'Type', 'Tracking Number', 'Date Ordered', 'Est. Delivery']);
+    data.push(['', 'Name', 'Weight (lb)', 'Tracking Number', 'Date Ordered', 'Est. Delivery', '', '']);
     if (enRouteCoffeeInventory.length > 0) {
       enRouteCoffeeInventory.forEach(c => {
         // Only show estimated delivery if tracking number exists
@@ -1019,7 +1021,8 @@ async function syncInventoryToSheets() {
           } catch (e) {}
         }
         
-        data.push(['', c.id, c.name, c.weight, c.type || '', c.trackingNumber || '', dateOrdered, estDelivery]);
+        // Visible: Name, Weight, Tracking, Date, Est. Delivery | Hidden at end: ID in column H
+        data.push(['', c.name, c.weight, c.trackingNumber || '', dateOrdered, estDelivery, '', c.id]);
       });
     }
 
@@ -1074,7 +1077,7 @@ async function loadInventoryFromSheets() {
 
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Inventory!A:H'
+      range: 'Inventory!A:H'  // Read extra columns to handle various formats
     });
     
     const rows = response.data.values || [];
@@ -1163,20 +1166,33 @@ async function loadInventoryFromSheets() {
           recipe: recipe
         });
       } else if (currentSection === 'enroute' && row[1]) {
-        // Detect format by checking if first data column looks like an ID (starts with 'enroute-')
-        // New format: ID, Name, Weight, Type, Tracking, DateOrdered, EstDelivery
-        // Old format: Name, Weight, Tracking, DateOrdered, EstDelivery (no ID, no Type)
+        // Format: B=Name, C=Weight, D=Tracking, E=Date, F=Est, G=empty, H=ID (hidden at end)
+        // Also handle older formats for backwards compatibility
         
-        const firstCol = String(row[1] || '').toLowerCase();
+        const colB = String(row[1] || '').toLowerCase();
         
         // Skip header rows
-        if (firstCol === 'id' || firstCol === 'name') continue;
+        if (colB === 'name' || colB === 'id') continue;
         
-        // Detect format: if first column starts with 'enroute-' it's the new format
-        const isNewFormat = firstCol.startsWith('enroute-');
+        // Check for ID in column H (new simplified format)
+        const idAtEnd = row[7] ? String(row[7]) : '';
         
-        if (isNewFormat) {
-          // New format: ID, Name, Weight, Type, Tracking, DateOrdered, EstDelivery
+        // Check if col B looks like an ID (old format where ID was at start)
+        const colBLooksLikeId = colB.startsWith('enroute-');
+        
+        if (idAtEnd && idAtEnd.startsWith('enroute-')) {
+          // New simplified format: B=Name, C=Weight, D=Tracking, E=Date, F=Est, G=empty, H=ID
+          tempEnRoute.push({
+            id: idAtEnd,
+            name: row[1] || '',
+            weight: parseFloat(row[2]) || 0,
+            type: '', // Type removed from sheet
+            trackingNumber: row[3] || '',
+            dateOrdered: row[4] || '',
+            estimatedDelivery: row[5] || ''
+          });
+        } else if (colBLooksLikeId) {
+          // Old format with ID in column B: B=ID, C=Name, D=Weight, E=Type, F=Tracking, G=Date, H=Est
           tempEnRoute.push({
             id: row[1],
             name: row[2] || '',
@@ -1186,15 +1202,25 @@ async function loadInventoryFromSheets() {
             dateOrdered: row[6] || '',
             estimatedDelivery: row[7] || ''
           });
+        } else if (String(row[0] || '').startsWith('enroute-')) {
+          // Transitional format with ID in column A
+          tempEnRoute.push({
+            id: row[0],
+            name: row[1] || '',
+            weight: parseFloat(row[2]) || 0,
+            type: '',
+            trackingNumber: row[3] || '',
+            dateOrdered: row[4] || '',
+            estimatedDelivery: row[5] || ''
+          });
         } else {
-          // Old format: Name, Weight, Tracking, DateOrdered, EstDelivery
-          // Generate a stable ID from name
+          // Oldest format without ID: B=Name, C=Weight, D=Tracking, E=Date, F=Est
           const name = row[1];
           tempEnRoute.push({
             id: `enroute-${name.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`,
             name: name,
             weight: parseFloat(row[2]) || 0,
-            type: '', // Old format didn't have type
+            type: '',
             trackingNumber: row[3] || '',
             dateOrdered: row[4] || '',
             estimatedDelivery: row[5] || ''
@@ -3328,19 +3354,46 @@ app.post('/api/inventory/enroute/tracking', async (req, res) => {
   item.trackingNumber = trackingNumber;
   
   // Fetch estimated delivery date from UPS
+  let deliveryMessage = '';
+  let trackingInfo = null;
+  
   if (trackingNumber) {
-    const trackingInfo = await getUPSEstimatedDelivery(trackingNumber);
-    if (trackingInfo && trackingInfo.estimatedDelivery) {
-      item.estimatedDelivery = trackingInfo.estimatedDelivery;
-      console.log(`📦 Tracking ${trackingNumber}: Est. delivery ${trackingInfo.estimatedDelivery}`);
+    trackingInfo = await getUPSEstimatedDelivery(trackingNumber);
+    if (trackingInfo) {
+      if (trackingInfo.hasDeliveryDate && trackingInfo.estimatedDelivery) {
+        item.estimatedDelivery = trackingInfo.estimatedDelivery;
+        deliveryMessage = `Estimated delivery: ${trackingInfo.estimatedDelivery}`;
+        if (trackingInfo.status) {
+          deliveryMessage += ` (${trackingInfo.status})`;
+        }
+      } else if (trackingInfo.estimatedDelivery && trackingInfo.isEstimate) {
+        item.estimatedDelivery = trackingInfo.estimatedDelivery;
+        deliveryMessage = `No delivery date available yet. Based on typical UPS Ground shipping, estimated around ${trackingInfo.estimatedDelivery}`;
+      } else if (trackingInfo.status === 'Label Created') {
+        deliveryMessage = 'Label created - package not yet picked up by UPS. Delivery date will be available once shipped.';
+      } else if (trackingInfo.status) {
+        deliveryMessage = `Status: ${trackingInfo.status}. Delivery date not yet available.`;
+      } else {
+        deliveryMessage = 'Tracking saved. Check UPS for delivery updates.';
+      }
+      
+      if (trackingInfo.lastUpdate) {
+        deliveryMessage += `\nLast update: ${trackingInfo.lastUpdate}`;
+      }
+      
+      console.log(`📦 Tracking ${trackingNumber}: ${deliveryMessage}`);
     }
   }
   
   await syncInventoryToSheets();
+  
+  const trackingUrl = `https://www.ups.com/track?tracknum=${trackingNumber}`;
+  
   res.json({ 
     success: true, 
     item,
-    message: `Tracking updated for ${item.name}.${item.estimatedDelivery ? ` Estimated delivery: ${item.estimatedDelivery}.` : ''} What else can I help you with?`
+    trackingInfo,
+    message: `Tracking updated for ${item.name}.\n\n${deliveryMessage}\n\nTrack on UPS: ${trackingUrl}`
   });
 });
 
@@ -3422,19 +3475,74 @@ async function getUPSEstimatedDelivery(trackingNumber) {
     return {
       estimatedDelivery: null,
       status: 'Invalid tracking format',
-      validFormat: false
+      validFormat: false,
+      message: 'This doesn\'t look like a valid UPS tracking number. UPS tracking numbers typically start with "1Z".'
     };
   }
   
-  // UPS Ground from California typically takes 5-7 business days
-  // Use 6 business days as the estimate
-  const estimatedDelivery = calculateBusinessDaysDelivery(6);
+  const trackingUrl = `https://www.ups.com/track?tracknum=${trackingNumber}`;
+  
+  try {
+    // Use Gemini to search for real UPS tracking info
+    const prompt = `Search for UPS tracking number ${trackingNumber} to find the current delivery status and estimated delivery date.
+
+The tracking page is: ${trackingUrl}
+
+Based on what you find, respond with ONLY a JSON object (no markdown, no code blocks):
+{
+  "estimatedDelivery": "the scheduled delivery date if shown in MM/DD/YY format, or null if not yet available",
+  "status": "current status like 'Label Created', 'Shipped', 'In Transit', 'Out for Delivery', 'Delivered'",
+  "hasDeliveryDate": true if a specific delivery date is shown, false if pending,
+  "lastUpdate": "brief description of latest tracking event"
+}`;
+
+    const response = await callGeminiWithRetry(prompt, { maxRetries: 2 });
+    const jsonMatch = response.match(/\{[\s\S]*?\}/);
+    
+    if (jsonMatch) {
+      const data = JSON.parse(jsonMatch[0]);
+      
+      // Format the date to mm/dd/yy if present
+      let estDate = data.estimatedDelivery;
+      if (estDate && estDate !== 'null' && estDate !== null && estDate !== 'N/A') {
+        // Try to parse and reformat
+        if (estDate.includes('/')) {
+          const parts = estDate.split('/');
+          if (parts.length === 3) {
+            const month = parts[0].padStart(2, '0');
+            const day = parts[1].padStart(2, '0');
+            let year = parts[2];
+            if (year.length === 4) year = year.slice(-2);
+            estDate = `${month}/${day}/${year}`;
+          }
+        }
+      } else {
+        estDate = null;
+      }
+      
+      return {
+        estimatedDelivery: estDate,
+        status: data.status || 'In Transit',
+        validFormat: true,
+        hasDeliveryDate: data.hasDeliveryDate === true && estDate !== null,
+        lastUpdate: data.lastUpdate || null,
+        trackingUrl
+      };
+    }
+  } catch (error) {
+    console.error('UPS lookup error:', error);
+  }
+  
+  // Fallback: estimate ~6 business days
+  const fallbackDate = calculateBusinessDaysDelivery(6);
   
   return {
-    estimatedDelivery,
+    estimatedDelivery: fallbackDate,
     status: 'In Transit',
     validFormat: true,
-    trackingUrl: `https://www.ups.com/track?tracknum=${trackingNumber}`
+    hasDeliveryDate: false,
+    isEstimate: true,
+    trackingUrl
   };
 }
 
@@ -3453,7 +3561,31 @@ app.post('/api/ups/track', async (req, res) => {
     status: trackingInfo?.status || 'Check UPS.com for status',
     estimatedDelivery: trackingInfo?.estimatedDelivery || null,
     validFormat: trackingInfo?.validFormat,
+    hasDeliveryDate: trackingInfo?.hasDeliveryDate || false,
     trackingUrl: `https://www.ups.com/track?tracknum=${trackingNumber}`
+  });
+});
+
+// Tracking lookup endpoint for chat display
+app.post('/api/tracking/lookup', async (req, res) => {
+  const { trackingNumber } = req.body;
+  
+  if (!trackingNumber) {
+    return res.json({ success: false, error: 'No tracking number provided' });
+  }
+  
+  const trackingInfo = await getUPSEstimatedDelivery(trackingNumber);
+  
+  res.json({
+    success: true,
+    tracking: {
+      trackingNumber,
+      status: trackingInfo?.status || 'In Transit',
+      estimatedDelivery: trackingInfo?.estimatedDelivery || null,
+      hasDeliveryDate: trackingInfo?.hasDeliveryDate || false,
+      lastUpdate: trackingInfo?.lastUpdate || null,
+      trackingUrl: `https://www.ups.com/track?tracknum=${trackingNumber}`
+    }
   });
 });
 

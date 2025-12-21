@@ -3439,7 +3439,7 @@ function formatDateMMDDYY(date) {
   return `${month}/${day}/${year}`;
 }
 
-// Look up UPS tracking info with Google Search grounding
+// Look up UPS tracking info
 async function getUPSEstimatedDelivery(trackingNumber) {
   if (!trackingNumber) return null;
   
@@ -3460,29 +3460,27 @@ async function getUPSEstimatedDelivery(trackingNumber) {
   const trackingUrl = `https://www.ups.com/track?tracknum=${trackingNumber}`;
   
   try {
-    // Use Gemini with Google Search grounding to get real tracking info
-    const model = genAI.getGenerativeModel({ 
-      model: "gemini-2.0-flash",
-      tools: [{ googleSearch: {} }]
-    });
-    
-    const prompt = `Search for UPS tracking number ${trackingNumber} and find the estimated delivery date.
+    // Use Gemini to look up UPS tracking info
+    const prompt = `Look up UPS tracking number: ${trackingNumber}
 
-Look up: ${trackingUrl}
+Search for this tracking number and find the scheduled delivery date from UPS.
 
-Respond with ONLY a JSON object (no markdown, no code blocks):
+Respond with JSON only (no markdown, no code blocks):
 {
-  "estimatedDelivery": "the scheduled delivery date in MM/DD/YY format, or null if not available",
-  "status": "current status like 'Label Created', 'In Transit', 'Out for Delivery', 'Delivered'",
-  "hasDeliveryDate": true if a specific date is shown, false otherwise
+  "estimatedDelivery": "the scheduled delivery date in MM/DD/YY format",
+  "status": "In Transit" or "Out for Delivery" or "Delivered" or other status,
+  "hasDeliveryDate": true if you found a specific date, false otherwise
 }`;
 
-    const result = await model.generateContent(prompt);
-    const response = result.response.text().trim();
+    console.log(`📦 Looking up UPS tracking: ${trackingNumber}`);
+    const response = await callGeminiWithRetry(prompt);
+    console.log(`📦 Gemini response: ${response}`);
+    
     const jsonMatch = response.match(/\{[\s\S]*?\}/);
     
     if (jsonMatch) {
       const data = JSON.parse(jsonMatch[0]);
+      console.log(`📦 Parsed data:`, data);
       
       // Format the date to mm/dd/yy if present
       let estDate = data.estimatedDelivery;
@@ -3498,6 +3496,7 @@ Respond with ONLY a JSON object (no markdown, no code blocks):
             estDate = `${month}/${day}/${year}`;
           }
         }
+        console.log(`📦 Formatted delivery date: ${estDate}`);
       } else {
         estDate = null;
       }
@@ -3511,7 +3510,7 @@ Respond with ONLY a JSON object (no markdown, no code blocks):
       };
     }
   } catch (error) {
-    console.error('UPS lookup error:', error);
+    console.error('📦 UPS lookup error:', error.message);
   }
   
   // Fallback: return null for delivery date

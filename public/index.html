@@ -2357,12 +2357,16 @@
             
             let html = '';
             enRouteCoffeeInventory.forEach((item, index) => {
-                // Use dateOrdered field, handle invalid dates
-                let orderDateStr = '';
-                if (item.dateOrdered) {
-                    const orderDate = new Date(item.dateOrdered);
+                // Use dateOrdered field - if already in mm/dd/yy format, show directly
+                let orderDateStr = item.dateOrdered || '';
+                if (orderDateStr && !orderDateStr.match(/^\d{2}\/\d{2}\/\d{2}$/)) {
+                    // Try to parse and format if not in mm/dd/yy format
+                    const orderDate = new Date(orderDateStr);
                     if (!isNaN(orderDate.getTime())) {
-                        orderDateStr = orderDate.toLocaleDateString();
+                        const m = String(orderDate.getMonth() + 1).padStart(2, '0');
+                        const d = String(orderDate.getDate()).padStart(2, '0');
+                        const y = String(orderDate.getFullYear()).slice(-2);
+                        orderDateStr = `${m}/${d}/${y}`;
                     }
                 }
                 
@@ -2372,11 +2376,17 @@
                 if (orderDateStr) {
                     html += `<span style="font-size:12px; color:#888;">Ordered: ${orderDateStr}</span>`;
                 }
+                if (item.estimatedDelivery) {
+                    html += `<span style="font-size:12px; color:#90EE90; margin-left:10px;">Est. Delivery: ${item.estimatedDelivery}</span>`;
+                }
                 html += `</div>`;
                 
-                html += `<div style="display:flex; gap:10px; align-items:center;">`;
-                html += `<input type="text" placeholder="Tracking number..." value="${item.trackingNumber || ''}" style="flex:1; padding:8px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" id="tracking-${item.id}">`;
+                html += `<div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">`;
+                html += `<input type="text" placeholder="Tracking number..." value="${item.trackingNumber || ''}" style="flex:1; min-width:150px; padding:8px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" id="tracking-${item.id}">`;
                 html += `<button onclick="updateTracking('${item.id}')" style="background:#41576a; border:none; color:white; padding:8px 12px; border-radius:4px; cursor:pointer;">Save Tracking</button>`;
+                if (item.trackingNumber) {
+                    html += `<a href="https://www.ups.com/track?tracknum=${item.trackingNumber}" target="_blank" style="background:#6b5b3b; border:none; color:white; padding:8px 12px; border-radius:4px; cursor:pointer; text-decoration:none;">Track on UPS</a>`;
+                }
                 html += `<button onclick="markDelivered('${item.id}')" style="background:#4a6741; border:none; color:white; padding:8px 12px; border-radius:4px; cursor:pointer;">Delivered</button>`;
                 html += `</div>`;
                 html += `</div>`;

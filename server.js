@@ -967,51 +967,66 @@ async function syncInventoryToSheets() {
     const data = [];
     
     // Row 1: empty
-    data.push(['', '', '', '', '', '', '']);
+    data.push(['', '', '', '', '', '', '', '']);
     
     // Row 2: Last updated timestamp
-    data.push(['', `Last updated: ${pstTimestamp}`, '', '', '', '', '']);
+    data.push(['', `Last updated: ${pstTimestamp}`, '', '', '', '', '', '']);
     
     // Row 3: empty (spacing)
-    data.push(['', '', '', '', '', '', '']);
+    data.push(['', '', '', '', '', '', '', '']);
     
     // GREEN COFFEE SECTION
-    data.push(['', 'Green Coffee Inventory', '', '', '', '', '']);
-    data.push(['', 'Name', 'Weight (lb)', 'Roast Profile', 'Drop Temp', '', '']);
+    data.push(['', 'Green Coffee Inventory', '', '', '', '', '', '']);
+    data.push(['', 'Name', 'Weight (lb)', 'Roast Profile', 'Drop Temp', '', '', '']);
     greenCoffeeInventory.forEach(c => {
-      data.push(['', c.name, c.weight, c.roastProfile || '', c.dropTemp || '', '', '']);
+      data.push(['', c.name, c.weight, c.roastProfile || '', c.dropTemp || '', '', '', '']);
     });
     
     // Empty row
-    data.push(['', '', '', '', '', '', '']);
+    data.push(['', '', '', '', '', '', '', '']);
     
     // ROASTED COFFEE SECTION
-    data.push(['', 'Roasted Coffee Inventory', '', '', '', '', '']);
-    data.push(['', 'Name', 'Weight (lb)', 'Type', 'Recipe', '', '']);
+    data.push(['', 'Roasted Coffee Inventory', '', '', '', '', '', '']);
+    data.push(['', 'Name', 'Weight (lb)', 'Type', 'Recipe', '', '', '']);
     roastedCoffeeInventory.forEach(c => {
       const recipe = c.recipe ? c.recipe.map(r => `${r.percentage}% ${r.name}`).join(' + ') : 'N/A';
-      data.push(['', c.name, c.weight, c.type || '', recipe, '', '']);
+      data.push(['', c.name, c.weight, c.type || '', recipe, '', '', '']);
     });
     
     // Empty row
-    data.push(['', '', '', '', '', '', '']);
+    data.push(['', '', '', '', '', '', '', '']);
     
     // EN ROUTE SECTION
-    data.push(['', 'En Route Inventory', '', '', '', '', '']);
-    data.push(['', 'Name', 'Weight (lb)', 'Type', 'Tracking Number', 'Date Ordered', 'Estimated Ship Date']);
+    data.push(['', 'En Route Inventory', '', '', '', '', '', '']);
+    data.push(['', 'ID', 'Name', 'Weight (lb)', 'Type', 'Tracking Number', 'Date Ordered', 'Est. Delivery']);
     if (enRouteCoffeeInventory.length > 0) {
       enRouteCoffeeInventory.forEach(c => {
         // Only show estimated delivery if tracking number exists
         const estDelivery = c.trackingNumber ? (c.estimatedDelivery || '') : '';
-        const dateOrdered = c.dateOrdered || c.orderDate || c.dateAdded || '';
-        data.push(['', c.name, c.weight, c.type || '', c.trackingNumber || '', dateOrdered, estDelivery]);
+        
+        // Format dateOrdered as mm/dd/yy
+        let dateOrdered = c.dateOrdered || c.orderDate || c.dateAdded || '';
+        if (dateOrdered && !dateOrdered.match(/^\d{2}\/\d{2}\/\d{2}$/)) {
+          // Try to convert to mm/dd/yy format
+          try {
+            const d = new Date(dateOrdered);
+            if (!isNaN(d.getTime())) {
+              const month = String(d.getMonth() + 1).padStart(2, '0');
+              const day = String(d.getDate()).padStart(2, '0');
+              const year = String(d.getFullYear()).slice(-2);
+              dateOrdered = `${month}/${day}/${year}`;
+            }
+          } catch (e) {}
+        }
+        
+        data.push(['', c.id, c.name, c.weight, c.type || '', c.trackingNumber || '', dateOrdered, estDelivery]);
       });
     }
 
     // Clear and write to Inventory sheet
     await sheets.spreadsheets.values.clear({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Inventory!A:G'
+      range: 'Inventory!A:H'
     }).catch(() => {}); // Ignore if sheet doesn't exist
 
     await sheets.spreadsheets.values.update({
@@ -1059,7 +1074,7 @@ async function loadInventoryFromSheets() {
 
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Inventory!A:G'
+      range: 'Inventory!A:H'
     });
     
     const rows = response.data.values || [];
@@ -1148,15 +1163,43 @@ async function loadInventoryFromSheets() {
           recipe: recipe
         });
       } else if (currentSection === 'enroute' && row[1]) {
-        tempEnRoute.push({
-          id: row[1].toLowerCase().replace(/\s+/g, '-') + '-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5),
-          name: row[1],
-          weight: parseFloat(row[2]) || 0,
-          type: row[3] || '',
-          trackingNumber: row[4] || '',
-          dateOrdered: row[5] || '',
-          estimatedDelivery: row[6] || ''
-        });
+        // Detect format by checking if first data column looks like an ID (starts with 'enroute-')
+        // New format: ID, Name, Weight, Type, Tracking, DateOrdered, EstDelivery
+        // Old format: Name, Weight, Tracking, DateOrdered, EstDelivery (no ID, no Type)
+        
+        const firstCol = String(row[1] || '').toLowerCase();
+        
+        // Skip header rows
+        if (firstCol === 'id' || firstCol === 'name') continue;
+        
+        // Detect format: if first column starts with 'enroute-' it's the new format
+        const isNewFormat = firstCol.startsWith('enroute-');
+        
+        if (isNewFormat) {
+          // New format: ID, Name, Weight, Type, Tracking, DateOrdered, EstDelivery
+          tempEnRoute.push({
+            id: row[1],
+            name: row[2] || '',
+            weight: parseFloat(row[3]) || 0,
+            type: row[4] || '',
+            trackingNumber: row[5] || '',
+            dateOrdered: row[6] || '',
+            estimatedDelivery: row[7] || ''
+          });
+        } else {
+          // Old format: Name, Weight, Tracking, DateOrdered, EstDelivery
+          // Generate a stable ID from name
+          const name = row[1];
+          tempEnRoute.push({
+            id: `enroute-${name.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`,
+            name: name,
+            weight: parseFloat(row[2]) || 0,
+            type: '', // Old format didn't have type
+            trackingNumber: row[3] || '',
+            dateOrdered: row[4] || '',
+            estimatedDelivery: row[5] || ''
+          });
+        }
       }
     }
 
@@ -3248,6 +3291,17 @@ app.post('/api/inventory/enroute/add', async (req, res) => {
   await ensureFreshInventory();
   const { name, weight, type, recipe, orderDate } = req.body;
   const id = `enroute-${Date.now()}`;
+  
+  // Format date as mm/dd/yy
+  let formattedDate = orderDate;
+  if (!formattedDate) {
+    const now = new Date();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    const year = String(now.getFullYear()).slice(-2);
+    formattedDate = `${month}/${day}/${year}`;
+  }
+  
   const newItem = {
     id,
     name,
@@ -3255,7 +3309,7 @@ app.post('/api/inventory/enroute/add', async (req, res) => {
     type,
     recipe,
     trackingNumber: '',
-    dateOrdered: orderDate || new Date().toISOString(),
+    dateOrdered: formattedDate,
     estimatedDelivery: ''
   };
   enRouteCoffeeInventory.push(newItem);
@@ -3330,57 +3384,57 @@ app.post('/api/inventory/enroute/deliver', async (req, res) => {
 
 // ============ UPS Tracking API ============
 
+// Format date as mm/dd/yy
+function formatDateMMDDYY(date) {
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const year = String(date.getFullYear()).slice(-2);
+  return `${month}/${day}/${year}`;
+}
+
+// Calculate estimated delivery (business days from today)
+function calculateBusinessDaysDelivery(businessDays = 6) {
+  const today = new Date();
+  let deliveryDate = new Date(today);
+  let daysAdded = 0;
+  
+  while (daysAdded < businessDays) {
+    deliveryDate.setDate(deliveryDate.getDate() + 1);
+    const dayOfWeek = deliveryDate.getDay();
+    if (dayOfWeek !== 0 && dayOfWeek !== 6) { // Skip weekends
+      daysAdded++;
+    }
+  }
+  
+  return formatDateMMDDYY(deliveryDate);
+}
+
 // Look up UPS tracking info and get estimated delivery date
 async function getUPSEstimatedDelivery(trackingNumber) {
   if (!trackingNumber) return null;
   
-  try {
-    // Use Gemini to extract delivery date from UPS tracking
-    const prompt = `I need to look up UPS tracking number: ${trackingNumber}
-
-Based on standard UPS Ground shipping times (typically 5-7 business days from ship date), and common tracking number patterns:
-- If it starts with "1Z" it's a valid UPS tracking number
-- Ground shipments from California typically take 5-7 business days
-
-Since this is a roasted coffee order that was just shipped, estimate the delivery date as approximately 5-7 business days from today.
-
-Respond with JSON only (no markdown):
-{
-  "estimatedDelivery": "MM/DD/YYYY format date, approximately 6 business days from today",
-  "status": "In Transit" or "Shipped",
-  "validFormat": true if starts with 1Z, false otherwise
-}`;
-
-    const response = await callGeminiWithRetry(prompt);
-    const jsonMatch = response.match(/\{[\s\S]*\}/);
-    
-    if (jsonMatch) {
-      const data = JSON.parse(jsonMatch[0]);
-      return {
-        estimatedDelivery: data.estimatedDelivery || null,
-        status: data.status || 'In Transit',
-        validFormat: data.validFormat
-      };
-    }
-  } catch (error) {
-    console.error('UPS lookup error:', error);
+  // Validate tracking number format
+  const isValidFormat = trackingNumber.startsWith('1Z') || 
+                        trackingNumber.match(/^\d{18,22}$/) || // UPS Mail Innovations
+                        trackingNumber.match(/^T\d+$/); // UPS Freight
+  
+  if (!isValidFormat) {
+    return {
+      estimatedDelivery: null,
+      status: 'Invalid tracking format',
+      validFormat: false
+    };
   }
   
-  // Fallback: calculate ~6 business days from now
-  const today = new Date();
-  let businessDays = 6;
-  let deliveryDate = new Date(today);
-  while (businessDays > 0) {
-    deliveryDate.setDate(deliveryDate.getDate() + 1);
-    const dayOfWeek = deliveryDate.getDay();
-    if (dayOfWeek !== 0 && dayOfWeek !== 6) { // Skip weekends
-      businessDays--;
-    }
-  }
+  // UPS Ground from California typically takes 5-7 business days
+  // Use 6 business days as the estimate
+  const estimatedDelivery = calculateBusinessDaysDelivery(6);
+  
   return {
-    estimatedDelivery: deliveryDate.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' }),
+    estimatedDelivery,
     status: 'In Transit',
-    validFormat: trackingNumber.startsWith('1Z')
+    validFormat: true,
+    trackingUrl: `https://www.ups.com/track?tracknum=${trackingNumber}`
   };
 }
 
@@ -4790,7 +4844,8 @@ app.post('/api/roast-order/confirm', async (req, res) => {
       });
     }
     
-    // Add to en route inventory
+    // Add to en route inventory with mm/dd/yy date format
+    const now = new Date();
     enRouteItems.push({
       id: `enroute-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       name: item.name,
@@ -4798,7 +4853,7 @@ app.post('/api/roast-order/confirm', async (req, res) => {
       type: roastedCoffee ? roastedCoffee.type : 'Unknown',
       recipe: roastedCoffee ? roastedCoffee.recipe : null,
       trackingNumber: '',
-      dateOrdered: new Date().toISOString()
+      dateOrdered: formatDateMMDDYY(now)
     });
   });
   

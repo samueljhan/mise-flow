@@ -997,10 +997,9 @@ async function syncInventoryToSheets() {
     data.push(['', '', '', '', '', '', '', '']);
     
     // EN ROUTE SECTION
-    // Simplified view: Name, Weight, Tracking, Date Ordered, Est. Delivery
-    // ID stored at end of row (column H) for system use but not prominently displayed
-    data.push(['', 'En Route Inventory', '', '', '', '', '', '']);
-    data.push(['', 'Name', 'Weight (lb)', 'Tracking Number', 'Date Ordered', 'Est. Delivery', '', '']);
+    // En Route: ID in column B (internal), then Name, Weight, Tracking, Date Ordered, Est. Delivery
+    data.push(['', 'En Route Inventory', '', '', '', '', '']);
+    data.push(['', 'ID', 'Name', 'Weight (lb)', 'Tracking Number', 'Date Ordered', 'Est. Delivery']);
     if (enRouteCoffeeInventory.length > 0) {
       enRouteCoffeeInventory.forEach(c => {
         // Only show estimated delivery if tracking number exists
@@ -1021,15 +1020,15 @@ async function syncInventoryToSheets() {
           } catch (e) {}
         }
         
-        // Visible: Name, Weight, Tracking, Date, Est. Delivery | Hidden at end: ID in column H
-        data.push(['', c.name, c.weight, c.trackingNumber || '', dateOrdered, estDelivery, '', c.id]);
+        // ID in column B, then Name, Weight, Tracking, Date, Est. Delivery
+        data.push(['', c.id, c.name, c.weight, c.trackingNumber || '', dateOrdered, estDelivery]);
       });
     }
 
     // Clear and write to Inventory sheet
     await sheets.spreadsheets.values.clear({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Inventory!A:H'
+      range: 'Inventory!A:G'
     }).catch(() => {}); // Ignore if sheet doesn't exist
 
     await sheets.spreadsheets.values.update({
@@ -1166,7 +1165,7 @@ async function loadInventoryFromSheets() {
           recipe: recipe
         });
       } else if (currentSection === 'enroute' && row[1]) {
-        // Format: B=Name, C=Weight, D=Tracking, E=Date, F=Est, G=empty, H=ID (hidden at end)
+        // Current format: B=ID, C=Name, D=Weight, E=Tracking, F=Date, G=Est
         // Also handle older formats for backwards compatibility
         
         const colB = String(row[1] || '').toLowerCase();
@@ -1174,33 +1173,33 @@ async function loadInventoryFromSheets() {
         // Skip header rows
         if (colB === 'name' || colB === 'id') continue;
         
-        // Check for ID in column H (new simplified format)
-        const idAtEnd = row[7] ? String(row[7]) : '';
-        
-        // Check if col B looks like an ID (old format where ID was at start)
+        // Check if col B looks like an ID
         const colBLooksLikeId = colB.startsWith('enroute-');
         
-        if (idAtEnd && idAtEnd.startsWith('enroute-')) {
-          // New simplified format: B=Name, C=Weight, D=Tracking, E=Date, F=Est, G=empty, H=ID
-          tempEnRoute.push({
-            id: idAtEnd,
-            name: row[1] || '',
-            weight: parseFloat(row[2]) || 0,
-            type: '', // Type removed from sheet
-            trackingNumber: row[3] || '',
-            dateOrdered: row[4] || '',
-            estimatedDelivery: row[5] || ''
-          });
-        } else if (colBLooksLikeId) {
-          // Old format with ID in column B: B=ID, C=Name, D=Weight, E=Type, F=Tracking, G=Date, H=Est
+        // Check for ID in column H (old hidden format)
+        const idAtEnd = row[7] ? String(row[7]) : '';
+        
+        if (colBLooksLikeId) {
+          // Current format: B=ID, C=Name, D=Weight, E=Tracking, F=Date, G=Est
           tempEnRoute.push({
             id: row[1],
             name: row[2] || '',
             weight: parseFloat(row[3]) || 0,
-            type: row[4] || '',
-            trackingNumber: row[5] || '',
-            dateOrdered: row[6] || '',
-            estimatedDelivery: row[7] || ''
+            type: '',
+            trackingNumber: row[4] || '',
+            dateOrdered: row[5] || '',
+            estimatedDelivery: row[6] || ''
+          });
+        } else if (idAtEnd && idAtEnd.startsWith('enroute-')) {
+          // Old format with ID hidden at end: B=Name, C=Weight, D=Tracking, E=Date, F=Est, G=empty, H=ID
+          tempEnRoute.push({
+            id: idAtEnd,
+            name: row[1] || '',
+            weight: parseFloat(row[2]) || 0,
+            type: '',
+            trackingNumber: row[3] || '',
+            dateOrdered: row[4] || '',
+            estimatedDelivery: row[5] || ''
           });
         } else if (String(row[0] || '').startsWith('enroute-')) {
           // Transitional format with ID in column A
@@ -3724,12 +3723,6 @@ app.post('/api/retail/add-weeks', async (req, res) => {
       return res.status(400).json({ error: 'Could not find sheet structure' });
     }
     
-    const startCol = String.fromCharCode(65 + productStartColIndex);
-    const endCol = String.fromCharCode(65 + productEndColIndex);
-    const totalCol = String.fromCharCode(65 + totalColIndex);
-    const feeCol = String.fromCharCode(65 + totalColIndex + 1);
-    const netCol = String.fromCharCode(65 + totalColIndex + 2);
-    
     // Find last data row
     let lastDataRow = 2;
     for (let i = 2; i < rows.length; i++) {
@@ -3738,27 +3731,18 @@ app.post('/api/retail/add-weeks', async (req, res) => {
       }
     }
     
-    // Build rows to append
+    // Build rows to append - just date and empty cells, no formulas yet
+    // Formulas will be added when user enters sales data
     const newRows = weeks.map((weekRange, idx) => {
-      const rowNum = lastDataRow + idx + 1;
       const row = [];
       
-      // Fill columns up to and including net payout
+      // Fill columns up to and including net payout column
       for (let i = 0; i <= totalColIndex + 2; i++) {
         if (i === 1) {
           // Column B = date
           row.push(weekRange);
-        } else if (i === totalColIndex) {
-          // Total Retail Sales formula
-          row.push(`=SUM(${startCol}${rowNum}:${endCol}${rowNum})`);
-        } else if (i === totalColIndex + 1) {
-          // Transaction Fee formula
-          row.push(`=${totalCol}${rowNum}*0.03`);
-        } else if (i === totalColIndex + 2) {
-          // Net Payout formula
-          row.push(`=${totalCol}${rowNum}-${feeCol}${rowNum}`);
         } else {
-          // Empty cell
+          // Empty cell - no formulas for empty weeks
           row.push('');
         }
       }
@@ -3827,19 +3811,26 @@ app.post('/api/retail/sales', async (req, res) => {
     
     // Build updates for sales values
     const updates = [];
+    let hasValidSalesData = false;
+    
     for (const [productName, value] of Object.entries(sales)) {
       const colIndex = headerRow.findIndex(h => h === productName);
       if (colIndex > -1) {
         const col = String.fromCharCode(65 + colIndex);
+        const numValue = value !== null && value !== '' ? parseFloat(value) : '';
         updates.push({
           range: `Retail Sales!${col}${rowIndex}`,
-          values: [[value !== null && value !== '' ? parseFloat(value) : '']]
+          values: [[numValue]]
         });
+        // Check if any valid sales data was entered
+        if (numValue !== '' && !isNaN(numValue) && numValue > 0) {
+          hasValidSalesData = true;
+        }
       }
     }
     
-    // Also ensure formulas are set for Total, Fee, and Net Payout
-    if (totalColIndex > -1 && productStartColIndex > -1) {
+    // Only add formulas for Total, Fee, and Net Payout if user entered sales data
+    if (hasValidSalesData && totalColIndex > -1 && productStartColIndex > -1) {
       const startCol = String.fromCharCode(65 + productStartColIndex);
       const endCol = String.fromCharCode(65 + productEndColIndex);
       const totalCol = String.fromCharCode(65 + totalColIndex);

@@ -3844,7 +3844,6 @@
             html += '<div class="response-buttons" style="margin-top: 12px;">';
             html += '<button class="action-btn" onclick="showRetailProductsManager()">Manage Products</button>';
             html += '<button class="action-btn" onclick="showAllRetailWeeks()">View All Weeks</button>';
-            html += '<button class="action-btn" onclick="fixRetailFormulas()">Fix Formulas</button>';
             html += '<button class="action-btn" onclick="cancelRetailMode()">Done</button>';
             html += '</div>';
             
@@ -4103,30 +4102,6 @@
         function cancelRetailMode() {
             addMessage('Retail management closed.', false);
             addFollowUpMessage();
-        }
-        
-        async function fixRetailFormulas() {
-            addMessage('Fixing formulas for all rows...', false);
-            
-            try {
-                const response = await fetch('/api/retail/fix-formulas', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' }
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    addMessage(`Fixed formulas for ${data.rowsFixed} row(s). Totals, fees, and net payouts should now calculate correctly.`, false);
-                    setTimeout(() => manageRetail(), 1500);
-                } else {
-                    throw new Error(data.error || 'Failed to fix formulas');
-                }
-                
-            } catch (error) {
-                console.error('Error fixing formulas:', error);
-                addMessage(`Error: ${error.message}`, false);
-            }
         }
         
         // Alias for backward compatibility

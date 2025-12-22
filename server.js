@@ -137,6 +137,9 @@ app.get('/auth/google/callback', async (req, res) => {
 
     console.log(`✅ User authenticated: ${userInfo.data.email}`);
     
+    // Format all sheets with currency formatting (async, don't wait)
+    formatAllSheetsCurrency().catch(e => console.log('Currency format on connect:', e.message));
+    
     // Explicitly save session before redirect
     req.session.save((err) => {
       if (err) {
@@ -936,6 +939,168 @@ function formatInventorySummary() {
   }
   
   return summary;
+}
+
+// ============ Sheet Formatting Helpers ============
+
+// Apply currency format ($X.XX) to specific columns in a sheet
+async function applyCurrencyFormat(sheets, sheetName, columns, startRow = 3) {
+  try {
+    // Get sheet ID
+    const spreadsheet = await sheets.spreadsheets.get({
+      spreadsheetId: SPREADSHEET_ID
+    });
+    const sheet = spreadsheet.data.sheets.find(s => s.properties.title === sheetName);
+    
+    if (!sheet) {
+      console.log(`Sheet "${sheetName}" not found for currency formatting`);
+      return;
+    }
+    
+    const sheetId = sheet.properties.sheetId;
+    
+    // Build format requests for each column
+    const requests = columns.map(colIndex => ({
+      repeatCell: {
+        range: {
+          sheetId: sheetId,
+          startRowIndex: startRow - 1, // 0-indexed
+          startColumnIndex: colIndex,
+          endColumnIndex: colIndex + 1
+        },
+        cell: {
+          userEnteredFormat: {
+            numberFormat: {
+              type: 'CURRENCY',
+              pattern: '"$"#,##0.00'
+            }
+          }
+        },
+        fields: 'userEnteredFormat.numberFormat'
+      }
+    }));
+    
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: { requests }
+    });
+    
+    console.log(`💰 Applied currency format to ${sheetName} columns: ${columns.join(', ')}`);
+  } catch (error) {
+    console.error(`Currency format error for ${sheetName}:`, error.message);
+  }
+}
+
+// Apply Calibri 11 font to entire sheet
+async function applyStandardFont(sheets, sheetName) {
+  try {
+    const spreadsheet = await sheets.spreadsheets.get({
+      spreadsheetId: SPREADSHEET_ID
+    });
+    const sheet = spreadsheet.data.sheets.find(s => s.properties.title === sheetName);
+    
+    if (!sheet) {
+      console.log(`Sheet "${sheetName}" not found for font formatting`);
+      return;
+    }
+    
+    const sheetId = sheet.properties.sheetId;
+    
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: {
+        requests: [{
+          repeatCell: {
+            range: {
+              sheetId: sheetId
+            },
+            cell: {
+              userEnteredFormat: {
+                textFormat: {
+                  fontFamily: 'Calibri',
+                  fontSize: 11
+                }
+              }
+            },
+            fields: 'userEnteredFormat.textFormat(fontFamily,fontSize)'
+          }
+        }]
+      }
+    });
+    
+    console.log(`🔤 Applied Calibri 11 font to ${sheetName}`);
+  } catch (error) {
+    console.error(`Font format error for ${sheetName}:`, error.message);
+  }
+}
+
+// Format all money columns across all sheets
+async function formatAllSheetsCurrency() {
+  if (!userTokens) {
+    console.log('⚠️ Cannot format sheets - Google not connected');
+    return;
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Get all sheet names
+    const sheetNames = ['Wholesale Pricing', 'Bank Transactions', 'Invoices', 'Retail Sales', 'Inventory'];
+    
+    // Apply Calibri 11 font to all sheets
+    for (const sheetName of sheetNames) {
+      await applyStandardFont(sheets, sheetName);
+    }
+    
+    // Wholesale Pricing: Column D (index 3) and Column H (index 7) have prices
+    await applyCurrencyFormat(sheets, 'Wholesale Pricing', [3, 7], 3);
+    
+    // Bank Transactions: Column E (Debit, index 4) and Column F (Credit, index 5)
+    await applyCurrencyFormat(sheets, 'Bank Transactions', [4, 5], 3);
+    
+    // Invoices: Column D (Total, index 3)
+    await applyCurrencyFormat(sheets, 'Invoices', [3], 3);
+    
+    // Retail Sales: Need to find columns dynamically based on header
+    try {
+      const retailResponse = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Retail Sales!A2:Z2'
+      });
+      const headerRow = retailResponse.data.values?.[0] || [];
+      
+      // Find product columns and total/fee/net columns
+      let productStartColIndex = -1;
+      let totalColIndex = -1;
+      
+      for (let i = 0; i < headerRow.length; i++) {
+        const header = headerRow[i];
+        if (header === 'Total Retail Sales') {
+          totalColIndex = i;
+          break;
+        }
+        if (header && header !== 'Date' && header !== '' && productStartColIndex === -1) {
+          productStartColIndex = i;
+        }
+      }
+      
+      if (productStartColIndex > -1 && totalColIndex > -1) {
+        // Build array of all money columns (products through net payout)
+        const moneyColumns = [];
+        for (let i = productStartColIndex; i <= totalColIndex + 2; i++) {
+          moneyColumns.push(i);
+        }
+        await applyCurrencyFormat(sheets, 'Retail Sales', moneyColumns, 3);
+      }
+    } catch (e) {
+      console.log('Retail Sales sheet not found or error:', e.message);
+    }
+    
+    console.log('✅ All sheets formatted with Calibri 11 and currency');
+  } catch (error) {
+    console.error('Format all sheets error:', error.message);
+  }
 }
 
 // ============ Inventory Sync with Google Sheets ============
@@ -2155,16 +2320,19 @@ app.post('/api/invoice/confirm', async (req, res) => {
     oauth2Client.setCredentials(userTokens);
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
 
-    // Record in Invoices sheet
+    // Record in Invoices sheet (store as number, format will display as currency)
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
       range: 'Invoices!B:E',
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
-        values: [[date, invoiceNumber, `$${parseFloat(total).toFixed(2)}`, '']]
+        values: [[date, invoiceNumber, parseFloat(total), '']]
       }
     });
+
+    // Apply currency format to Total column (column D, index 3)
+    await applyCurrencyFormat(sheets, 'Invoices', [3], 3);
 
     console.log(`✅ Invoice ${invoiceNumber} confirmed and recorded in spreadsheet`);
 
@@ -2575,6 +2743,9 @@ async function addBankTransaction(transaction) {
         values: [[date, description, category, debit || '', credit || '', '', notes || '']]
       }
     });
+
+    // Apply currency format to Debit (column E, index 4) and Credit (column F, index 5)
+    await applyCurrencyFormat(sheets, 'Bank Transactions', [4, 5], 3);
 
     console.log(`📊 Added transaction: ${description} (${category})`);
 
@@ -3860,6 +4031,47 @@ app.post('/api/retail/sales', async (req, res) => {
           data: updates
         }
       });
+      
+      // Apply currency formatting to money columns (products through net payout)
+      if (hasValidSalesData && totalColIndex > -1 && productStartColIndex > -1) {
+        // Get sheet ID for Retail Sales
+        const spreadsheet = await sheets.spreadsheets.get({
+          spreadsheetId: SPREADSHEET_ID
+        });
+        const retailSheet = spreadsheet.data.sheets.find(s => s.properties.title === 'Retail Sales');
+        
+        if (retailSheet) {
+          const sheetId = retailSheet.properties.sheetId;
+          const netColIndex = totalColIndex + 2;
+          
+          // Apply currency format to the row (product columns through net payout)
+          await sheets.spreadsheets.batchUpdate({
+            spreadsheetId: SPREADSHEET_ID,
+            requestBody: {
+              requests: [{
+                repeatCell: {
+                  range: {
+                    sheetId: sheetId,
+                    startRowIndex: rowIndex - 1, // 0-indexed
+                    endRowIndex: rowIndex,
+                    startColumnIndex: productStartColIndex,
+                    endColumnIndex: netColIndex + 1
+                  },
+                  cell: {
+                    userEnteredFormat: {
+                      numberFormat: {
+                        type: 'CURRENCY',
+                        pattern: '"$"#,##0.00'
+                      }
+                    }
+                  },
+                  fields: 'userEnteredFormat.numberFormat'
+                }
+              }]
+            }
+          });
+        }
+      }
     }
     
     res.json({ 
@@ -4141,6 +4353,21 @@ app.post('/api/retail/products/rename', async (req, res) => {
   } catch (error) {
     console.error('Rename product error:', error);
     res.status(500).json({ error: 'Failed to rename product: ' + error.message });
+  }
+});
+
+// Format all sheets with currency formatting
+app.post('/api/sheets/format-currency', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  try {
+    await formatAllSheetsCurrency();
+    res.json({ success: true, message: 'All sheets formatted with currency' });
+  } catch (error) {
+    console.error('Format currency error:', error);
+    res.status(500).json({ error: 'Failed to format sheets: ' + error.message });
   }
 });
 

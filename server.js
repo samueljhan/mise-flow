@@ -1142,7 +1142,7 @@ async function syncInventoryToSheets() {
     
     // GREEN COFFEE SECTION
     data.push(['', 'Green Coffee Inventory', '', '', '', '', '', '']);
-    data.push(['', 'Name', 'Weight (lb)', 'Roast Profile', 'Drop Temp', '', '', '']);
+    data.push(['', 'Name', 'Weight (lb)', 'Roast Profile', 'Drop Temperature', '', '', '']);
     greenCoffeeInventory.forEach(c => {
       data.push(['', c.name, c.weight, c.roastProfile || '', c.dropTemp || '', '', '', '']);
     });
@@ -3627,10 +3627,41 @@ app.get('/api/todo', async (req, res) => {
     oauth2Client.setCredentials(userTokens);
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
     
-    // 1. Check for low inventory (threshold: 50lb for green, 20lb for roasted)
-    const lowGreen = greenCoffeeInventory.filter(c => c.weight < 50);
+    // 1. Check for low inventory
+    // Green coffee thresholds: Brazil (low: 200lb, critical: 100lb), Others (low: 100lb, critical: 65lb)
+    // Roasted coffee threshold: 20lb
+    
+    const criticalGreen = [];
+    const lowGreen = [];
+    
+    greenCoffeeInventory.forEach(c => {
+      const isBrazil = c.name.toLowerCase().includes('brazil');
+      const criticalThreshold = isBrazil ? 100 : 65;
+      const lowThreshold = isBrazil ? 200 : 100;
+      
+      if (c.weight < criticalThreshold) {
+        criticalGreen.push({ ...c, status: 'critical' });
+      } else if (c.weight < lowThreshold) {
+        lowGreen.push({ ...c, status: 'low' });
+      }
+    });
+    
     const lowRoasted = roastedCoffeeInventory.filter(c => c.weight < 20);
     
+    // Critical inventory - highest priority
+    if (criticalGreen.length > 0) {
+      const criticalItems = criticalGreen.map(c => `${c.name} (${c.weight}lb)`);
+      todoItems.push({
+        type: 'buy_coffee',
+        priority: 'high',
+        title: '🔴 Green Coffee Critical - Reorder Now',
+        description: `Critically low: ${criticalItems.join(', ')}`,
+        items: criticalItems,
+        action: 'startRoastOrder'
+      });
+    }
+    
+    // Low inventory - medium priority
     if (lowGreen.length > 0 || lowRoasted.length > 0) {
       const lowItems = [];
       lowGreen.forEach(c => lowItems.push(`${c.name} (${c.weight}lb green)`));
@@ -3638,8 +3669,8 @@ app.get('/api/todo', async (req, res) => {
       
       todoItems.push({
         type: 'buy_coffee',
-        priority: 'high',
-        title: '☕ Buy Coffee - Low Inventory',
+        priority: 'medium',
+        title: '🟡 Low Inventory - Plan Reorder',
         description: `Low stock: ${lowItems.join(', ')}`,
         items: lowItems,
         action: 'startRoastOrder'

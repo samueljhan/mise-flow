@@ -2727,14 +2727,41 @@ app.get('/api/invoices/outstanding', async (req, res) => {
       
       // If no paid date, it's outstanding
       if (!paidDate || paidDate.trim() === '') {
+        // Extract customer code from invoice number (e.g., C-ABC-1000 -> ABC)
+        const codeMatch = invoiceNumber.match(/C-([A-Z]{3})-/);
+        const customerCode = codeMatch ? codeMatch[1] : null;
+        
+        // Find customer by code
+        let customerName = null;
+        let customerEmails = [];
+        if (customerCode) {
+          for (const [name, data] of Object.entries(customerDirectory)) {
+            if (data.code === customerCode) {
+              customerName = data.name;
+              customerEmails = data.emails || [];
+              break;
+            }
+          }
+        }
+        
         invoices.push({
           rowIndex: i + 1,
           date: row[1],
           invoiceNumber,
-          amount
+          amount,
+          customerCode,
+          customerName,
+          customerEmails
         });
       }
     }
+    
+    // Sort by customer name (alphabetically)
+    invoices.sort((a, b) => {
+      const nameA = (a.customerName || 'ZZZ').toLowerCase();
+      const nameB = (b.customerName || 'ZZZ').toLowerCase();
+      return nameA.localeCompare(nameB);
+    });
     
     res.json({ success: true, invoices });
     
@@ -2758,6 +2785,77 @@ app.post('/api/invoices/mark-paid', async (req, res) => {
   
   const result = await markInvoicePaid(invoiceNumber, paidDate || new Date().toLocaleDateString(), 'Manual');
   res.json(result);
+});
+
+// Send payment reminder for an outstanding invoice
+app.post('/api/invoices/send-reminder', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { invoiceNumber, customerName, customerEmails, amount, invoiceDate } = req.body;
+  
+  if (!invoiceNumber) {
+    return res.status(400).json({ error: 'Invoice number required' });
+  }
+  
+  if (!customerEmails || customerEmails.length === 0) {
+    return res.status(400).json({ error: 'No email address on file for this customer' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+    
+    const toAddress = customerEmails[0]; // Use first email
+    const subject = `Payment Reminder - Invoice ${invoiceNumber}`;
+    
+    const body = `Hi ${customerName || 'there'},
+
+This is a friendly reminder that invoice ${invoiceNumber} for ${amount} (dated ${invoiceDate}) is still outstanding.
+
+If you've already sent payment, please disregard this message. Otherwise, we'd appreciate payment at your earliest convenience.
+
+Please let us know if you have any questions.
+
+Thank you for your business!
+
+Best regards,
+Archives of Us Coffee`;
+
+    const emailContent = [
+      `To: ${toAddress}`,
+      `Subject: ${subject}`,
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      body
+    ].join('\n');
+    
+    const encodedEmail = Buffer.from(emailContent)
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    
+    await gmail.users.messages.send({
+      userId: 'me',
+      requestBody: {
+        raw: encodedEmail
+      }
+    });
+    
+    console.log(`📧 Sent payment reminder for ${invoiceNumber} to ${toAddress}`);
+    
+    res.json({ 
+      success: true, 
+      message: `Reminder sent to ${toAddress}`,
+      to: toAddress
+    });
+    
+  } catch (error) {
+    console.error('Send reminder error:', error);
+    res.status(500).json({ error: 'Failed to send reminder: ' + error.message });
+  }
 });
 
 // ============ Bank Transactions Sheet Sync ============

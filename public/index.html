@@ -2007,6 +2007,11 @@
                     html += `</div>`;
                 });
                 
+                // Add Done button
+                html += `<div style="margin-top: 16px;">`;
+                html += `<button class="action-btn" onclick="addFollowUpMessage()">Done</button>`;
+                html += `</div>`;
+                
                 content.innerHTML = html;
                 
             } catch (error) {
@@ -2077,20 +2082,83 @@
                 let html = `<div style="margin-bottom: 12px;"><strong>💰 Outstanding Invoices</strong></div>`;
                 
                 data.invoices.forEach(inv => {
-                    html += `<div style="background: #2a2a2a; border-radius: 8px; padding: 10px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">`;
+                    const emailsJson = JSON.stringify(inv.customerEmails || []).replace(/"/g, '&quot;');
+                    const hasEmail = inv.customerEmails && inv.customerEmails.length > 0;
+                    
+                    html += `<div style="background: #2a2a2a; border-radius: 8px; padding: 10px; margin-bottom: 8px;">`;
+                    html += `<div style="display: flex; justify-content: space-between; align-items: center;">`;
                     html += `<div>`;
                     html += `<div style="font-weight: 600;">${inv.invoiceNumber}</div>`;
-                    html += `<div style="color: #999; font-size: 12px;">${inv.date} • ${inv.amount}</div>`;
+                    html += `<div style="color: #999; font-size: 12px;">${inv.customerName || 'Unknown'} • ${inv.date} • ${inv.amount}</div>`;
                     html += `</div>`;
-                    html += `<button class="action-btn" onclick="markInvoicePaidPrompt('${inv.invoiceNumber}')" style="font-size: 11px; padding: 5px 10px; background: #4a6741;">Mark Paid</button>`;
+                    html += `<div style="display: flex; gap: 6px;">`;
+                    if (hasEmail) {
+                        html += `<button class="action-btn" onclick="sendInvoiceReminder('${inv.invoiceNumber}', '${inv.customerName || ''}', ${emailsJson}, '${inv.amount}', '${inv.date}')" style="font-size: 11px; padding: 5px 10px; background: #4a6741;">📧 Remind</button>`;
+                    } else {
+                        html += `<button class="action-btn" style="font-size: 11px; padding: 5px 10px; background: #555; cursor: not-allowed;" disabled title="No email on file">📧 No Email</button>`;
+                    }
+                    html += `<button class="action-btn" onclick="markInvoicePaidPrompt('${inv.invoiceNumber}')" style="font-size: 11px; padding: 5px 10px;">Mark Paid</button>`;
+                    html += `</div>`;
+                    html += `</div>`;
                     html += `</div>`;
                 });
+                
+                // Add navigation buttons
+                html += `<div style="display: flex; gap: 8px; margin-top: 16px;">`;
+                html += `<button class="action-btn" onclick="showToDo()">← Back to To Do</button>`;
+                html += `<button class="action-btn" onclick="addFollowUpMessage()">Done</button>`;
+                html += `</div>`;
                 
                 content.innerHTML = html;
                 
             } catch (error) {
                 console.error('Outstanding invoices error:', error);
                 addMessage('Error loading invoices: ' + error.message, false);
+            }
+        }
+        
+        async function sendInvoiceReminder(invoiceNumber, customerName, customerEmails, amount, invoiceDate) {
+            if (!customerEmails || customerEmails.length === 0) {
+                addMessage(`❌ No email on file for ${customerName || 'this customer'}. Please add an email first.`, false);
+                return;
+            }
+            
+            const confirmSend = confirm(`Send payment reminder for ${invoiceNumber} (${amount}) to ${customerEmails[0]}?`);
+            if (!confirmSend) return;
+            
+            try {
+                addMessage(`📧 Sending reminder to ${customerEmails[0]}...`, false);
+                
+                const response = await fetch('/api/invoices/send-reminder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        invoiceNumber,
+                        customerName,
+                        customerEmails,
+                        amount,
+                        invoiceDate
+                    })
+                });
+                
+                const data = await response.json();
+                
+                // Update the last message
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                if (data.success) {
+                    content.innerHTML = `<div style="color: #4a6741;">✅ Reminder sent to ${data.to}</div>`;
+                } else {
+                    content.innerHTML = `<div style="color: #ff6b6b;">❌ ${data.error}</div>`;
+                }
+                
+                addConversationalFollowUp('reminder_sent');
+                
+            } catch (error) {
+                console.error('Send reminder error:', error);
+                addMessage('Error sending reminder: ' + error.message, false);
             }
         }
         

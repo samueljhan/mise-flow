@@ -225,10 +225,11 @@
 
         .action-btn:hover { background: #505050; }
         .action-btn.success { background: #28a745; }
-        .action-btn:disabled { 
-            background: #333; 
-            color: #666; 
-            cursor: not-allowed; 
+        .action-btn:disabled, .action-btn.deactivated { 
+            background: #2a2a2a !important; 
+            color: #555 !important; 
+            cursor: not-allowed !important;
+            pointer-events: none;
         }
 
         /* Email Modal */
@@ -2773,6 +2774,21 @@
         function addMessage(text, isUser) {
             const welcomeMsg = chatContainer.querySelector('.welcome-message');
             if (welcomeMsg) welcomeMsg.remove();
+
+            // Before adding a new assistant message, deactivate buttons in all previous assistant messages
+            if (!isUser) {
+                const previousMessages = chatContainer.querySelectorAll('.message.assistant');
+                previousMessages.forEach(msg => {
+                    const buttons = msg.querySelectorAll('.action-btn:not([disabled])');
+                    buttons.forEach(btn => {
+                        btn.disabled = true;
+                        btn.style.background = '#2a2a2a';
+                        btn.style.color = '#555';
+                        btn.style.cursor = 'not-allowed';
+                        btn.onclick = null;
+                    });
+                });
+            }
 
             const messageDiv = document.createElement('div');
             messageDiv.className = 'message ' + (isUser ? 'user' : 'assistant');

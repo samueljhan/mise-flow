@@ -589,7 +589,7 @@ async function buildSheetContextForChatGPT() {
       const [inventoryData, invoicesData] = await Promise.all([
         sheets.spreadsheets.values.get({
           spreadsheetId: SPREADSHEET_ID,
-          range: 'Inventory!A:G'
+          range: 'Inventory!A:J'
         }).catch(() => ({ data: { values: [] } })),
         sheets.spreadsheets.values.get({
           spreadsheetId: SPREADSHEET_ID,
@@ -819,35 +819,55 @@ let greenCoffeeInventory = [
     name: 'Colombia Antioquia',
     weight: 100,
     roastProfile: '122302',
-    dropTemp: 410
+    dropTemp: 410,
+    origin: 'Colombia',
+    lotNumber: '',
+    supplier: '',
+    notes: ''
   },
   {
     id: 'ethiopia-gera-58484',
     name: 'Ethiopia Gera 58484',
     weight: 50,
     roastProfile: '061901',
-    dropTemp: 414
+    dropTemp: 414,
+    origin: 'Ethiopia',
+    lotNumber: '58484',
+    supplier: '',
+    notes: ''
   },
   {
     id: 'ethiopia-gera-58479',
     name: 'Ethiopia Gera 58479',
     weight: 50,
     roastProfile: '061901',
-    dropTemp: 414
+    dropTemp: 414,
+    origin: 'Ethiopia',
+    lotNumber: '58479',
+    supplier: '',
+    notes: ''
   },
   {
     id: 'brazil-mogiano',
     name: 'Brazil Mogiano',
     weight: 400,
     roastProfile: '199503',
-    dropTemp: 419
+    dropTemp: 419,
+    origin: 'Brazil',
+    lotNumber: '',
+    supplier: '',
+    notes: ''
   },
   {
     id: 'ethiopia-yirgacheffe',
     name: 'Ethiopia Yirgacheffe',
     weight: 100,
     roastProfile: '141402',
-    dropTemp: 415
+    dropTemp: 415,
+    origin: 'Ethiopia',
+    lotNumber: '',
+    supplier: '',
+    notes: ''
   }
 ];
 
@@ -860,38 +880,48 @@ let roastedCoffeeInventory = [
     name: 'Archives Blend',
     weight: 150,
     type: 'Blend',
+    roastLevel: 'Medium',
     recipe: [
       { greenCoffeeId: 'brazil-mogiano', name: 'Brazil Mogiano', percentage: 66.6667 },
       { greenCoffeeId: 'ethiopia-yirgacheffe', name: 'Ethiopia Yirgacheffe', percentage: 33.3333 }
-    ]
+    ],
+    specialInstructions: '',
+    notes: ''
   },
   {
     id: 'ethiopia-gera-roasted',
     name: 'Ethiopia Gera',
     weight: 40,
     type: 'Single Origin',
-    // Special: Ethiopia Gera uses TWO lots split 50/50 per batch
+    roastLevel: 'Light',
     recipe: [
       { greenCoffeeId: 'ethiopia-gera-58484', name: 'Ethiopia Gera 58484', percentage: 50 },
       { greenCoffeeId: 'ethiopia-gera-58479', name: 'Ethiopia Gera 58479', percentage: 50 }
     ],
-    specialInstructions: 'Split 50/50 between lot 58484 and 58479 for each batch'
+    specialInstructions: 'Split 50/50 between lot 58484 and 58479 for each batch',
+    notes: ''
   },
   {
     id: 'colombia-excelso',
     name: 'Colombia Excelso',
     weight: 50,
     type: 'Single Origin',
+    roastLevel: 'Medium',
     recipe: [
       { greenCoffeeId: 'colombia-antioquia', name: 'Colombia Antioquia', percentage: 100 }
-    ]
+    ],
+    specialInstructions: '',
+    notes: ''
   },
   {
     id: 'colombia-decaf',
     name: 'Colombia Decaf',
     weight: 30,
     type: 'Private Label',
-    recipe: null // N/A - no green coffee inventory for private label
+    roastLevel: '',
+    recipe: null,
+    specialInstructions: '',
+    notes: ''
   }
 ];
 
@@ -1141,21 +1171,21 @@ async function syncInventoryToSheets() {
     data.push(['', '', '', '', '', '', '', '']);
     
     // GREEN COFFEE SECTION
-    data.push(['', 'Green Coffee Inventory', '', '', '', '', '', '']);
-    data.push(['', 'Name', 'Weight (lb)', 'Roast Profile', 'Drop Temperature', '', '', '']);
+    data.push(['', 'Green Coffee Inventory', '', '', '', '', '', '', '']);
+    data.push(['', 'Name', 'Weight (lb)', 'Roast Profile', 'Drop Temperature', 'Origin', 'Lot Number', 'Supplier', 'Notes']);
     greenCoffeeInventory.forEach(c => {
-      data.push(['', c.name, c.weight, c.roastProfile || '', c.dropTemp || '', '', '', '']);
+      data.push(['', c.name, c.weight, c.roastProfile || '', c.dropTemp || '', c.origin || '', c.lotNumber || '', c.supplier || '', c.notes || '']);
     });
     
     // Empty row
-    data.push(['', '', '', '', '', '', '', '']);
+    data.push(['', '', '', '', '', '', '', '', '']);
     
     // ROASTED COFFEE SECTION
-    data.push(['', 'Roasted Coffee Inventory', '', '', '', '', '', '']);
-    data.push(['', 'Name', 'Weight (lb)', 'Type', 'Recipe', '', '', '']);
+    data.push(['', 'Roasted Coffee Inventory', '', '', '', '', '', '', '']);
+    data.push(['', 'Name', 'Weight (lb)', 'Type', 'Roast Level', 'Recipe', 'Special Instructions', 'Notes', '']);
     roastedCoffeeInventory.forEach(c => {
       const recipe = c.recipe ? c.recipe.map(r => `${r.percentage}% ${r.name}`).join(' + ') : 'N/A';
-      data.push(['', c.name, c.weight, c.type || '', recipe, '', '', '']);
+      data.push(['', c.name, c.weight, c.type || '', c.roastLevel || '', recipe, c.specialInstructions || '', c.notes || '', '']);
     });
     
     // Empty row
@@ -1193,7 +1223,7 @@ async function syncInventoryToSheets() {
     // Clear and write to Inventory sheet
     await sheets.spreadsheets.values.clear({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Inventory!A:G'
+      range: 'Inventory!A:J'
     }).catch(() => {}); // Ignore if sheet doesn't exist
 
     await sheets.spreadsheets.values.update({
@@ -1241,7 +1271,7 @@ async function loadInventoryFromSheets() {
 
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Inventory!A:H'  // Read extra columns to handle various formats
+      range: 'Inventory!A:J'  // Read extra columns to handle all fields
     });
     
     const rows = response.data.values || [];
@@ -1310,10 +1340,15 @@ async function loadInventoryFromSheets() {
           name: row[1],
           weight: parseFloat(row[2]) || 0,
           roastProfile: String(row[3] || '').replace(/\.0$/, ''), // Remove trailing .0
-          dropTemp: parseFloat(row[4]) || 0
+          dropTemp: parseFloat(row[4]) || 0,
+          origin: row[5] || '',
+          lotNumber: row[6] || '',
+          supplier: row[7] || '',
+          notes: row[8] || ''
         });
       } else if (currentSection === 'roasted' && row[1]) {
-        const recipeStr = row[4] || '';
+        // Column order: B=Name, C=Weight, D=Type, E=RoastLevel, F=Recipe, G=SpecialInstructions, H=Notes
+        const recipeStr = row[5] || '';
         const recipe = parseRecipeString(recipeStr);
         
         // Determine type based on recipe or column value
@@ -1327,7 +1362,10 @@ async function loadInventoryFromSheets() {
           name: row[1],
           weight: parseFloat(row[2]) || 0,
           type: type,
-          recipe: recipe
+          roastLevel: row[4] || '',
+          recipe: recipe,
+          specialInstructions: row[6] || '',
+          notes: row[7] || ''
         });
       } else if (currentSection === 'enroute' && row[1]) {
         // Current format: B=ID, C=Name, D=Weight, E=Tracking, F=Date, G=Est
@@ -4695,7 +4733,7 @@ app.get('/api/inventory/green', async (req, res) => {
 // Update green coffee inventory
 app.post('/api/inventory/green/update', async (req, res) => {
   await ensureFreshInventory();
-  const { id, weight, roastProfile, dropTemp } = req.body;
+  const { id, name, weight, roastProfile, dropTemp, origin, lotNumber, supplier, notes } = req.body;
   const coffee = greenCoffeeInventory.find(c => c.id === id);
   if (!coffee) {
     return res.status(404).json({ error: 'Green coffee not found' });
@@ -4708,9 +4746,14 @@ app.post('/api/inventory/green/update', async (req, res) => {
       message: `Cannot set negative inventory. Current ${coffee.name} weight is ${coffee.weight}lb. What would you like to do?`
     });
   }
+  if (name !== undefined) coffee.name = name;
   if (weight !== undefined) coffee.weight = weight;
   if (roastProfile !== undefined) coffee.roastProfile = roastProfile;
   if (dropTemp !== undefined) coffee.dropTemp = dropTemp;
+  if (origin !== undefined) coffee.origin = origin;
+  if (lotNumber !== undefined) coffee.lotNumber = lotNumber;
+  if (supplier !== undefined) coffee.supplier = supplier;
+  if (notes !== undefined) coffee.notes = notes;
   await syncInventoryToSheets();
   res.json({ success: true, coffee, message: `${coffee.name} updated to ${coffee.weight}lb. What else can I help you with?` });
 });
@@ -4718,12 +4761,12 @@ app.post('/api/inventory/green/update', async (req, res) => {
 // Add new green coffee
 app.post('/api/inventory/green/add', async (req, res) => {
   await ensureFreshInventory();
-  const { name, weight, roastProfile, dropTemp } = req.body;
+  const { name, weight, roastProfile, dropTemp, origin, lotNumber, supplier, notes } = req.body;
   const id = name.toLowerCase().replace(/\s+/g, '-');
   if (greenCoffeeInventory.find(c => c.id === id)) {
     return res.status(400).json({ error: 'Coffee already exists' });
   }
-  const newCoffee = { id, name, weight, roastProfile, dropTemp };
+  const newCoffee = { id, name, weight, roastProfile, dropTemp, origin, lotNumber, supplier, notes };
   greenCoffeeInventory.push(newCoffee);
   await syncInventoryToSheets();
   res.json({ success: true, coffee: newCoffee });
@@ -4751,7 +4794,7 @@ app.get('/api/inventory/roasted', async (req, res) => {
 // Update roasted coffee inventory
 app.post('/api/inventory/roasted/update', async (req, res) => {
   await ensureFreshInventory();
-  const { id, weight, type, recipe } = req.body;
+  const { id, name, weight, type, roastLevel, recipe, specialInstructions, notes } = req.body;
   const coffee = roastedCoffeeInventory.find(c => c.id === id);
   if (!coffee) {
     return res.status(404).json({ error: 'Roasted coffee not found' });
@@ -4764,9 +4807,13 @@ app.post('/api/inventory/roasted/update', async (req, res) => {
       message: `Cannot set negative inventory. Current ${coffee.name} weight is ${coffee.weight}lb. What would you like to do?`
     });
   }
+  if (name !== undefined) coffee.name = name;
   if (weight !== undefined) coffee.weight = weight;
   if (type !== undefined) coffee.type = type;
+  if (roastLevel !== undefined) coffee.roastLevel = roastLevel;
   if (recipe !== undefined) coffee.recipe = recipe;
+  if (specialInstructions !== undefined) coffee.specialInstructions = specialInstructions;
+  if (notes !== undefined) coffee.notes = notes;
   await syncInventoryToSheets();
   res.json({ success: true, coffee, message: `${coffee.name} updated to ${coffee.weight}lb. What else can I help you with?` });
 });
@@ -4774,9 +4821,9 @@ app.post('/api/inventory/roasted/update', async (req, res) => {
 // Add new roasted coffee
 app.post('/api/inventory/roasted/add', async (req, res) => {
   await ensureFreshInventory();
-  const { name, weight, type, recipe } = req.body;
+  const { name, weight, type, roastLevel, recipe, specialInstructions, notes } = req.body;
   const id = name.toLowerCase().replace(/\s+/g, '-') + '-roasted';
-  const newCoffee = { id, name, weight, type, recipe };
+  const newCoffee = { id, name, weight, type, roastLevel, recipe, specialInstructions, notes };
   roastedCoffeeInventory.push(newCoffee);
   await syncInventoryToSheets();
   res.json({ success: true, coffee: newCoffee });

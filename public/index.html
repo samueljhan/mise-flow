@@ -644,6 +644,10 @@
                         <strong>🛒 Manage Retail</strong>
                         <span>Update retail coffee bag sales</span>
                     </div>
+                    <div class="example-prompt" onclick="showForecast()">
+                        <strong>📊 Forecast</strong>
+                        <span>Sales analytics and inventory predictions</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2116,6 +2120,125 @@
             }
         }
 
+        // ============ Forecast Feature ============
+        
+        async function showForecast() {
+            // Clear welcome message
+            const welcomeMsg = chatContainer.querySelector('.welcome-message');
+            if (welcomeMsg) welcomeMsg.remove();
+            
+            addMessage('Generating forecast and analytics...', false);
+            
+            try {
+                const response = await fetch('/api/forecast');
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to generate forecast');
+                }
+                
+                const forecast = data.forecast;
+                
+                // Get the last message and update it
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                let html = '<div style="margin-bottom: 16px;"><strong>📊 Business Forecast</strong></div>';
+                
+                // Sales Summary
+                html += '<div style="background: #2a2a2a; border-radius: 8px; padding: 12px; margin-bottom: 12px;">';
+                html += '<div style="font-weight: 600; margin-bottom: 8px; color: #4a9eff;">💰 Sales Analytics</div>';
+                html += '<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 13px;">';
+                html += `<div>Wholesale Avg/Week: <strong>$${forecast.salesAnalytics.wholesale.avgWeeklySales.toFixed(0)}</strong></div>`;
+                html += `<div>Retail Avg/Week: <strong>$${forecast.salesAnalytics.retail.avgWeeklySales.toFixed(0)}</strong></div>`;
+                html += `<div>Est. Lbs Sold/Week: <strong>${forecast.salesAnalytics.wholesale.estimatedLbsPerWeek} lb</strong></div>`;
+                html += `<div>Wholesale Avg/Month: <strong>$${forecast.salesAnalytics.wholesale.avgMonthlySales.toFixed(0)}</strong></div>`;
+                html += '</div>';
+                html += '</div>';
+                
+                // Inventory Predictions - Roasted
+                html += '<div style="background: #2a2a2a; border-radius: 8px; padding: 12px; margin-bottom: 12px;">';
+                html += '<div style="font-weight: 600; margin-bottom: 8px; color: #f0ad4e;">☕ Roasted Coffee Forecast</div>';
+                html += '<div style="font-size: 13px;">';
+                Object.entries(forecast.inventoryPredictions.roasted).forEach(([name, pred]) => {
+                    const statusIcon = pred.status === 'critical' ? '🔴' : pred.status === 'low' ? '🟡' : '🟢';
+                    html += `<div style="display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #333;">`;
+                    html += `<span>${statusIcon} ${name}</span>`;
+                    html += `<span>${pred.currentStock}lb • ~${pred.estimatedWeeklyUsage}lb/wk • ${pred.weeksRemaining}wk left</span>`;
+                    html += `</div>`;
+                });
+                html += '</div>';
+                html += '</div>';
+                
+                // Inventory Predictions - Green
+                html += '<div style="background: #2a2a2a; border-radius: 8px; padding: 12px; margin-bottom: 12px;">';
+                html += '<div style="font-weight: 600; margin-bottom: 8px; color: #4a6741;">🌱 Green Coffee Forecast</div>';
+                html += '<div style="font-size: 13px;">';
+                Object.entries(forecast.inventoryPredictions.green).forEach(([name, pred]) => {
+                    const statusIcon = pred.status === 'critical' ? '🔴' : pred.status === 'low' ? '🟡' : '🟢';
+                    html += `<div style="display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #333;">`;
+                    html += `<span>${statusIcon} ${name}</span>`;
+                    html += `<span>${pred.currentStock}lb • ~${pred.estimatedWeeklyUsage}lb/wk • ${pred.weeksRemaining}wk left</span>`;
+                    html += `</div>`;
+                });
+                html += '</div>';
+                html += '</div>';
+                
+                // Recommendations
+                if (forecast.recommendations.length > 0) {
+                    html += '<div style="background: #2a2a2a; border-radius: 8px; padding: 12px; margin-bottom: 12px;">';
+                    html += '<div style="font-weight: 600; margin-bottom: 8px; color: #ff6b6b;">⚡ Recommendations</div>';
+                    html += '<div style="font-size: 13px;">';
+                    forecast.recommendations.forEach(rec => {
+                        const icon = rec.priority === 'high' ? '🔴' : rec.priority === 'medium' ? '🟡' : '🟢';
+                        html += `<div style="padding: 4px 0;">${icon} ${rec.message}</div>`;
+                        if (rec.suggestedQuantity) {
+                            html += `<div style="padding-left: 20px; color: #888;">→ Suggested: ${rec.suggestedQuantity} lb</div>`;
+                        }
+                    });
+                    html += '</div>';
+                    html += '</div>';
+                } else {
+                    html += '<div style="background: #2a3a2a; border-radius: 8px; padding: 12px; margin-bottom: 12px; color: #4a6741;">';
+                    html += '✅ All inventory levels healthy - no immediate orders needed';
+                    html += '</div>';
+                }
+                
+                // Link to sheet
+                html += '<div style="margin-top: 12px; font-size: 12px; color: #888;">';
+                html += '📄 Full forecast written to Google Sheet "Forecast" tab';
+                html += '</div>';
+                
+                content.innerHTML = html;
+                
+                // Add follow-up buttons
+                setTimeout(() => {
+                    addForecastFollowUp();
+                }, 100);
+                
+            } catch (error) {
+                console.error('Forecast error:', error);
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML = `<div style="color: #ff6b6b;">Error generating forecast: ${error.message}</div>`;
+                }
+            }
+        }
+        
+        function addForecastFollowUp() {
+            let html = '<div style="margin-bottom: 12px;">What would you like to do next?</div>';
+            html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
+            html += '<button class="action-btn" onclick="startRoastOrder()">🔥 Order Roast</button>';
+            html += '<button class="action-btn" onclick="checkCurrentInventory()">☕ Check Inventory</button>';
+            html += '<button class="action-btn" onclick="addFollowUpMessage()">Something Else</button>';
+            html += '</div>';
+            
+            addMessage(html, false);
+        }
+
         // ============ En Route Modal ============
 
         async function viewEnRoute() {
@@ -3044,6 +3167,15 @@
                         messages[messages.length - 1].remove();
                     }
                     showToDo();
+                    return null;
+                }
+                
+                if (data.action === 'show_forecast') {
+                    const messages = chatContainer.querySelectorAll('.message');
+                    if (messages.length > 0) {
+                        messages[messages.length - 1].remove();
+                    }
+                    showForecast();
                     return null;
                 }
                 

@@ -3123,6 +3123,23 @@ app.post('/api/process', async (req, res) => {
       });
     }
     
+    // Handle forecast commands
+    if (textLower === 'forecast' ||
+        textLower === 'analytics' ||
+        textLower.includes('forecast') ||
+        textLower.includes('analytics') ||
+        textLower.includes('predictions') ||
+        textLower.includes('sales report') ||
+        textLower.includes('business report') ||
+        textLower.includes('how are sales') ||
+        textLower.includes('sales trends')) {
+      return res.json({
+        response: null,
+        action: 'show_forecast',
+        showFollowUp: false
+      });
+    }
+    
     // Only handle simple yes/no/thanks without AI (for speed)
     if (textLower === 'yes' || textLower === 'yeah' || textLower === 'yep') {
       if (conversationState === 'waiting_for_new_customer_confirmation') {
@@ -3667,6 +3684,528 @@ app.get('/api/todo', async (req, res) => {
     res.status(500).json({ error: 'Failed to get to do items: ' + error.message });
   }
 });
+
+// ============ Forecast Feature ============
+
+// Generate forecast and analytics
+app.get('/api/forecast', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  await ensureFreshInventory();
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    const forecast = {
+      generatedAt: new Date().toISOString(),
+      currentInventory: {
+        green: greenCoffeeInventory,
+        roasted: roastedCoffeeInventory,
+        enRoute: enRouteCoffeeInventory
+      },
+      salesAnalytics: {},
+      inventoryPredictions: {},
+      recommendations: []
+    };
+    
+    // 1. Get Invoice history for wholesale sales analysis
+    let invoiceData = [];
+    try {
+      const invoicesResponse = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Invoices!A:F'
+      });
+      invoiceData = invoicesResponse.data.values || [];
+    } catch (e) {
+      console.log('Could not read Invoices sheet:', e.message);
+    }
+    
+    // 2. Get Retail Sales history
+    let retailData = [];
+    let retailHeaders = [];
+    try {
+      const retailResponse = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Retail Sales!A:Z',
+        valueRenderOption: 'UNFORMATTED_VALUE'
+      });
+      retailData = retailResponse.data.values || [];
+      retailHeaders = retailData[1] || [];
+    } catch (e) {
+      console.log('Could not read Retail Sales sheet:', e.message);
+    }
+    
+    // 3. Analyze wholesale invoices
+    const wholesaleSales = [];
+    const salesByProduct = {};
+    const salesByCustomer = {};
+    const salesByWeek = {};
+    const salesByMonth = {};
+    
+    for (let i = 2; i < invoiceData.length; i++) {
+      const row = invoiceData[i];
+      if (!row || !row[1] || !row[3]) continue;
+      
+      const dateStr = row[1];
+      const invoiceNumber = row[2];
+      const amountStr = row[3];
+      const paidDate = row[4];
+      
+      // Parse amount (remove $ and parse)
+      const amount = parseFloat(String(amountStr).replace(/[$,]/g, '')) || 0;
+      
+      // Parse date
+      let date;
+      try {
+        date = new Date(dateStr);
+        if (isNaN(date.getTime())) continue;
+      } catch (e) {
+        continue;
+      }
+      
+      wholesaleSales.push({
+        date,
+        invoiceNumber,
+        amount,
+        paid: !!paidDate
+      });
+      
+      // Group by week
+      const weekStart = new Date(date);
+      weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+      const weekKey = weekStart.toISOString().split('T')[0];
+      salesByWeek[weekKey] = (salesByWeek[weekKey] || 0) + amount;
+      
+      // Group by month
+      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+      salesByMonth[monthKey] = (salesByMonth[monthKey] || 0) + amount;
+    }
+    
+    // 4. Analyze retail sales
+    let totalColIndex = -1;
+    let productStartIndex = -1;
+    let productEndIndex = -1;
+    
+    for (let i = 0; i < retailHeaders.length; i++) {
+      if (retailHeaders[i] === 'Total Retail Sales') {
+        totalColIndex = i;
+        productEndIndex = i - 1;
+        break;
+      }
+      if (retailHeaders[i] && retailHeaders[i] !== 'Date' && retailHeaders[i] !== '' && productStartIndex === -1) {
+        productStartIndex = i;
+      }
+    }
+    
+    const retailByWeek = [];
+    const retailByProduct = {};
+    
+    for (let i = 2; i < retailData.length; i++) {
+      const row = retailData[i];
+      if (!row || !row[1]) continue;
+      
+      const dateRange = row[1];
+      const totalSales = totalColIndex > -1 ? (parseFloat(row[totalColIndex]) || 0) : 0;
+      
+      retailByWeek.push({
+        dateRange,
+        totalSales
+      });
+      
+      // Track by product
+      if (productStartIndex > -1 && productEndIndex > -1) {
+        for (let j = productStartIndex; j <= productEndIndex; j++) {
+          const productName = retailHeaders[j];
+          const productSales = parseFloat(row[j]) || 0;
+          if (productName && productSales > 0) {
+            if (!retailByProduct[productName]) {
+              retailByProduct[productName] = { total: 0, weeks: 0 };
+            }
+            retailByProduct[productName].total += productSales;
+            retailByProduct[productName].weeks++;
+          }
+        }
+      }
+    }
+    
+    // 5. Calculate averages and trends
+    const recentWeeks = Object.entries(salesByWeek)
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .slice(0, 8);
+    
+    const avgWeeklySales = recentWeeks.length > 0 
+      ? recentWeeks.reduce((sum, [, val]) => sum + val, 0) / recentWeeks.length 
+      : 0;
+    
+    const recentMonths = Object.entries(salesByMonth)
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .slice(0, 3);
+    
+    const avgMonthlySales = recentMonths.length > 0
+      ? recentMonths.reduce((sum, [, val]) => sum + val, 0) / recentMonths.length
+      : 0;
+    
+    const avgRetailWeekly = retailByWeek.length > 0
+      ? retailByWeek.slice(-8).reduce((sum, w) => sum + w.totalSales, 0) / Math.min(retailByWeek.length, 8)
+      : 0;
+    
+    // 6. Estimate pounds sold per week (based on average price per lb ~$10-12)
+    const avgPricePerLb = 11; // Approximate
+    const estimatedLbsPerWeek = avgWeeklySales / avgPricePerLb;
+    
+    // 7. Calculate inventory predictions
+    const inventoryPredictions = {};
+    
+    roastedCoffeeInventory.forEach(coffee => {
+      // Estimate this coffee's share of sales (simplified - assume even distribution)
+      const coffeeCount = roastedCoffeeInventory.length || 1;
+      const estimatedWeeklyUsage = estimatedLbsPerWeek / coffeeCount;
+      const weeksRemaining = estimatedWeeklyUsage > 0 ? Math.floor(coffee.weight / estimatedWeeklyUsage) : 99;
+      
+      inventoryPredictions[coffee.name] = {
+        currentStock: coffee.weight,
+        estimatedWeeklyUsage: Math.round(estimatedWeeklyUsage),
+        weeksRemaining,
+        reorderDate: weeksRemaining < 99 ? addBusinessDays(new Date(), weeksRemaining * 7 - 14) : null,
+        status: weeksRemaining <= 2 ? 'critical' : weeksRemaining <= 4 ? 'low' : 'ok'
+      };
+    });
+    
+    // 8. Green coffee predictions (based on roasted usage * 1.18 for shrinkage)
+    const greenPredictions = {};
+    greenCoffeeInventory.forEach(green => {
+      // Find related roasted coffees
+      const relatedRoasted = roastedCoffeeInventory.filter(r => {
+        const gName = green.name.toLowerCase();
+        const rName = r.name.toLowerCase();
+        return rName.includes(gName.split(' ')[0]) || gName.includes(rName.split(' ')[0]);
+      });
+      
+      let estimatedWeeklyGreenUsage = 0;
+      relatedRoasted.forEach(r => {
+        const pred = inventoryPredictions[r.name];
+        if (pred) {
+          estimatedWeeklyGreenUsage += (pred.estimatedWeeklyUsage || 0) * 1.18; // Green to roasted ratio
+        }
+      });
+      
+      if (estimatedWeeklyGreenUsage === 0) {
+        estimatedWeeklyGreenUsage = estimatedLbsPerWeek * 1.18 / (greenCoffeeInventory.length || 1);
+      }
+      
+      const weeksRemaining = estimatedWeeklyGreenUsage > 0 ? Math.floor(green.weight / estimatedWeeklyGreenUsage) : 99;
+      
+      greenPredictions[green.name] = {
+        currentStock: green.weight,
+        estimatedWeeklyUsage: Math.round(estimatedWeeklyGreenUsage),
+        weeksRemaining,
+        reorderDate: weeksRemaining < 99 ? addBusinessDays(new Date(), weeksRemaining * 7 - 21) : null, // Order 3 weeks before
+        status: weeksRemaining <= 3 ? 'critical' : weeksRemaining <= 6 ? 'low' : 'ok'
+      };
+    });
+    
+    // 9. Generate recommendations
+    const recommendations = [];
+    
+    // Roasted coffee recommendations
+    Object.entries(inventoryPredictions).forEach(([name, pred]) => {
+      if (pred.status === 'critical') {
+        recommendations.push({
+          priority: 'high',
+          type: 'order_roast',
+          message: `Order ${name} immediately - only ${pred.weeksRemaining} week(s) of stock remaining`,
+          suggestedQuantity: Math.ceil(pred.estimatedWeeklyUsage * 4) // 4 weeks supply
+        });
+      } else if (pred.status === 'low') {
+        recommendations.push({
+          priority: 'medium',
+          type: 'order_roast',
+          message: `Plan to order ${name} soon - ${pred.weeksRemaining} weeks of stock remaining`,
+          suggestedQuantity: Math.ceil(pred.estimatedWeeklyUsage * 4)
+        });
+      }
+    });
+    
+    // Green coffee recommendations
+    Object.entries(greenPredictions).forEach(([name, pred]) => {
+      if (pred.status === 'critical') {
+        recommendations.push({
+          priority: 'high',
+          type: 'buy_green',
+          message: `Order ${name} green beans immediately - only ${pred.weeksRemaining} week(s) of stock remaining`,
+          suggestedQuantity: Math.ceil(pred.estimatedWeeklyUsage * 8) // 8 weeks supply
+        });
+      } else if (pred.status === 'low') {
+        recommendations.push({
+          priority: 'medium',
+          type: 'buy_green',
+          message: `Plan to order ${name} green beans - ${pred.weeksRemaining} weeks of stock remaining`,
+          suggestedQuantity: Math.ceil(pred.estimatedWeeklyUsage * 8)
+        });
+      }
+    });
+    
+    // Sort recommendations by priority
+    recommendations.sort((a, b) => {
+      const order = { high: 0, medium: 1, low: 2 };
+      return order[a.priority] - order[b.priority];
+    });
+    
+    // 10. Build forecast object
+    forecast.salesAnalytics = {
+      wholesale: {
+        totalInvoices: wholesaleSales.length,
+        avgWeeklySales: Math.round(avgWeeklySales * 100) / 100,
+        avgMonthlySales: Math.round(avgMonthlySales * 100) / 100,
+        estimatedLbsPerWeek: Math.round(estimatedLbsPerWeek),
+        recentWeeks: recentWeeks.map(([week, amount]) => ({ week, amount: Math.round(amount * 100) / 100 })),
+        recentMonths: recentMonths.map(([month, amount]) => ({ month, amount: Math.round(amount * 100) / 100 }))
+      },
+      retail: {
+        avgWeeklySales: Math.round(avgRetailWeekly * 100) / 100,
+        recentWeeks: retailByWeek.slice(-8).map(w => ({
+          dateRange: w.dateRange,
+          totalSales: Math.round(w.totalSales * 100) / 100
+        })),
+        byProduct: Object.entries(retailByProduct).map(([name, data]) => ({
+          product: name,
+          totalSales: Math.round(data.total * 100) / 100,
+          avgPerWeek: Math.round((data.total / data.weeks) * 100) / 100
+        }))
+      }
+    };
+    
+    forecast.inventoryPredictions = {
+      roasted: inventoryPredictions,
+      green: greenPredictions
+    };
+    
+    forecast.recommendations = recommendations;
+    
+    // 11. Write forecast to Google Sheet
+    await writeForecastToSheet(sheets, forecast);
+    
+    res.json({ success: true, forecast });
+    
+  } catch (error) {
+    console.error('Forecast error:', error);
+    res.status(500).json({ error: 'Failed to generate forecast: ' + error.message });
+  }
+});
+
+// Helper: Add business days to date
+function addBusinessDays(date, days) {
+  const result = new Date(date);
+  let added = 0;
+  while (added < days) {
+    result.setDate(result.getDate() + 1);
+    if (result.getDay() !== 0 && result.getDay() !== 6) {
+      added++;
+    }
+  }
+  return result.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+}
+
+// Write forecast to Google Sheet
+async function writeForecastToSheet(sheets, forecast) {
+  const timestamp = new Date().toLocaleString('en-US', {
+    timeZone: 'America/Los_Angeles',
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
+  
+  // Build sheet data
+  const data = [
+    ['MISE FLOW FORECAST', '', '', ''],
+    [`Generated: ${timestamp}`, '', '', ''],
+    ['', '', '', ''],
+    ['═══════════════════════════════════════════════════════════════', '', '', ''],
+    ['SALES ANALYTICS', '', '', ''],
+    ['═══════════════════════════════════════════════════════════════', '', '', ''],
+    ['', '', '', ''],
+    ['Wholesale Sales', '', '', ''],
+    ['─────────────────────────────────────────', '', '', ''],
+    ['Avg Weekly Sales', `$${forecast.salesAnalytics.wholesale.avgWeeklySales.toFixed(2)}`, '', ''],
+    ['Avg Monthly Sales', `$${forecast.salesAnalytics.wholesale.avgMonthlySales.toFixed(2)}`, '', ''],
+    ['Est. Lbs Sold/Week', `${forecast.salesAnalytics.wholesale.estimatedLbsPerWeek} lb`, '', ''],
+    ['', '', '', ''],
+    ['Recent Weekly Sales:', '', '', ''],
+  ];
+  
+  forecast.salesAnalytics.wholesale.recentWeeks.forEach(w => {
+    data.push(['', w.week, `$${w.amount.toFixed(2)}`, '']);
+  });
+  
+  data.push(['', '', '', '']);
+  data.push(['Retail Sales', '', '', '']);
+  data.push(['─────────────────────────────────────────', '', '', '']);
+  data.push(['Avg Weekly Sales', `$${forecast.salesAnalytics.retail.avgWeeklySales.toFixed(2)}`, '', '']);
+  data.push(['', '', '', '']);
+  data.push(['Recent Weekly Sales:', '', '', '']);
+  
+  forecast.salesAnalytics.retail.recentWeeks.forEach(w => {
+    data.push(['', w.dateRange, `$${w.totalSales.toFixed(2)}`, '']);
+  });
+  
+  if (forecast.salesAnalytics.retail.byProduct.length > 0) {
+    data.push(['', '', '', '']);
+    data.push(['Sales by Product:', '', '', '']);
+    forecast.salesAnalytics.retail.byProduct.forEach(p => {
+      data.push(['', p.product, `$${p.totalSales.toFixed(2)} total`, `$${p.avgPerWeek.toFixed(2)}/week`]);
+    });
+  }
+  
+  data.push(['', '', '', '']);
+  data.push(['═══════════════════════════════════════════════════════════════', '', '', '']);
+  data.push(['INVENTORY PREDICTIONS', '', '', '']);
+  data.push(['═══════════════════════════════════════════════════════════════', '', '', '']);
+  data.push(['', '', '', '']);
+  data.push(['Roasted Coffee', 'Current Stock', 'Weekly Usage', 'Weeks Left', 'Status']);
+  data.push(['─────────────────────────────────────────', '', '', '', '']);
+  
+  Object.entries(forecast.inventoryPredictions.roasted).forEach(([name, pred]) => {
+    const status = pred.status === 'critical' ? '🔴 CRITICAL' : pred.status === 'low' ? '🟡 LOW' : '🟢 OK';
+    data.push([name, `${pred.currentStock} lb`, `${pred.estimatedWeeklyUsage} lb`, pred.weeksRemaining, status]);
+  });
+  
+  data.push(['', '', '', '', '']);
+  data.push(['Green Coffee', 'Current Stock', 'Weekly Usage', 'Weeks Left', 'Status']);
+  data.push(['─────────────────────────────────────────', '', '', '', '']);
+  
+  Object.entries(forecast.inventoryPredictions.green).forEach(([name, pred]) => {
+    const status = pred.status === 'critical' ? '🔴 CRITICAL' : pred.status === 'low' ? '🟡 LOW' : '🟢 OK';
+    data.push([name, `${pred.currentStock} lb`, `${pred.estimatedWeeklyUsage} lb`, pred.weeksRemaining, status]);
+  });
+  
+  data.push(['', '', '', '', '']);
+  data.push(['═══════════════════════════════════════════════════════════════', '', '', '']);
+  data.push(['RECOMMENDATIONS', '', '', '']);
+  data.push(['═══════════════════════════════════════════════════════════════', '', '', '']);
+  data.push(['', '', '', '']);
+  
+  if (forecast.recommendations.length === 0) {
+    data.push(['✅ No immediate action needed - inventory levels are healthy', '', '', '']);
+  } else {
+    forecast.recommendations.forEach((rec, i) => {
+      const priority = rec.priority === 'high' ? '🔴' : rec.priority === 'medium' ? '🟡' : '🟢';
+      data.push([`${priority} ${rec.message}`, '', '', '']);
+      if (rec.suggestedQuantity) {
+        data.push(['', `Suggested order: ${rec.suggestedQuantity} lb`, '', '']);
+      }
+    });
+  }
+  
+  // Clear and write to Forecast sheet
+  try {
+    // Try to clear existing content
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Forecast!A:Z'
+    });
+  } catch (e) {
+    // Sheet might not exist, that's ok
+  }
+  
+  // Write data
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: SPREADSHEET_ID,
+    range: 'Forecast!A1',
+    valueInputOption: 'USER_ENTERED',
+    requestBody: { values: data }
+  });
+  
+  // Apply formatting
+  try {
+    const spreadsheet = await sheets.spreadsheets.get({
+      spreadsheetId: SPREADSHEET_ID
+    });
+    const forecastSheet = spreadsheet.data.sheets.find(s => s.properties.title === 'Forecast');
+    
+    if (forecastSheet) {
+      const sheetId = forecastSheet.properties.sheetId;
+      
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: {
+          requests: [
+            // Set font to Calibri 11 for entire sheet
+            {
+              repeatCell: {
+                range: { sheetId },
+                cell: {
+                  userEnteredFormat: {
+                    textFormat: {
+                      fontFamily: 'Calibri',
+                      fontSize: 11
+                    }
+                  }
+                },
+                fields: 'userEnteredFormat.textFormat(fontFamily,fontSize)'
+              }
+            },
+            // Bold title
+            {
+              repeatCell: {
+                range: {
+                  sheetId,
+                  startRowIndex: 0,
+                  endRowIndex: 1,
+                  startColumnIndex: 0,
+                  endColumnIndex: 1
+                },
+                cell: {
+                  userEnteredFormat: {
+                    textFormat: {
+                      bold: true,
+                      fontSize: 14
+                    }
+                  }
+                },
+                fields: 'userEnteredFormat.textFormat(bold,fontSize)'
+              }
+            },
+            // Set column widths
+            {
+              updateDimensionProperties: {
+                range: {
+                  sheetId,
+                  dimension: 'COLUMNS',
+                  startIndex: 0,
+                  endIndex: 1
+                },
+                properties: { pixelSize: 300 },
+                fields: 'pixelSize'
+              }
+            },
+            {
+              updateDimensionProperties: {
+                range: {
+                  sheetId,
+                  dimension: 'COLUMNS',
+                  startIndex: 1,
+                  endIndex: 5
+                },
+                properties: { pixelSize: 150 },
+                fields: 'pixelSize'
+              }
+            }
+          ]
+        }
+      });
+    }
+  } catch (e) {
+    console.log('Could not apply forecast formatting:', e.message);
+  }
+  
+  console.log('📊 Forecast written to Google Sheet');
+}
 
 // Get inventory summary formatted
 app.get('/api/inventory/summary', async (req, res) => {

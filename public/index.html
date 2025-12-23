@@ -1986,13 +1986,24 @@
                 
                 data.todoItems.forEach((item, index) => {
                     const priorityColor = item.priority === 'high' ? '#ff6b6b' : item.priority === 'medium' ? '#f0ad4e' : '#888';
-                    const priorityLabel = item.priority === 'high' ? '!' : item.priority === 'medium' ? '•' : '○';
                     
                     html += `<div style="background: #2a2a2a; border-radius: 8px; padding: 12px; margin-bottom: 10px; border-left: 3px solid ${priorityColor};">`;
                     html += `<div style="display: flex; justify-content: space-between; align-items: flex-start;">`;
                     html += `<div style="flex: 1;">`;
                     html += `<div style="font-weight: 600; margin-bottom: 4px;">${item.title}</div>`;
-                    html += `<div style="color: #999; font-size: 13px;">${item.description}</div>`;
+                    
+                    // Handle multi-line descriptions (inventory overview)
+                    if (item.type === 'inventory_overview') {
+                        const lines = item.description.split('\n');
+                        html += `<div style="color: #999; font-size: 13px;">`;
+                        lines.forEach(line => {
+                            html += `<div style="margin: 2px 0;">${line}</div>`;
+                        });
+                        html += `</div>`;
+                    } else {
+                        html += `<div style="color: #999; font-size: 13px;">${item.description}</div>`;
+                    }
+                    
                     html += `</div>`;
                     html += `<button class="action-btn" onclick="${getToDoAction(item)}" style="margin-left: 10px; font-size: 11px; padding: 5px 10px;">`;
                     html += `${getToDoButtonText(item.type)}`;
@@ -2021,14 +2032,11 @@
         
         function getToDoAction(item) {
             switch (item.type) {
-                case 'buy_coffee':
-                    return 'startRoastOrder()';
-                case 'update_tracking':
-                case 'mark_delivered':
-                    return 'viewEnRoute()';
+                case 'inventory_overview':
+                    return 'checkCurrentInventory()';
                 case 'outstanding_invoices':
                     return 'showOutstandingInvoices()';
-                case 'retail_sales':
+                case 'retail_overview':
                     return 'manageRetail()';
                 default:
                     return '';
@@ -2037,15 +2045,11 @@
         
         function getToDoButtonText(type) {
             switch (type) {
-                case 'buy_coffee':
-                    return 'Order →';
-                case 'update_tracking':
-                    return 'Update →';
-                case 'mark_delivered':
-                    return 'Check →';
+                case 'inventory_overview':
+                    return 'View →';
                 case 'outstanding_invoices':
                     return 'View →';
-                case 'retail_sales':
+                case 'retail_overview':
                     return 'Enter →';
                 default:
                     return 'Go →';
@@ -2067,7 +2071,7 @@
                 const lastMsg = messages[messages.length - 1];
                 const content = lastMsg?.querySelector('.message-content') || lastMsg;
                 
-                if (!data.invoices || data.invoices.length === 0) {
+                if (!data.groupedInvoices || data.groupedInvoices.length === 0) {
                     content.innerHTML = `<div style="color: #4a6741;">✅ No outstanding invoices!</div>`;
                     addConversationalFollowUp('invoices_clear');
                     return;
@@ -2075,27 +2079,47 @@
                 
                 let html = `<div style="margin-bottom: 12px;"><strong>💰 Outstanding Invoices</strong></div>`;
                 
-                data.invoices.forEach(inv => {
-                    const emailsJson = JSON.stringify(inv.customerEmails || []).replace(/"/g, '&quot;');
-                    const hasEmail = inv.customerEmails && inv.customerEmails.length > 0;
+                // Display grouped by customer
+                data.groupedInvoices.forEach((group, groupIndex) => {
+                    const hasEmail = group.customerEmails && group.customerEmails.length > 0;
+                    const totalFormatted = `$${group.totalAmount.toFixed(2)}`;
                     
-                    html += `<div style="background: #2a2a2a; border-radius: 8px; padding: 10px; margin-bottom: 8px;">`;
-                    html += `<div style="display: flex; justify-content: space-between; align-items: center;">`;
+                    html += `<div style="background: #2a2a2a; border-radius: 8px; padding: 12px; margin-bottom: 10px;">`;
+                    
+                    // Customer header
+                    html += `<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #444;">`;
                     html += `<div>`;
-                    html += `<div style="font-weight: 600;">${inv.invoiceNumber}</div>`;
-                    html += `<div style="color: #999; font-size: 12px;">${inv.customerName || 'Unknown'} • ${inv.date} • ${inv.amount}</div>`;
+                    html += `<div style="font-weight: 600; font-size: 15px;">${group.customerName}</div>`;
+                    html += `<div style="color: #f0ad4e; font-size: 13px;">${group.invoices.length} invoice${group.invoices.length > 1 ? 's' : ''} • Total: ${totalFormatted}</div>`;
                     html += `</div>`;
-                    html += `<div style="display: flex; gap: 6px;">`;
+                    html += `<div>`;
                     if (hasEmail) {
-                        html += `<button class="action-btn" onclick="sendInvoiceReminder('${inv.invoiceNumber}', '${inv.customerName || ''}', ${emailsJson}, '${inv.amount}', '${inv.date}')" style="font-size: 11px; padding: 5px 10px; background: #4a6741;">📧 Remind</button>`;
+                        html += `<button class="action-btn" onclick="draftInvoiceReminder(${groupIndex})" style="font-size: 11px; padding: 6px 12px; background: #4a6741;">📧 Draft Reminder</button>`;
                     } else {
-                        html += `<button class="action-btn" style="font-size: 11px; padding: 5px 10px; background: #555; cursor: not-allowed;" disabled title="No email on file">📧 No Email</button>`;
+                        html += `<button class="action-btn" style="font-size: 11px; padding: 6px 12px; background: #555; cursor: not-allowed;" disabled title="No email on file">📧 No Email</button>`;
                     }
-                    html += `<button class="action-btn" onclick="markInvoicePaidPrompt('${inv.invoiceNumber}')" style="font-size: 11px; padding: 5px 10px;">Mark Paid</button>`;
                     html += `</div>`;
                     html += `</div>`;
+                    
+                    // Invoice list for this customer
+                    group.invoices.forEach(inv => {
+                        html += `<div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #333;">`;
+                        html += `<div style="font-size: 13px;">`;
+                        html += `<span style="color: #90EE90;">${inv.invoiceNumber}</span>`;
+                        html += `<span style="color: #888; margin-left: 10px;">${inv.date}</span>`;
+                        html += `</div>`;
+                        html += `<div style="display: flex; align-items: center; gap: 10px;">`;
+                        html += `<span style="font-size: 13px;">${inv.amount}</span>`;
+                        html += `<button class="action-btn" onclick="markInvoicePaidPrompt('${inv.invoiceNumber}')" style="font-size: 10px; padding: 4px 8px;">Paid</button>`;
+                        html += `</div>`;
+                        html += `</div>`;
+                    });
+                    
                     html += `</div>`;
                 });
+                
+                // Store grouped data for draft reminder function
+                window.outstandingInvoicesData = data.groupedInvoices;
                 
                 // Add navigation buttons
                 html += `<div style="display: flex; gap: 8px; margin-top: 16px;">`;
@@ -2108,6 +2132,59 @@
             } catch (error) {
                 console.error('Outstanding invoices error:', error);
                 addMessage('Error loading invoices: ' + error.message, false);
+            }
+        }
+        
+        async function draftInvoiceReminder(groupIndex) {
+            const group = window.outstandingInvoicesData[groupIndex];
+            if (!group) {
+                addMessage('Error: Could not find customer data.', false);
+                return;
+            }
+            
+            if (!group.customerEmails || group.customerEmails.length === 0) {
+                addMessage(`❌ No email on file for ${group.customerName}. Please add an email first.`, false);
+                return;
+            }
+            
+            const invoiceCount = group.invoices.length;
+            const totalFormatted = `$${group.totalAmount.toFixed(2)}`;
+            const confirmDraft = confirm(`Create draft reminder for ${group.customerName}?\n\n${invoiceCount} invoice${invoiceCount > 1 ? 's' : ''} totaling ${totalFormatted}\nTo: ${group.customerEmails[0]}\n\nInvoice PDFs will be attached.`);
+            if (!confirmDraft) return;
+            
+            try {
+                addMessage(`📝 Creating draft reminder for ${group.customerName}...`, false);
+                
+                const response = await fetch('/api/invoices/draft-reminder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        customerName: group.customerName,
+                        customerEmails: group.customerEmails,
+                        invoices: group.invoices,
+                        totalAmount: group.totalAmount
+                    })
+                });
+                
+                const result = await response.json();
+                
+                // Update the last message with the result
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    if (result.success) {
+                        content.innerHTML = `✅ ${result.message}`;
+                    } else {
+                        content.innerHTML = `❌ ${result.error || 'Failed to create draft'}`;
+                    }
+                }
+                
+                addConversationalFollowUp('draft_reminder_created');
+                
+            } catch (error) {
+                console.error('Draft reminder error:', error);
+                addMessage(`❌ Error creating draft: ${error.message}`, false);
             }
         }
         

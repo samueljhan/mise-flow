@@ -2715,7 +2715,7 @@ app.get('/api/invoices/outstanding', async (req, res) => {
     });
     
     const rows = response.data.values || [];
-    const invoices = [];
+    const invoicesByCustomer = {};
     
     for (let i = 2; i < rows.length; i++) {
       const row = rows[i];
@@ -2744,26 +2744,38 @@ app.get('/api/invoices/outstanding', async (req, res) => {
           }
         }
         
-        invoices.push({
+        const customerKey = customerName || customerCode || 'Unknown';
+        
+        if (!invoicesByCustomer[customerKey]) {
+          invoicesByCustomer[customerKey] = {
+            customerName: customerName || customerKey,
+            customerCode,
+            customerEmails,
+            invoices: [],
+            totalAmount: 0
+          };
+        }
+        
+        // Parse amount for total calculation
+        const amountNum = parseFloat(String(amount).replace(/[$,]/g, '')) || 0;
+        
+        invoicesByCustomer[customerKey].invoices.push({
           rowIndex: i + 1,
           date: row[1],
           invoiceNumber,
           amount,
-          customerCode,
-          customerName,
-          customerEmails
+          amountNum
         });
+        
+        invoicesByCustomer[customerKey].totalAmount += amountNum;
       }
     }
     
-    // Sort by customer name (alphabetically)
-    invoices.sort((a, b) => {
-      const nameA = (a.customerName || 'ZZZ').toLowerCase();
-      const nameB = (b.customerName || 'ZZZ').toLowerCase();
-      return nameA.localeCompare(nameB);
-    });
+    // Convert to array and sort by customer name (alphabetically)
+    const groupedInvoices = Object.values(invoicesByCustomer)
+      .sort((a, b) => a.customerName.toLowerCase().localeCompare(b.customerName.toLowerCase()));
     
-    res.json({ success: true, invoices });
+    res.json({ success: true, groupedInvoices });
     
   } catch (error) {
     console.error('Outstanding invoices error:', error);
@@ -2855,6 +2867,135 @@ Archives of Us Coffee`;
   } catch (error) {
     console.error('Send reminder error:', error);
     res.status(500).json({ error: 'Failed to send reminder: ' + error.message });
+  }
+});
+
+// Draft payment reminder for a customer with multiple invoice attachments
+app.post('/api/invoices/draft-reminder', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { customerName, customerEmails, invoices, totalAmount } = req.body;
+  
+  if (!invoices || invoices.length === 0) {
+    return res.status(400).json({ error: 'No invoices provided' });
+  }
+  
+  if (!customerEmails || customerEmails.length === 0) {
+    return res.status(400).json({ error: 'No email address on file for this customer' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+    
+    const toAddress = customerEmails[0];
+    const invoiceCount = invoices.length;
+    const invoiceNumbers = invoices.map(inv => inv.invoiceNumber).join(', ');
+    
+    const subject = invoiceCount === 1 
+      ? `Payment Reminder - Invoice ${invoices[0].invoiceNumber}`
+      : `Payment Reminder - ${invoiceCount} Outstanding Invoices`;
+    
+    // Build invoice list for email body
+    let invoiceList = '';
+    invoices.forEach(inv => {
+      invoiceList += `  • ${inv.invoiceNumber} (${inv.date}) - ${inv.amount}\n`;
+    });
+    
+    const totalFormatted = `$${totalAmount.toFixed(2)}`;
+    
+    const body = `Hi ${customerName},
+
+This is a friendly reminder that the following invoice${invoiceCount > 1 ? 's are' : ' is'} still outstanding:
+
+${invoiceList}
+Total: ${totalFormatted}
+
+${invoiceCount > 1 ? 'The invoices are' : 'The invoice is'} attached to this email for your reference.
+
+If you've already sent payment, please disregard this message. Otherwise, we'd appreciate payment at your earliest convenience.
+
+Please let us know if you have any questions.
+
+Thank you for your business!
+
+Best regards,
+Archives of Us Coffee`;
+
+    // Build email with multiple PDF attachments
+    const boundary = 'boundary_' + Date.now();
+    
+    let emailParts = [
+      `To: ${toAddress}`,
+      `Subject: ${subject}`,
+      'MIME-Version: 1.0',
+      `Content-Type: multipart/mixed; boundary="${boundary}"`,
+      '',
+      `--${boundary}`,
+      'Content-Type: text/plain; charset=utf-8',
+      '',
+      body
+    ];
+    
+    // Attach each invoice PDF
+    let attachedCount = 0;
+    for (const inv of invoices) {
+      const pdfFilename = `${inv.invoiceNumber}.pdf`;
+      const pdfPath = path.join(invoicesDir, pdfFilename);
+      
+      if (fs.existsSync(pdfPath)) {
+        const pdfData = fs.readFileSync(pdfPath);
+        const pdfBase64 = pdfData.toString('base64');
+        
+        emailParts.push('');
+        emailParts.push(`--${boundary}`);
+        emailParts.push(`Content-Type: application/pdf; name="${pdfFilename}"`);
+        emailParts.push('Content-Transfer-Encoding: base64');
+        emailParts.push(`Content-Disposition: attachment; filename="${pdfFilename}"`);
+        emailParts.push('');
+        emailParts.push(pdfBase64);
+        
+        attachedCount++;
+        console.log(`📎 Attaching PDF: ${pdfFilename}`);
+      } else {
+        console.log(`⚠️ PDF not found: ${pdfPath}`);
+      }
+    }
+    
+    emailParts.push('');
+    emailParts.push(`--${boundary}--`);
+    
+    const emailContent = emailParts.join('\r\n');
+    
+    const encodedEmail = Buffer.from(emailContent)
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+    
+    // Create draft instead of sending
+    const draft = await gmail.users.drafts.create({
+      userId: 'me',
+      requestBody: {
+        message: { raw: encodedEmail }
+      }
+    });
+    
+    console.log(`📝 Draft reminder created for ${customerName} (${attachedCount} attachments)`);
+    
+    res.json({ 
+      success: true, 
+      message: `Draft created with ${attachedCount} invoice${attachedCount > 1 ? 's' : ''} attached. Check your Gmail drafts.`,
+      to: toAddress,
+      attachedCount,
+      draftId: draft.data.id
+    });
+    
+  } catch (error) {
+    console.error('Draft reminder error:', error);
+    res.status(500).json({ error: 'Failed to create draft: ' + error.message });
   }
 });
 
@@ -3627,83 +3768,100 @@ app.get('/api/todo', async (req, res) => {
     oauth2Client.setCredentials(userTokens);
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
     
-    // 1. Check for low inventory
+    // 1. Check for low inventory - combine green and roasted
     // Green coffee thresholds: Brazil (low: 200lb, critical: 100lb), Others (low: 100lb, critical: 65lb)
-    // Roasted coffee threshold: 20lb
+    // Roasted coffee thresholds: Archives Blend (low: 150lb, critical: 75lb), Ethiopia Gera (low: 40lb, critical: 20lb)
     
-    const criticalGreen = [];
-    const lowGreen = [];
+    const inventoryItems = [];
     
+    // Check green coffee
     greenCoffeeInventory.forEach(c => {
       const isBrazil = c.name.toLowerCase().includes('brazil');
       const criticalThreshold = isBrazil ? 100 : 65;
       const lowThreshold = isBrazil ? 200 : 100;
       
       if (c.weight < criticalThreshold) {
-        criticalGreen.push({ ...c, status: 'critical' });
+        inventoryItems.push({ name: c.name, weight: c.weight, type: 'green', status: 'critical' });
       } else if (c.weight < lowThreshold) {
-        lowGreen.push({ ...c, status: 'low' });
+        inventoryItems.push({ name: c.name, weight: c.weight, type: 'green', status: 'low' });
       }
     });
     
-    const lowRoasted = roastedCoffeeInventory.filter(c => c.weight < 20);
-    
-    // Critical inventory - highest priority
-    if (criticalGreen.length > 0) {
-      const criticalItems = criticalGreen.map(c => `${c.name} (${c.weight}lb)`);
-      todoItems.push({
-        type: 'buy_coffee',
-        priority: 'high',
-        title: '🔴 Green Coffee Critical - Reorder Now',
-        description: `Critically low: ${criticalItems.join(', ')}`,
-        items: criticalItems,
-        action: 'startRoastOrder'
-      });
-    }
-    
-    // Low inventory - medium priority
-    if (lowGreen.length > 0 || lowRoasted.length > 0) {
-      const lowItems = [];
-      lowGreen.forEach(c => lowItems.push(`${c.name} (${c.weight}lb green)`));
-      lowRoasted.forEach(c => lowItems.push(`${c.name} (${c.weight}lb roasted)`));
+    // Check roasted coffee
+    roastedCoffeeInventory.forEach(c => {
+      const isArchivesBlend = c.name.toLowerCase().includes('archives blend');
+      const isEthiopiaGera = c.name.toLowerCase().includes('ethiopia gera') || c.name.toLowerCase().includes('gera');
       
-      todoItems.push({
-        type: 'buy_coffee',
-        priority: 'medium',
-        title: '🟡 Low Inventory - Plan Reorder',
-        description: `Low stock: ${lowItems.join(', ')}`,
-        items: lowItems,
-        action: 'startRoastOrder'
-      });
-    }
+      let criticalThreshold, lowThreshold;
+      if (isArchivesBlend) {
+        criticalThreshold = 75;
+        lowThreshold = 150;
+      } else if (isEthiopiaGera) {
+        criticalThreshold = 20;
+        lowThreshold = 40;
+      } else {
+        // Default for other roasted coffees
+        criticalThreshold = 20;
+        lowThreshold = 40;
+      }
+      
+      if (c.weight < criticalThreshold) {
+        inventoryItems.push({ name: c.name, weight: c.weight, type: 'roasted', status: 'critical' });
+      } else if (c.weight < lowThreshold) {
+        inventoryItems.push({ name: c.name, weight: c.weight, type: 'roasted', status: 'low' });
+      }
+    });
     
-    // 2. Check en route items needing tracking or delivery confirmation
+    // Check en route items needing attention
     const needsTracking = enRouteCoffeeInventory.filter(c => !c.trackingNumber);
     const needsDelivery = enRouteCoffeeInventory.filter(c => c.trackingNumber && !c.delivered);
     
-    if (needsTracking.length > 0) {
+    needsTracking.forEach(c => {
+      inventoryItems.push({ name: c.name, weight: c.weight, type: 'enroute', status: 'tracking', id: c.id });
+    });
+    
+    needsDelivery.forEach(c => {
+      inventoryItems.push({ name: c.name, weight: c.weight, type: 'enroute', status: 'delivery', id: c.id, tracking: c.trackingNumber });
+    });
+    
+    // Sort inventory items: critical first, then low, then alphabetically within each group
+    inventoryItems.sort((a, b) => {
+      const statusOrder = { critical: 0, low: 1, tracking: 2, delivery: 3 };
+      if (statusOrder[a.status] !== statusOrder[b.status]) {
+        return statusOrder[a.status] - statusOrder[b.status];
+      }
+      return a.name.localeCompare(b.name);
+    });
+    
+    // Add inventory overview if there are items
+    if (inventoryItems.length > 0) {
+      const criticalCount = inventoryItems.filter(i => i.status === 'critical').length;
+      const lowCount = inventoryItems.filter(i => i.status === 'low').length;
+      const trackingCount = inventoryItems.filter(i => i.status === 'tracking').length;
+      const deliveryCount = inventoryItems.filter(i => i.status === 'delivery').length;
+      
       todoItems.push({
-        type: 'update_tracking',
-        priority: 'medium',
-        title: '📦 Update Tracking Numbers',
-        description: `${needsTracking.length} shipment(s) need tracking: ${needsTracking.map(c => c.name).join(', ')}`,
-        items: needsTracking.map(c => ({ id: c.id, name: c.name, weight: c.weight })),
-        action: 'viewEnRoute'
+        type: 'inventory_overview',
+        priority: criticalCount > 0 ? 'high' : 'medium',
+        title: '📦 Inventory Overview',
+        description: inventoryItems.map(i => {
+          const typeLabel = i.type === 'green' ? 'green' : i.type === 'roasted' ? 'roasted' : 'en route';
+          if (i.status === 'critical') return `🔴 ${i.name} (${i.weight}lb ${typeLabel}) - CRITICAL`;
+          if (i.status === 'low') return `🟡 ${i.name} (${i.weight}lb ${typeLabel}) - Low`;
+          if (i.status === 'tracking') return `📦 ${i.name} (${i.weight}lb) - Needs tracking`;
+          if (i.status === 'delivery') return `🚚 ${i.name} (${i.weight}lb) - Check delivery`;
+          return `${i.name} (${i.weight}lb ${typeLabel})`;
+        }).join('\n'),
+        items: inventoryItems,
+        action: 'checkInventory',
+        criticalCount,
+        lowCount,
+        trackingCount,
+        deliveryCount
       });
     }
     
-    if (needsDelivery.length > 0) {
-      todoItems.push({
-        type: 'mark_delivered',
-        priority: 'medium',
-        title: '🚚 Mark Deliveries Received',
-        description: `${needsDelivery.length} shipment(s) may have arrived: ${needsDelivery.map(c => c.name).join(', ')}`,
-        items: needsDelivery.map(c => ({ id: c.id, name: c.name, weight: c.weight, tracking: c.trackingNumber })),
-        action: 'viewEnRoute'
-      });
-    }
-    
-    // 3. Check for outstanding (unpaid) invoices
+    // 2. Check for outstanding (unpaid) invoices
     try {
       const invoicesResponse = await sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
@@ -3711,7 +3869,7 @@ app.get('/api/todo', async (req, res) => {
       });
       
       const invoiceRows = invoicesResponse.data.values || [];
-      const unpaidInvoices = [];
+      const invoicesByCustomer = {};
       
       for (let i = 2; i < invoiceRows.length; i++) {
         const row = invoiceRows[i];
@@ -3723,7 +3881,23 @@ app.get('/api/todo', async (req, res) => {
         
         // If no paid date, it's outstanding
         if (!paidDate || paidDate.trim() === '') {
-          unpaidInvoices.push({
+          // Extract customer code from invoice number (e.g., C-ABC-1000 -> ABC)
+          const codeMatch = invoiceNumber.match(/C-([A-Z]{3})-/);
+          const customerCode = codeMatch ? codeMatch[1] : 'Unknown';
+          
+          // Find customer name by code
+          let customerName = customerCode;
+          for (const [name, data] of Object.entries(customerDirectory)) {
+            if (data.code === customerCode) {
+              customerName = data.name;
+              break;
+            }
+          }
+          
+          if (!invoicesByCustomer[customerName]) {
+            invoicesByCustomer[customerName] = [];
+          }
+          invoicesByCustomer[customerName].push({
             invoiceNumber,
             amount,
             date: row[1]
@@ -3731,13 +3905,22 @@ app.get('/api/todo', async (req, res) => {
         }
       }
       
-      if (unpaidInvoices.length > 0) {
+      const customerCount = Object.keys(invoicesByCustomer).length;
+      const totalInvoices = Object.values(invoicesByCustomer).flat().length;
+      
+      if (totalInvoices > 0) {
+        // Build description showing customer groups
+        const customerSummaries = Object.entries(invoicesByCustomer)
+          .sort((a, b) => a[0].localeCompare(b[0]))
+          .map(([name, invoices]) => `${name} (${invoices.length})`)
+          .join(', ');
+        
         todoItems.push({
           type: 'outstanding_invoices',
           priority: 'high',
           title: '💰 Outstanding Invoices',
-          description: `${unpaidInvoices.length} unpaid invoice(s): ${unpaidInvoices.map(i => i.invoiceNumber).join(', ')}`,
-          items: unpaidInvoices,
+          description: `${totalInvoices} invoice${totalInvoices > 1 ? 's' : ''} from ${customerCount} customer${customerCount > 1 ? 's' : ''}: ${customerSummaries}`,
+          items: invoicesByCustomer,
           action: 'viewInvoices'
         });
       }
@@ -3745,7 +3928,7 @@ app.get('/api/todo', async (req, res) => {
       console.log('Could not check invoices:', e.message);
     }
     
-    // 4. Check for retail weeks without sales data
+    // 3. Check for retail weeks without sales data
     try {
       const retailResponse = await sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
@@ -3786,9 +3969,9 @@ app.get('/api/todo', async (req, res) => {
       
       if (recentWeeksWithoutData.length > 0) {
         todoItems.push({
-          type: 'retail_sales',
+          type: 'retail_overview',
           priority: 'low',
-          title: '🛒 Enter Retail Sales',
+          title: '🛒 Retail Overview',
           description: `${recentWeeksWithoutData.length} week(s) need sales data: ${recentWeeksWithoutData.join(', ')}`,
           items: recentWeeksWithoutData,
           action: 'manageRetail'

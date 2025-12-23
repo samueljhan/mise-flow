@@ -636,6 +636,10 @@
                         <strong>🔥 Order Roast</strong>
                         <span>Draft a new roasted coffee order</span>
                     </div>
+                    <div class="example-prompt" onclick="viewEnRoute()">
+                        <strong>🚚 En Route Coffee</strong>
+                        <span>View and manage shipped orders</span>
+                    </div>
                     <div class="example-prompt" onclick="startInvoice()">
                         <strong>🧾 Generate Invoice</strong>
                         <span>Create a new invoice for a wholesale customer</span>
@@ -2318,7 +2322,7 @@
             
             if (enRouteCoffeeInventory.length === 0) {
                 addMessage('No coffee currently en route.', false);
-                addConversationalFollowUp('en_route_empty');
+                addEnRouteFollowUp();
                 return;
             }
             
@@ -2332,7 +2336,7 @@
                 orderGroups[orderKey].push(item);
             });
             
-            let html = '<strong>En Route Coffee</strong><br><br>';
+            let html = '<strong>🚚 En Route Coffee</strong><br><br>';
             
             Object.keys(orderGroups).forEach((orderDate, groupIndex) => {
                 const items = orderGroups[orderDate];
@@ -2380,6 +2384,18 @@
                 html += `</div>`;
                 html += `</div>`;
             });
+            
+            addMessage(html, false);
+            
+            // Add follow-up buttons
+            addEnRouteFollowUp();
+        }
+        
+        function addEnRouteFollowUp() {
+            let html = '<div style="display: flex; gap: 8px; margin-top: 8px;">';
+            html += '<button class="action-btn" onclick="checkCurrentInventory()">← Back to Inventory</button>';
+            html += '<button class="action-btn" onclick="addFollowUpMessage()">Done</button>';
+            html += '</div>';
             
             addMessage(html, false);
         }
@@ -4145,6 +4161,7 @@
                 html += '<button class="action-btn" onclick="showToDo()">📋 To Do</button>';
                 html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
                 html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
+                html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
                 html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
                 html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
                 html += '</div>';
@@ -4163,6 +4180,7 @@
             html += '<button class="action-btn" onclick="showToDo()">📋 To Do</button>';
             html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
             html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
+            html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
             html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
             html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
             html += '</div>';
@@ -4176,6 +4194,7 @@
             html += '<button class="action-btn" onclick="showToDo()">📋 To Do</button>';
             html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
             html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
+            html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
             html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
             html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
             html += '</div>';

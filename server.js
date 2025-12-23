@@ -2699,6 +2699,67 @@ app.post('/api/accounting/process-payment', async (req, res) => {
   });
 });
 
+// Get outstanding (unpaid) invoices
+app.get('/api/invoices/outstanding', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Invoices!A:F'
+    });
+    
+    const rows = response.data.values || [];
+    const invoices = [];
+    
+    for (let i = 2; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || !row[2]) continue;
+      
+      const invoiceNumber = row[2];
+      const amount = row[3];
+      const paidDate = row[4];
+      
+      // If no paid date, it's outstanding
+      if (!paidDate || paidDate.trim() === '') {
+        invoices.push({
+          rowIndex: i + 1,
+          date: row[1],
+          invoiceNumber,
+          amount
+        });
+      }
+    }
+    
+    res.json({ success: true, invoices });
+    
+  } catch (error) {
+    console.error('Outstanding invoices error:', error);
+    res.status(500).json({ error: 'Failed to get invoices: ' + error.message });
+  }
+});
+
+// Mark invoice as paid (simpler endpoint for frontend)
+app.post('/api/invoices/mark-paid', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { invoiceNumber, paidDate } = req.body;
+  
+  if (!invoiceNumber) {
+    return res.status(400).json({ error: 'Invoice number required' });
+  }
+  
+  const result = await markInvoicePaid(invoiceNumber, paidDate || new Date().toLocaleDateString(), 'Manual');
+  res.json(result);
+});
+
 // ============ Bank Transactions Sheet Sync ============
 
 // Auto-categorize a transaction based on description
@@ -3043,6 +3104,21 @@ app.post('/api/process', async (req, res) => {
       return res.json({
         response: null,
         action: 'manage_retail',
+        showFollowUp: false
+      });
+    }
+    
+    // Handle to do commands
+    if (textLower === 'todo' ||
+        textLower === 'to do' ||
+        textLower === 'to-do' ||
+        textLower.includes('to do list') ||
+        textLower.includes('pending tasks') ||
+        textLower.includes('what needs') ||
+        textLower.includes('what do i need')) {
+      return res.json({
+        response: null,
+        action: 'show_todo',
         showFollowUp: false
       });
     }
@@ -3420,6 +3496,176 @@ app.get('/api/inventory', async (req, res) => {
     roasted: roastedCoffeeInventory,
     enRoute: enRouteCoffeeInventory
   });
+});
+
+// Get To Do items - pending tasks needing attention
+app.get('/api/todo', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  await ensureFreshInventory();
+  
+  const todoItems = [];
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // 1. Check for low inventory (threshold: 50lb for green, 20lb for roasted)
+    const lowGreen = greenCoffeeInventory.filter(c => c.weight < 50);
+    const lowRoasted = roastedCoffeeInventory.filter(c => c.weight < 20);
+    
+    if (lowGreen.length > 0 || lowRoasted.length > 0) {
+      const lowItems = [];
+      lowGreen.forEach(c => lowItems.push(`${c.name} (${c.weight}lb green)`));
+      lowRoasted.forEach(c => lowItems.push(`${c.name} (${c.weight}lb roasted)`));
+      
+      todoItems.push({
+        type: 'buy_coffee',
+        priority: 'high',
+        title: '☕ Buy Coffee - Low Inventory',
+        description: `Low stock: ${lowItems.join(', ')}`,
+        items: lowItems,
+        action: 'startRoastOrder'
+      });
+    }
+    
+    // 2. Check en route items needing tracking or delivery confirmation
+    const needsTracking = enRouteCoffeeInventory.filter(c => !c.trackingNumber);
+    const needsDelivery = enRouteCoffeeInventory.filter(c => c.trackingNumber && !c.delivered);
+    
+    if (needsTracking.length > 0) {
+      todoItems.push({
+        type: 'update_tracking',
+        priority: 'medium',
+        title: '📦 Update Tracking Numbers',
+        description: `${needsTracking.length} shipment(s) need tracking: ${needsTracking.map(c => c.name).join(', ')}`,
+        items: needsTracking.map(c => ({ id: c.id, name: c.name, weight: c.weight })),
+        action: 'viewEnRoute'
+      });
+    }
+    
+    if (needsDelivery.length > 0) {
+      todoItems.push({
+        type: 'mark_delivered',
+        priority: 'medium',
+        title: '🚚 Mark Deliveries Received',
+        description: `${needsDelivery.length} shipment(s) may have arrived: ${needsDelivery.map(c => c.name).join(', ')}`,
+        items: needsDelivery.map(c => ({ id: c.id, name: c.name, weight: c.weight, tracking: c.trackingNumber })),
+        action: 'viewEnRoute'
+      });
+    }
+    
+    // 3. Check for outstanding (unpaid) invoices
+    try {
+      const invoicesResponse = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Invoices!A:F'
+      });
+      
+      const invoiceRows = invoicesResponse.data.values || [];
+      const unpaidInvoices = [];
+      
+      for (let i = 2; i < invoiceRows.length; i++) {
+        const row = invoiceRows[i];
+        if (!row || !row[2]) continue; // Skip empty rows
+        
+        const invoiceNumber = row[2];
+        const amount = row[3];
+        const paidDate = row[4];
+        
+        // If no paid date, it's outstanding
+        if (!paidDate || paidDate.trim() === '') {
+          unpaidInvoices.push({
+            invoiceNumber,
+            amount,
+            date: row[1]
+          });
+        }
+      }
+      
+      if (unpaidInvoices.length > 0) {
+        todoItems.push({
+          type: 'outstanding_invoices',
+          priority: 'high',
+          title: '💰 Outstanding Invoices',
+          description: `${unpaidInvoices.length} unpaid invoice(s): ${unpaidInvoices.map(i => i.invoiceNumber).join(', ')}`,
+          items: unpaidInvoices,
+          action: 'viewInvoices'
+        });
+      }
+    } catch (e) {
+      console.log('Could not check invoices:', e.message);
+    }
+    
+    // 4. Check for retail weeks without sales data
+    try {
+      const retailResponse = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Retail Sales!A1:Z100',
+        valueRenderOption: 'UNFORMATTED_VALUE'
+      });
+      
+      const retailRows = retailResponse.data.values || [];
+      const headerRow = retailRows[1] || [];
+      
+      // Find Total Retail Sales column
+      let totalColIndex = -1;
+      for (let i = 0; i < headerRow.length; i++) {
+        if (headerRow[i] === 'Total Retail Sales') {
+          totalColIndex = i;
+          break;
+        }
+      }
+      
+      const weeksWithoutData = [];
+      if (totalColIndex > -1) {
+        for (let i = 2; i < retailRows.length; i++) {
+          const row = retailRows[i];
+          if (!row || !row[1]) continue;
+          
+          const dateRange = row[1];
+          const totalSales = row[totalColIndex];
+          
+          // If no total or total is 0/empty, needs data
+          if (!totalSales || totalSales === 0 || totalSales === '') {
+            weeksWithoutData.push(dateRange);
+          }
+        }
+      }
+      
+      // Only show last 4 weeks without data
+      const recentWeeksWithoutData = weeksWithoutData.slice(-4);
+      
+      if (recentWeeksWithoutData.length > 0) {
+        todoItems.push({
+          type: 'retail_sales',
+          priority: 'low',
+          title: '🛒 Enter Retail Sales',
+          description: `${recentWeeksWithoutData.length} week(s) need sales data: ${recentWeeksWithoutData.join(', ')}`,
+          items: recentWeeksWithoutData,
+          action: 'manageRetail'
+        });
+      }
+    } catch (e) {
+      console.log('Could not check retail sales:', e.message);
+    }
+    
+    // Sort by priority: high, medium, low
+    const priorityOrder = { high: 0, medium: 1, low: 2 };
+    todoItems.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]);
+    
+    res.json({
+      success: true,
+      todoItems,
+      count: todoItems.length
+    });
+    
+  } catch (error) {
+    console.error('To Do error:', error);
+    res.status(500).json({ error: 'Failed to get to do items: ' + error.message });
+  }
 });
 
 // Get inventory summary formatted

@@ -624,6 +624,10 @@
                 <p>What would you like to do right now?</p>
                 
                 <div class="example-prompts">
+                    <div class="example-prompt" onclick="showToDo()">
+                        <strong>📋 To Do</strong>
+                        <span>View pending tasks and items needing attention</span>
+                    </div>
                     <div class="example-prompt" onclick="checkCurrentInventory()">
                         <strong>☕ Check Current Inventory</strong>
                         <span>"What's our current coffee inventory for all our roasts?"</span>
@@ -631,10 +635,6 @@
                     <div class="example-prompt" onclick="startRoastOrder()">
                         <strong>🔥 Order Roast</strong>
                         <span>Draft a new roasted coffee order</span>
-                    </div>
-                    <div class="example-prompt" onclick="viewEnRoute()">
-                        <strong>🚚 En Route Coffee</strong>
-                        <span>View and manage shipped orders</span>
                     </div>
                     <div class="example-prompt" onclick="startInvoice()">
                         <strong>🧾 Generate Invoice</strong>
@@ -1046,21 +1046,26 @@
                     content.style.whiteSpace = 'pre-wrap';
                     content.style.fontFamily = 'monospace';
                     await typeText(content, summary, 8);
-                    
-                    // Add Manage Inventory button after the summary
-                    const buttonDiv = document.createElement('div');
-                    buttonDiv.style.marginTop = '12px';
-                    buttonDiv.innerHTML = '<button class="action-btn" onclick="openManageInventory()">📦 Manage Inventory</button>';
-                    content.appendChild(buttonDiv);
                 }
                 
-                // Add conversational follow-up after typing completes
-                addConversationalFollowUp('inventory_checked');
+                // Add inventory-specific follow-up with Manage Inventory, En Route, and other options
+                addInventoryFollowUp();
                 
             } catch (error) {
                 console.error('Error:', error);
                 addMessage('Error loading inventory: ' + error.message, false);
             }
+        }
+        
+        function addInventoryFollowUp() {
+            let html = '<div style="margin-bottom: 12px;">What would you like to do?</div>';
+            html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
+            html += '<button class="action-btn" onclick="openManageInventory()">📦 Manage Inventory</button>';
+            html += '<button class="action-btn" onclick="viewEnRoute()">🚚 En Route Coffee</button>';
+            html += '<button class="action-btn" onclick="addFollowUpMessage()">Something Else</button>';
+            html += '</div>';
+            
+            addMessage(html, false);
         }
 
         // Start Roast Order
@@ -1949,6 +1954,166 @@
 
         function closeInventoryModal() {
             document.getElementById('inventoryModal').style.display = 'none';
+        }
+
+        // ============ To Do Feature ============
+        
+        async function showToDo() {
+            // Clear welcome message
+            const welcomeMsg = chatContainer.querySelector('.welcome-message');
+            if (welcomeMsg) welcomeMsg.remove();
+            
+            addMessage('Checking pending tasks...', false);
+            
+            try {
+                const response = await fetch('/api/todo');
+                const data = await response.json();
+                
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to get to do items');
+                }
+                
+                // Get the last message and update it
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                if (data.todoItems.length === 0) {
+                    content.innerHTML = `<div style="color: #4a6741;">✅ All caught up! No pending tasks.</div>`;
+                    addConversationalFollowUp('todo_empty');
+                    return;
+                }
+                
+                let html = `<div style="margin-bottom: 16px;"><strong>📋 To Do List</strong> <span style="color:#888;">(${data.count} item${data.count > 1 ? 's' : ''})</span></div>`;
+                
+                data.todoItems.forEach((item, index) => {
+                    const priorityColor = item.priority === 'high' ? '#ff6b6b' : item.priority === 'medium' ? '#f0ad4e' : '#888';
+                    const priorityLabel = item.priority === 'high' ? '!' : item.priority === 'medium' ? '•' : '○';
+                    
+                    html += `<div style="background: #2a2a2a; border-radius: 8px; padding: 12px; margin-bottom: 10px; border-left: 3px solid ${priorityColor};">`;
+                    html += `<div style="display: flex; justify-content: space-between; align-items: flex-start;">`;
+                    html += `<div style="flex: 1;">`;
+                    html += `<div style="font-weight: 600; margin-bottom: 4px;">${item.title}</div>`;
+                    html += `<div style="color: #999; font-size: 13px;">${item.description}</div>`;
+                    html += `</div>`;
+                    html += `<button class="action-btn" onclick="${getToDoAction(item)}" style="margin-left: 10px; font-size: 11px; padding: 5px 10px;">`;
+                    html += `${getToDoButtonText(item.type)}`;
+                    html += `</button>`;
+                    html += `</div>`;
+                    html += `</div>`;
+                });
+                
+                content.innerHTML = html;
+                
+            } catch (error) {
+                console.error('To Do error:', error);
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML = `<div style="color: #ff6b6b;">Error loading to do list: ${error.message}</div>`;
+                }
+            }
+        }
+        
+        function getToDoAction(item) {
+            switch (item.type) {
+                case 'buy_coffee':
+                    return 'startRoastOrder()';
+                case 'update_tracking':
+                case 'mark_delivered':
+                    return 'viewEnRoute()';
+                case 'outstanding_invoices':
+                    return 'showOutstandingInvoices()';
+                case 'retail_sales':
+                    return 'manageRetail()';
+                default:
+                    return '';
+            }
+        }
+        
+        function getToDoButtonText(type) {
+            switch (type) {
+                case 'buy_coffee':
+                    return 'Order →';
+                case 'update_tracking':
+                    return 'Update →';
+                case 'mark_delivered':
+                    return 'Check →';
+                case 'outstanding_invoices':
+                    return 'View →';
+                case 'retail_sales':
+                    return 'Enter →';
+                default:
+                    return 'Go →';
+            }
+        }
+        
+        async function showOutstandingInvoices() {
+            // Clear welcome message
+            const welcomeMsg = chatContainer.querySelector('.welcome-message');
+            if (welcomeMsg) welcomeMsg.remove();
+            
+            addMessage('Loading outstanding invoices...', false);
+            
+            try {
+                const response = await fetch('/api/invoices/outstanding');
+                const data = await response.json();
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                if (!data.invoices || data.invoices.length === 0) {
+                    content.innerHTML = `<div style="color: #4a6741;">✅ No outstanding invoices!</div>`;
+                    addConversationalFollowUp('invoices_clear');
+                    return;
+                }
+                
+                let html = `<div style="margin-bottom: 12px;"><strong>💰 Outstanding Invoices</strong></div>`;
+                
+                data.invoices.forEach(inv => {
+                    html += `<div style="background: #2a2a2a; border-radius: 8px; padding: 10px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center;">`;
+                    html += `<div>`;
+                    html += `<div style="font-weight: 600;">${inv.invoiceNumber}</div>`;
+                    html += `<div style="color: #999; font-size: 12px;">${inv.date} • ${inv.amount}</div>`;
+                    html += `</div>`;
+                    html += `<button class="action-btn" onclick="markInvoicePaidPrompt('${inv.invoiceNumber}')" style="font-size: 11px; padding: 5px 10px; background: #4a6741;">Mark Paid</button>`;
+                    html += `</div>`;
+                });
+                
+                content.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Outstanding invoices error:', error);
+                addMessage('Error loading invoices: ' + error.message, false);
+            }
+        }
+        
+        async function markInvoicePaidPrompt(invoiceNumber) {
+            const today = new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+            const paidDate = prompt(`Mark ${invoiceNumber} as paid on:`, today);
+            
+            if (!paidDate) return;
+            
+            try {
+                const response = await fetch('/api/invoices/mark-paid', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ invoiceNumber, paidDate })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addMessage(`✅ ${invoiceNumber} marked as paid on ${paidDate}`, false);
+                    addConversationalFollowUp('invoice_paid');
+                } else {
+                    addMessage(`Error: ${data.error}`, false);
+                }
+            } catch (error) {
+                addMessage('Error marking invoice paid: ' + error.message, false);
+            }
         }
 
         // ============ En Route Modal ============
@@ -2873,6 +3038,15 @@
                     return null;
                 }
                 
+                if (data.action === 'show_todo') {
+                    const messages = chatContainer.querySelectorAll('.message');
+                    if (messages.length > 0) {
+                        messages[messages.length - 1].remove();
+                    }
+                    showToDo();
+                    return null;
+                }
+                
                 // Check if this is an invoice action
                 if (data.action === 'create_invoice' && data.invoiceDetails) {
                     // Show the "Processing now..." message first
@@ -3768,10 +3942,10 @@
                 // Add the conversational message with simple button options
                 let html = `<div style="margin-bottom: 12px;">${data.message || 'What else can I help with?'}</div>`;
                 html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
+                html += '<button class="action-btn" onclick="showToDo()">📋 To Do</button>';
                 html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
                 html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
                 html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
-                html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
                 html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
                 html += '</div>';
                 
@@ -3786,10 +3960,10 @@
         function addFollowUpButtons() {
             // Just buttons, no message
             let html = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
+            html += '<button class="action-btn" onclick="showToDo()">📋 To Do</button>';
             html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
             html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
             html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
-            html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
             html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
             html += '</div>';
             
@@ -3799,10 +3973,10 @@
         function addFollowUpMessage() {
             let html = '<div style="margin-bottom: 12px;">What else can I help with?</div>';
             html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
+            html += '<button class="action-btn" onclick="showToDo()">📋 To Do</button>';
             html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
             html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
             html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
-            html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
             html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
             html += '</div>';
             

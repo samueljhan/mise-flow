@@ -632,6 +632,10 @@
                         <strong>☕ Check Current Inventory</strong>
                         <span>"What's our current coffee inventory for all our roasts?"</span>
                     </div>
+                    <div class="example-prompt" onclick="openManageInventory()">
+                        <strong>📦 Manage Inventory</strong>
+                        <span>Edit green and roasted coffee stock levels</span>
+                    </div>
                     <div class="example-prompt" onclick="startRoastOrder()">
                         <strong>🔥 Order Roast</strong>
                         <span>Draft a new roasted coffee order</span>
@@ -1055,15 +1059,12 @@
                     content.style.fontFamily = 'monospace';
                     await typeText(content, summary, 8);
                     
-                    // Add Manage Inventory button after the summary
+                    // Add Done button after the summary
                     const buttonDiv = document.createElement('div');
                     buttonDiv.style.marginTop = '12px';
-                    buttonDiv.innerHTML = '<button class="action-btn" onclick="openManageInventory()">📦 Manage Inventory</button>';
+                    buttonDiv.innerHTML = '<button class="action-btn" onclick="addFollowUpMessage()">Done</button>';
                     content.appendChild(buttonDiv);
                 }
-                
-                // Add conversational follow-up after typing completes
-                addConversationalFollowUp('inventory_checked');
                 
             } catch (error) {
                 console.error('Error:', error);
@@ -4151,6 +4152,7 @@
                 html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
                 html += '<button class="action-btn" onclick="showToDo()">📋 To Do</button>';
                 html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
+                html += '<button class="action-btn" onclick="openManageInventory()">Manage Inventory</button>';
                 html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
                 html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
                 html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
@@ -4170,6 +4172,7 @@
             let html = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
             html += '<button class="action-btn" onclick="showToDo()">📋 To Do</button>';
             html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
+            html += '<button class="action-btn" onclick="openManageInventory()">Manage Inventory</button>';
             html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
             html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
             html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
@@ -4184,6 +4187,7 @@
             html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
             html += '<button class="action-btn" onclick="showToDo()">📋 To Do</button>';
             html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
+            html += '<button class="action-btn" onclick="openManageInventory()">Manage Inventory</button>';
             html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
             html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
             html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';

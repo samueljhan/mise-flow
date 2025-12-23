@@ -2977,12 +2977,73 @@ app.post('/api/process', async (req, res) => {
     
     // Quick handlers for simple commands (no AI needed)
     
-    // Handle simple inventory check commands
-    if (textLower === 'inventory' || textLower === 'check inventory' || textLower === 'stock' || textLower === 'check stock') {
+    // Handle inventory check commands - more natural language patterns
+    if (textLower === 'inventory' || 
+        textLower === 'check inventory' || 
+        textLower === 'stock' || 
+        textLower === 'check stock' ||
+        textLower.includes('check') && textLower.includes('inventory') ||
+        textLower.includes('current inventory') ||
+        textLower.includes('what do we have') ||
+        textLower.includes('how much') && (textLower.includes('coffee') || textLower.includes('stock')) ||
+        textLower.includes('inventory levels') ||
+        textLower.includes('stock levels')) {
       return res.json({
         response: null,  // Frontend will handle display
         action: 'check_inventory',
         showFollowUp: true
+      });
+    }
+    
+    // Handle roast order commands
+    if (textLower === 'order roast' ||
+        textLower === 'roast order' ||
+        textLower.includes('order') && textLower.includes('roast') ||
+        textLower.includes('place') && textLower.includes('order') ||
+        textLower.includes('need to order') && textLower.includes('roast')) {
+      return res.json({
+        response: null,
+        action: 'order_roast',
+        showFollowUp: false
+      });
+    }
+    
+    // Handle en route commands
+    if (textLower === 'en route' ||
+        textLower === 'enroute' ||
+        textLower.includes('en route') ||
+        textLower.includes('shipment') ||
+        textLower.includes('tracking') ||
+        textLower.includes('shipped')) {
+      return res.json({
+        response: null,
+        action: 'view_en_route',
+        showFollowUp: false
+      });
+    }
+    
+    // Handle invoice commands
+    if (textLower === 'invoice' ||
+        textLower === 'generate invoice' ||
+        textLower === 'create invoice' ||
+        textLower.includes('invoice for') ||
+        textLower.includes('bill for')) {
+      return res.json({
+        response: null,
+        action: 'start_invoice',
+        showFollowUp: false
+      });
+    }
+    
+    // Handle retail commands
+    if (textLower === 'retail' ||
+        textLower === 'manage retail' ||
+        textLower.includes('retail sales') ||
+        textLower.includes('retail management')) {
+      return res.json({
+        response: null,
+        action: 'manage_retail',
+        showFollowUp: false
       });
     }
     

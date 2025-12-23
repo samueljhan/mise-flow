@@ -632,10 +632,6 @@
                         <strong>🔥 Order Roast</strong>
                         <span>Draft a new roasted coffee order</span>
                     </div>
-                    <div class="example-prompt" onclick="openManageInventory()">
-                        <strong>📦 Manage Inventory</strong>
-                        <span>Edit green and roasted coffee inventory</span>
-                    </div>
                     <div class="example-prompt" onclick="viewEnRoute()">
                         <strong>🚚 En Route Coffee</strong>
                         <span>View and manage shipped orders</span>
@@ -1050,6 +1046,12 @@
                     content.style.whiteSpace = 'pre-wrap';
                     content.style.fontFamily = 'monospace';
                     await typeText(content, summary, 8);
+                    
+                    // Add Manage Inventory button after the summary
+                    const buttonDiv = document.createElement('div');
+                    buttonDiv.style.marginTop = '12px';
+                    buttonDiv.innerHTML = '<button class="action-btn" onclick="openManageInventory()">📦 Manage Inventory</button>';
+                    content.appendChild(buttonDiv);
                 }
                 
                 // Add conversational follow-up after typing completes
@@ -2824,6 +2826,53 @@
                     return "Sorry, I didn't get that.";
                 }
                 
+                // Handle action-based responses - trigger appropriate functions
+                if (data.action === 'check_inventory') {
+                    // Remove the loading message before calling checkCurrentInventory
+                    const messages = chatContainer.querySelectorAll('.message');
+                    if (messages.length > 0) {
+                        messages[messages.length - 1].remove();
+                    }
+                    checkCurrentInventory();
+                    return null; // Don't return a message, function handles it
+                }
+                
+                if (data.action === 'order_roast') {
+                    const messages = chatContainer.querySelectorAll('.message');
+                    if (messages.length > 0) {
+                        messages[messages.length - 1].remove();
+                    }
+                    startRoastOrder();
+                    return null;
+                }
+                
+                if (data.action === 'view_en_route') {
+                    const messages = chatContainer.querySelectorAll('.message');
+                    if (messages.length > 0) {
+                        messages[messages.length - 1].remove();
+                    }
+                    viewEnRoute();
+                    return null;
+                }
+                
+                if (data.action === 'start_invoice') {
+                    const messages = chatContainer.querySelectorAll('.message');
+                    if (messages.length > 0) {
+                        messages[messages.length - 1].remove();
+                    }
+                    startInvoice();
+                    return null;
+                }
+                
+                if (data.action === 'manage_retail') {
+                    const messages = chatContainer.querySelectorAll('.message');
+                    if (messages.length > 0) {
+                        messages[messages.length - 1].remove();
+                    }
+                    manageRetail();
+                    return null;
+                }
+                
                 // Check if this is an invoice action
                 if (data.action === 'create_invoice' && data.invoiceDetails) {
                     // Show the "Processing now..." message first
@@ -2936,7 +2985,7 @@
                 const response = await processMessage('no, cancel', 'waiting_for_new_customer_confirmation');
                 const messages = chatContainer.querySelectorAll('.message');
                 messages[messages.length - 1].remove();
-                addMessage(response, false);
+                if (response !== null) addMessage(response, false);
                 
                 window.pendingNewCustomer = null;
                 return;
@@ -3283,7 +3332,7 @@
                     processMessage(originalMessage).then(response => {
                         const messages = chatContainer.querySelectorAll('.message');
                         messages[messages.length - 1].remove();
-                        addMessage(response, false);
+                        if (response !== null) addMessage(response, false);
                     });
                     return;
                 }
@@ -3303,7 +3352,7 @@
                     processMessage(message).then(response => {
                         const messages = chatContainer.querySelectorAll('.message');
                         messages[messages.length - 1].remove();
-                        addMessage(response, false);
+                        if (response !== null) addMessage(response, false);
                     });
                     return;
                 }
@@ -3322,7 +3371,7 @@
                     processMessage(message).then(response => {
                         const messages = chatContainer.querySelectorAll('.message');
                         messages[messages.length - 1].remove();
-                        addMessage(response, false);
+                        if (response !== null) addMessage(response, false);
                     });
                     return;
                 }
@@ -3339,7 +3388,7 @@
                     processMessage(message).then(response => {
                         const messages = chatContainer.querySelectorAll('.message');
                         messages[messages.length - 1].remove();
-                        addMessage(response, false);
+                        if (response !== null) addMessage(response, false);
                     });
                     return;
                 }
@@ -3355,7 +3404,7 @@
                     processMessage(message).then(response => {
                         const messages = chatContainer.querySelectorAll('.message');
                         messages[messages.length - 1].remove();
-                        addMessage(response, false);
+                        if (response !== null) addMessage(response, false);
                     });
                     return;
                 }
@@ -3374,7 +3423,7 @@
                     processMessage(message).then(response => {
                         const messages = chatContainer.querySelectorAll('.message');
                         messages[messages.length - 1].remove();
-                        addMessage(response, false);
+                        if (response !== null) addMessage(response, false);
                     });
                     return;
                 }
@@ -3396,7 +3445,7 @@
                     processMessage(message).then(response => {
                         const messages = chatContainer.querySelectorAll('.message');
                         messages[messages.length - 1].remove();
-                        addMessage(response, false);
+                        if (response !== null) addMessage(response, false);
                     });
                     return;
                 }
@@ -3413,7 +3462,7 @@
                     processMessage(message).then(response => {
                         const messages = chatContainer.querySelectorAll('.message');
                         messages[messages.length - 1].remove();
-                        addMessage(response, false);
+                        if (response !== null) addMessage(response, false);
                     });
                     return;
                 }
@@ -3431,21 +3480,27 @@
                     processMessage(message).then(response => {
                         const messages = chatContainer.querySelectorAll('.message');
                         messages[messages.length - 1].remove();
-                        addMessage(response, false);
+                        if (response !== null) {
+                            addMessage(response, false);
+                        }
                     });
                 } else {
                     pendingInvoice = false;
                     generateInvoice(message).then(response => {
                         const messages = chatContainer.querySelectorAll('.message');
                         messages[messages.length - 1].remove();
-                        addMessage(response, false);
+                        if (response !== null) {
+                            addMessage(response, false);
+                        }
                     });
                 }
             } else {
                 processMessage(message).then(response => {
                     const messages = chatContainer.querySelectorAll('.message');
                     messages[messages.length - 1].remove();
-                    addMessage(response, false);
+                    if (response !== null) {
+                        addMessage(response, false);
+                    }
                 });
             }
         }
@@ -3635,7 +3690,7 @@
                 processMessage(originalMessage).then(response => {
                     const messages = chatContainer.querySelectorAll('.message');
                     messages[messages.length - 1].remove();
-                    addMessage(response, false);
+                    if (response !== null) addMessage(response, false);
                 });
             } else {
                 addFollowUpButtons();
@@ -3717,7 +3772,6 @@
                 html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
                 html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
                 html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
-                html += '<button class="action-btn" onclick="openManageInventory()">Manage Inventory</button>';
                 html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
                 html += '</div>';
                 
@@ -3736,7 +3790,6 @@
             html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
             html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
             html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
-            html += '<button class="action-btn" onclick="openManageInventory()">Manage Inventory</button>';
             html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
             html += '</div>';
             
@@ -3750,7 +3803,6 @@
             html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
             html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
             html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
-            html += '<button class="action-btn" onclick="openManageInventory()">Manage Inventory</button>';
             html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
             html += '</div>';
             
@@ -4134,7 +4186,7 @@
             processMessage(prompt).then(response => {
                 const messages = chatContainer.querySelectorAll('.message');
                 messages[messages.length - 1].remove();
-                addMessage(response, false);
+                if (response !== null) addMessage(response, false);
             });
         }
 

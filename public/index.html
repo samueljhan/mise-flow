@@ -697,25 +697,25 @@
 
     <!-- Manage Inventory Modal -->
     <div class="modal-overlay" id="inventoryModal">
-        <div class="modal" style="max-width: 800px; max-height: 90vh; overflow-y: auto;">
+        <div class="modal" style="max-width: 620px; max-height: 90vh; overflow-y: auto;">
             <h3>Manage Coffee Inventory</h3>
             
             <div style="margin-bottom: 20px;">
                 <h4 style="color: #90EE90; margin-bottom: 10px;">Green Coffee (Unroasted)</h4>
-                <div style="color: #888; font-size: 11px; margin-bottom: 8px;">Name, Weight, Profile, Drop Temp, Origin, Lot #, Supplier, Notes</div>
+                <div style="color: #666; font-size: 10px; margin-bottom: 8px;">Name | Weight (lb) | Profile | Drop Temp (°F)</div>
                 <div id="greenCoffeeList"></div>
                 <button class="modal-btn send" onclick="addGreenCoffee()" style="margin-top: 10px; width: auto; padding: 8px 16px;">+ Add Green Coffee</button>
             </div>
             
             <div style="margin-bottom: 20px;">
                 <h4 style="color: #90EE90; margin-bottom: 10px;">Roasted Coffee</h4>
-                <div style="color: #888; font-size: 11px; margin-bottom: 8px;">Name, Weight, Type, Roast Level, Recipe, Special Instructions, Notes</div>
+                <div style="color: #666; font-size: 10px; margin-bottom: 8px;">Name | Weight (lb) | Type (recipe for blends)</div>
                 <div id="roastedCoffeeList"></div>
                 <button class="modal-btn send" onclick="addRoastedCoffee()" style="margin-top: 10px; width: auto; padding: 8px 16px;">+ Add Roasted Coffee</button>
             </div>
             
             <div class="modal-buttons">
-                <button class="modal-btn cancel" onclick="closeInventoryModal()">Close</button>
+                <button class="modal-btn cancel" onclick="closeInventoryModal()">Cancel</button>
                 <button class="modal-btn send" onclick="saveInventoryChanges()">Save Changes</button>
             </div>
         </div>
@@ -732,6 +732,23 @@
             <div class="modal-buttons">
                 <button class="modal-btn cancel" onclick="closeRoastOrderModal()">Cancel</button>
                 <button class="modal-btn send" onclick="generateRoastOrderEmail()">Generate Email</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Invoice Reminder Email Preview Modal -->
+    <div class="modal-overlay" id="invoiceReminderModal">
+        <div class="modal" style="max-width: 600px;">
+            <h3>📧 Invoice Reminder Email Preview</h3>
+            <input type="email" id="reminderEmailTo" placeholder="Recipient email">
+            <input type="text" id="reminderEmailSubject" placeholder="Subject">
+            <textarea id="reminderEmailBody" style="min-height: 250px;"></textarea>
+            <div style="color: #888; font-size: 12px; margin-top: 8px; padding: 8px; background: #2a2a2a; border-radius: 4px;">
+                📎 Invoice PDFs will be attached automatically
+            </div>
+            <div class="modal-buttons">
+                <button class="modal-btn cancel" onclick="closeInvoiceReminderModal()">Cancel</button>
+                <button class="modal-btn send" onclick="confirmInvoiceReminder()">Create Draft</button>
             </div>
         </div>
     </div>
@@ -1433,13 +1450,10 @@
         async function copyRoastEmail() {
             if (!pendingRoastEmail) return;
             
-            // Format email as plain text
-            const emailText = `To: ${pendingRoastEmail.to}\nSubject: ${pendingRoastEmail.subject}\n\n${pendingRoastEmail.body}`;
+            addMessage('Validating inventory and updating...', false);
             
             try {
-                await navigator.clipboard.writeText(emailText);
-                
-                // Update inventory and en route without creating Gmail draft
+                // First, update inventory and en route
                 const response = await fetch('/api/roast-order/confirm-no-draft', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1450,8 +1464,35 @@
                 
                 const data = await response.json();
                 
+                // Check for inventory shortage
+                if (data.success === false) {
+                    let errorHtml = '<strong style="color: #ff6b6b;">Order Cannot Be Confirmed</strong><br><br>';
+                    errorHtml += `<div style="color: #ff6b6b; margin-bottom: 12px;">${data.message}</div>`;
+                    
+                    if (data.shortages && data.shortages.length > 0) {
+                        errorHtml += '<div style="margin-bottom: 12px;">Shortages:</div>';
+                        data.shortages.forEach(s => {
+                            errorHtml += `<div style="color: #ff6b6b;">• ${s.name}: need ${s.required}lb, only ${s.available}lb available</div>`;
+                        });
+                    }
+                    
+                    errorHtml += '<br><div>Please reduce the order quantities or add more green coffee inventory.</div>';
+                    
+                    const messages = chatContainer.querySelectorAll('.message');
+                    const lastMsg = messages[messages.length - 1];
+                    if (lastMsg) {
+                        const content = lastMsg.querySelector('.message-content') || lastMsg;
+                        content.innerHTML = errorHtml;
+                    }
+                    return;
+                }
+                
+                // Only copy email if inventory update succeeded
+                const emailText = `To: ${pendingRoastEmail.to}\nSubject: ${pendingRoastEmail.subject}\n\n${pendingRoastEmail.body}`;
+                await navigator.clipboard.writeText(emailText);
+                
                 // Show confirmation message
-                let confirmHtml = '<strong>Email Copied to Clipboard</strong><br><br>';
+                let confirmHtml = '<strong>Order Confirmed & Email Copied</strong><br><br>';
                 confirmHtml += '<div style="color: #90EE90; margin-bottom: 12px;">✓ Email copied - paste into your email client</div>';
                 
                 if (data.deductions && data.deductions.length > 0) {
@@ -2214,17 +2255,12 @@
             const subject = document.getElementById('roastEmailSubject').value;
             const body = document.getElementById('roastEmailBody').value;
             
-            // Format email as plain text
-            const emailText = `To: ${to}\nSubject: ${subject}\n\n${body}`;
-            
             document.getElementById('roastEmailModal').style.display = 'none';
             
+            addMessage('Validating inventory and updating...', false);
+            
             try {
-                await navigator.clipboard.writeText(emailText);
-                
-                addMessage('Copying email and updating inventory...', false);
-                
-                // Update inventory and en route without creating Gmail draft
+                // First, update inventory and en route
                 const response = await fetch('/api/roast-order/confirm-no-draft', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -2235,8 +2271,38 @@
                 
                 const data = await response.json();
                 
+                // Check for inventory shortage
+                if (data.success === false) {
+                    let errorHtml = '<strong style="color: #ff6b6b;">Order Cannot Be Confirmed</strong><br><br>';
+                    errorHtml += `<div style="color: #ff6b6b; margin-bottom: 12px;">${data.message}</div>`;
+                    
+                    if (data.shortages && data.shortages.length > 0) {
+                        errorHtml += '<div style="margin-bottom: 12px;">Shortages:</div>';
+                        data.shortages.forEach(s => {
+                            errorHtml += `<div style="color: #ff6b6b;">• ${s.name}: need ${s.required}lb, only ${s.available}lb available</div>`;
+                        });
+                    }
+                    
+                    errorHtml += '<br><div>Please reduce the order quantities or add more green coffee inventory.</div>';
+                    
+                    const messages = chatContainer.querySelectorAll('.message');
+                    const lastMsg = messages[messages.length - 1];
+                    if (lastMsg) {
+                        const content = lastMsg.querySelector('.message-content') || lastMsg;
+                        content.innerHTML = errorHtml;
+                    }
+                    
+                    // Re-open the modal so user can adjust
+                    document.getElementById('roastEmailModal').style.display = 'flex';
+                    return;
+                }
+                
+                // Only copy email if inventory update succeeded
+                const emailText = `To: ${to}\nSubject: ${subject}\n\n${body}`;
+                await navigator.clipboard.writeText(emailText);
+                
                 // Show confirmation message
-                let confirmHtml = '<strong>Email Copied to Clipboard</strong><br><br>';
+                let confirmHtml = '<strong>Order Confirmed & Email Copied</strong><br><br>';
                 confirmHtml += '<div style="color: #90EE90; margin-bottom: 12px;">✓ Email copied - paste into your email client</div>';
                 
                 if (data.deductions && data.deductions.length > 0) {
@@ -2270,7 +2336,7 @@
                 addConversationalFollowUp('roast_order_confirmed');
                 
             } catch (error) {
-                console.error('Error copying email:', error);
+                console.error('Error confirming order:', error);
                 addMessage('Error: ' + error.message, false);
             }
         }
@@ -2285,60 +2351,35 @@
         }
 
         function renderInventoryModal() {
-            // Green coffee list - comprehensive with all fields
+            // Green coffee list - simplified to one line
             let greenHtml = '';
             greenCoffeeInventory.forEach((coffee, index) => {
-                greenHtml += `<div style="background:#1a1a1a; padding:12px; border-radius:8px; margin-bottom:10px;">`;
-                
-                // Row 1: Name and Weight
-                greenHtml += `<div style="display:flex; gap:10px; align-items:center; margin-bottom:8px;">`;
-                greenHtml += `<input type="text" value="${coffee.name}" placeholder="Coffee Name" style="flex:2; min-width:150px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-green-name="${index}">`;
-                greenHtml += `<label style="font-size:12px; color:white; display:flex; align-items:center; gap:4px;">`;
-                greenHtml += `<input type="number" value="${coffee.weight}" placeholder="0" style="width:70px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-green-weight="${index}"> lb</label>`;
+                greenHtml += `<div style="background:#1a1a1a; padding:10px 12px; border-radius:8px; margin-bottom:8px;">`;
+                greenHtml += `<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">`;
+                greenHtml += `<input type="text" value="${coffee.name}" placeholder="Name" style="flex:2; min-width:140px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px; font-size:13px;" data-green-name="${index}">`;
+                greenHtml += `<input type="number" value="${coffee.weight}" placeholder="0" style="width:60px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px; font-size:13px;" data-green-weight="${index}">`;
+                greenHtml += `<span style="color:#888; font-size:12px;">lb</span>`;
+                greenHtml += `<input type="text" value="${coffee.roastProfile || ''}" placeholder="Profile" style="width:70px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px; font-size:13px;" data-green-profile="${index}">`;
+                greenHtml += `<input type="text" value="${coffee.dropTemp || ''}" placeholder="Drop°F" style="width:60px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px; font-size:13px;" data-green-droptemp="${index}">`;
                 greenHtml += `<button onclick="removeGreenCoffee(${index})" style="background:#6a4141; border:none; color:white; padding:6px 10px; border-radius:4px; cursor:pointer;" title="Remove">×</button>`;
                 greenHtml += `</div>`;
-                
-                // Row 2: Roast Profile and Drop Temp
-                greenHtml += `<div style="display:flex; gap:10px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">`;
-                greenHtml += `<label style="font-size:12px; color:#888; display:flex; align-items:center; gap:4px;">Profile: `;
-                greenHtml += `<input type="text" value="${coffee.roastProfile || ''}" placeholder="000000" style="width:80px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-green-profile="${index}"></label>`;
-                greenHtml += `<label style="font-size:12px; color:#888; display:flex; align-items:center; gap:4px;">Drop Temp: `;
-                greenHtml += `<input type="number" value="${coffee.dropTemp || ''}" placeholder="400" style="width:70px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-green-droptemp="${index}"> °F</label>`;
-                greenHtml += `</div>`;
-                
-                // Row 3: Origin, Lot Number, Supplier
-                greenHtml += `<div style="display:flex; gap:10px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">`;
-                greenHtml += `<label style="font-size:12px; color:#888; display:flex; align-items:center; gap:4px;">Origin: `;
-                greenHtml += `<input type="text" value="${coffee.origin || ''}" placeholder="Country" style="width:100px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-green-origin="${index}"></label>`;
-                greenHtml += `<label style="font-size:12px; color:#888; display:flex; align-items:center; gap:4px;">Lot #: `;
-                greenHtml += `<input type="text" value="${coffee.lotNumber || ''}" placeholder="Lot" style="width:80px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-green-lot="${index}"></label>`;
-                greenHtml += `<label style="font-size:12px; color:#888; display:flex; align-items:center; gap:4px;">Supplier: `;
-                greenHtml += `<input type="text" value="${coffee.supplier || ''}" placeholder="Supplier" style="width:120px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-green-supplier="${index}"></label>`;
-                greenHtml += `</div>`;
-                
-                // Row 4: Notes
-                greenHtml += `<div>`;
-                greenHtml += `<input type="text" value="${coffee.notes || ''}" placeholder="Notes..." style="width:100%; padding:6px; background:#2a2a2a; border:1px solid #444; color:#aaa; border-radius:4px; font-size:11px;" data-green-notes="${index}">`;
-                greenHtml += `</div>`;
-                
                 greenHtml += `</div>`;
             });
             document.getElementById('greenCoffeeList').innerHTML = greenHtml || '<div style="color:#888;">No green coffee in inventory</div>';
             
-            // Roasted coffee list - comprehensive with all fields
+            // Roasted coffee list - simplified: name, weight, type, recipe (blends only)
             let roastedHtml = '';
             const typeOptions = ['Single Origin', 'Blend', 'Private Label'];
-            const roastLevelOptions = ['', 'Light', 'Medium-Light', 'Medium', 'Medium-Dark', 'Dark'];
             
             roastedCoffeeInventory.forEach((coffee, index) => {
-                roastedHtml += `<div style="background:#1a1a1a; padding:12px; border-radius:8px; margin-bottom:10px;">`;
+                roastedHtml += `<div style="background:#1a1a1a; padding:10px 12px; border-radius:8px; margin-bottom:8px;">`;
                 
-                // Row 1: Name, Weight, Type
-                roastedHtml += `<div style="display:flex; gap:10px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">`;
-                roastedHtml += `<input type="text" value="${coffee.name}" placeholder="Coffee Name" style="flex:2; min-width:150px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-roasted-name="${index}">`;
-                roastedHtml += `<label style="font-size:12px; color:white; display:flex; align-items:center; gap:4px;">`;
-                roastedHtml += `<input type="number" value="${coffee.weight}" placeholder="0" style="width:70px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-roasted-weight="${index}"> lb</label>`;
-                roastedHtml += `<select style="padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-roasted-type="${index}" onchange="updateRoastedTypeUI(${index})">`;
+                // Main row: Name, Weight, Type, Remove button
+                roastedHtml += `<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">`;
+                roastedHtml += `<input type="text" value="${coffee.name}" placeholder="Name" style="flex:2; min-width:140px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px; font-size:13px;" data-roasted-name="${index}">`;
+                roastedHtml += `<input type="number" value="${coffee.weight}" placeholder="0" style="width:60px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px; font-size:13px;" data-roasted-weight="${index}">`;
+                roastedHtml += `<span style="color:#888; font-size:12px;">lb</span>`;
+                roastedHtml += `<select style="padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px; font-size:13px;" data-roasted-type="${index}" onchange="updateRoastedTypeUI(${index})">`;
                 typeOptions.forEach(type => {
                     roastedHtml += `<option value="${type}" ${coffee.type === type ? 'selected' : ''}>${type}</option>`;
                 });
@@ -2346,20 +2387,10 @@
                 roastedHtml += `<button onclick="removeRoastedCoffee(${index})" style="background:#6a4141; border:none; color:white; padding:6px 10px; border-radius:4px; cursor:pointer;" title="Remove">×</button>`;
                 roastedHtml += `</div>`;
                 
-                // Row 1.5: Roast Level
-                roastedHtml += `<div style="display:flex; gap:10px; align-items:center; margin-bottom:8px;">`;
-                roastedHtml += `<label style="font-size:12px; color:#888; display:flex; align-items:center; gap:4px;">Roast Level: `;
-                roastedHtml += `<select style="padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-roasted-level="${index}">`;
-                roastLevelOptions.forEach(level => {
-                    roastedHtml += `<option value="${level}" ${coffee.roastLevel === level ? 'selected' : ''}>${level || '(Not Set)'}</option>`;
-                });
-                roastedHtml += `</select></label>`;
-                roastedHtml += `</div>`;
-                
-                // Row 2: Recipe (only for non-Private Label)
-                if (coffee.type !== 'Private Label') {
+                // Recipe section - only for Blends
+                if (coffee.type === 'Blend') {
                     roastedHtml += `<div style="background:#2a2a2a; padding:8px; border-radius:4px; margin-top:8px;">`;
-                    roastedHtml += `<div style="font-size:11px; color:#888; margin-bottom:6px;">Recipe (Green Coffee Components):</div>`;
+                    roastedHtml += `<div style="font-size:11px; color:#888; margin-bottom:6px;">Recipe:</div>`;
                     
                     if (coffee.recipe && coffee.recipe.length > 0) {
                         coffee.recipe.forEach((comp, compIndex) => {
@@ -2369,7 +2400,7 @@
                                 roastedHtml += `<option value="${green.id}" ${comp.greenCoffeeId === green.id ? 'selected' : ''}>${green.name}</option>`;
                             });
                             roastedHtml += `</select>`;
-                            roastedHtml += `<input type="number" value="${comp.percentage}" placeholder="%" style="width:60px; padding:4px; background:#1a1a1a; border:1px solid #444; color:white; border-radius:4px; font-size:12px;" data-roasted-recipe-pct="${index}-${compIndex}">`;
+                            roastedHtml += `<input type="number" value="${comp.percentage}" placeholder="%" style="width:55px; padding:4px; background:#1a1a1a; border:1px solid #444; color:white; border-radius:4px; font-size:12px;" data-roasted-recipe-pct="${index}-${compIndex}">`;
                             roastedHtml += `<span style="font-size:11px; color:#888;">%</span>`;
                             roastedHtml += `<button onclick="removeRecipeComponent(${index}, ${compIndex})" style="background:#4a3030; border:none; color:#999; padding:2px 6px; border-radius:4px; cursor:pointer; font-size:10px;">×</button>`;
                             roastedHtml += `</div>`;
@@ -2380,20 +2411,7 @@
                     
                     roastedHtml += `<button onclick="addRecipeComponent(${index})" style="background:#28a745; border:none; color:white; padding:4px 8px; border-radius:4px; cursor:pointer; font-size:11px; margin-top:6px;">+ Add Component</button>`;
                     roastedHtml += `</div>`;
-                } else {
-                    roastedHtml += `<div style="font-size:11px; color:#666; margin-top:6px; font-style:italic;">Private Label - No recipe required</div>`;
                 }
-                
-                // Special Instructions (always show input)
-                roastedHtml += `<div style="margin-top:8px;">`;
-                roastedHtml += `<label style="font-size:11px; color:#888;">Special Instructions:</label>`;
-                roastedHtml += `<input type="text" value="${coffee.specialInstructions || ''}" placeholder="e.g., Split 50/50 between lots..." style="width:100%; padding:6px; background:#2a2a2a; border:1px solid #444; color:#f0ad4e; border-radius:4px; font-size:11px; margin-top:4px;" data-roasted-instructions="${index}">`;
-                roastedHtml += `</div>`;
-                
-                // Notes
-                roastedHtml += `<div style="margin-top:8px;">`;
-                roastedHtml += `<input type="text" value="${coffee.notes || ''}" placeholder="Notes..." style="width:100%; padding:6px; background:#2a2a2a; border:1px solid #444; color:#aaa; border-radius:4px; font-size:11px;" data-roasted-notes="${index}">`;
-                roastedHtml += `</div>`;
                 
                 roastedHtml += `</div>`;
             });
@@ -2405,10 +2423,8 @@
             const typeEl = document.querySelector(`[data-roasted-type="${index}"]`);
             if (typeEl) {
                 roastedCoffeeInventory[index].type = typeEl.value;
-                if (typeEl.value === 'Private Label') {
-                    roastedCoffeeInventory[index].recipe = null;
-                } else if (!roastedCoffeeInventory[index].recipe) {
-                    // Initialize empty recipe for non-private label
+                if (typeEl.value === 'Blend' && !roastedCoffeeInventory[index].recipe) {
+                    // Initialize empty recipe for blends
                     roastedCoffeeInventory[index].recipe = [];
                 }
                 renderInventoryModal();
@@ -2448,12 +2464,8 @@
                 id: 'new-green-' + Date.now(),
                 name: 'New Green Coffee',
                 weight: 0,
-                roastProfile: '000000',
-                dropTemp: 400,
-                origin: '',
-                lotNumber: '',
-                supplier: '',
-                notes: ''
+                roastProfile: '',
+                dropTemp: ''
             });
             renderInventoryModal();
         }
@@ -2471,10 +2483,7 @@
                 name: 'New Roasted Coffee',
                 weight: 0,
                 type: 'Single Origin',
-                roastLevel: 'Medium',
-                recipe: [],
-                specialInstructions: '',
-                notes: ''
+                recipe: []
             });
             renderInventoryModal();
         }
@@ -2487,47 +2496,38 @@
         }
 
         async function saveInventoryChanges() {
-            // Collect green coffee updates (all fields)
+            // Confirm before saving
+            if (!confirm('Save all inventory changes?')) {
+                return;
+            }
+            
+            // Collect green coffee updates (simplified fields only)
             greenCoffeeInventory.forEach((coffee, index) => {
                 const nameEl = document.querySelector(`[data-green-name="${index}"]`);
                 const weightEl = document.querySelector(`[data-green-weight="${index}"]`);
                 const profileEl = document.querySelector(`[data-green-profile="${index}"]`);
                 const dropTempEl = document.querySelector(`[data-green-droptemp="${index}"]`);
-                const originEl = document.querySelector(`[data-green-origin="${index}"]`);
-                const lotEl = document.querySelector(`[data-green-lot="${index}"]`);
-                const supplierEl = document.querySelector(`[data-green-supplier="${index}"]`);
-                const notesEl = document.querySelector(`[data-green-notes="${index}"]`);
                 
                 if (nameEl) coffee.name = nameEl.value;
                 if (weightEl) coffee.weight = parseFloat(weightEl.value) || 0;
-                if (profileEl) coffee.roastProfile = profileEl.value || '000000';
-                if (dropTempEl) coffee.dropTemp = parseInt(dropTempEl.value) || 400;
-                if (originEl) coffee.origin = originEl.value || '';
-                if (lotEl) coffee.lotNumber = lotEl.value || '';
-                if (supplierEl) coffee.supplier = supplierEl.value || '';
-                if (notesEl) coffee.notes = notesEl.value || '';
+                if (profileEl) coffee.roastProfile = profileEl.value || '';
+                if (dropTempEl) coffee.dropTemp = parseInt(dropTempEl.value) || 0;
                 coffee.id = coffee.name.toLowerCase().replace(/\s+/g, '-');
             });
             
-            // Collect roasted coffee updates (all fields including recipe)
+            // Collect roasted coffee updates (simplified: name, weight, type, recipe for blends)
             roastedCoffeeInventory.forEach((coffee, index) => {
                 const nameEl = document.querySelector(`[data-roasted-name="${index}"]`);
                 const weightEl = document.querySelector(`[data-roasted-weight="${index}"]`);
                 const typeEl = document.querySelector(`[data-roasted-type="${index}"]`);
-                const levelEl = document.querySelector(`[data-roasted-level="${index}"]`);
-                const instructionsEl = document.querySelector(`[data-roasted-instructions="${index}"]`);
-                const notesEl = document.querySelector(`[data-roasted-notes="${index}"]`);
                 
                 if (nameEl) coffee.name = nameEl.value;
                 if (weightEl) coffee.weight = parseFloat(weightEl.value) || 0;
                 if (typeEl) coffee.type = typeEl.value;
-                if (levelEl) coffee.roastLevel = levelEl.value || '';
-                if (instructionsEl) coffee.specialInstructions = instructionsEl.value || '';
-                if (notesEl) coffee.notes = notesEl.value || '';
                 coffee.id = coffee.name.toLowerCase().replace(/\s+/g, '-') + '-roasted';
                 
-                // Collect recipe components
-                if (coffee.type !== 'Private Label' && coffee.recipe) {
+                // Collect recipe components only for Blends
+                if (coffee.type === 'Blend' && coffee.recipe) {
                     coffee.recipe.forEach((comp, compIndex) => {
                         const greenEl = document.querySelector(`[data-roasted-recipe-green="${index}-${compIndex}"]`);
                         const pctEl = document.querySelector(`[data-roasted-recipe-pct="${index}-${compIndex}"]`);
@@ -2671,7 +2671,7 @@
                 case 'outstanding_invoices':
                     return 'View →';
                 case 'retail_overview':
-                    return 'Enter →';
+                    return 'View →';
                 default:
                     return 'Go →';
             }
@@ -2768,10 +2768,50 @@
                 return;
             }
             
+            // Store the group data for when the modal is confirmed
+            window.pendingReminderGroup = group;
+            
             const invoiceCount = group.invoices.length;
             const totalFormatted = `$${group.totalAmount.toFixed(2)}`;
-            const confirmDraft = confirm(`Create draft reminder for ${group.customerName}?\n\n${invoiceCount} invoice${invoiceCount > 1 ? 's' : ''} totaling ${totalFormatted}\nTo: ${group.customerEmails[0]}\n\nInvoice PDFs will be attached.`);
-            if (!confirmDraft) return;
+            const invoiceList = group.invoices.map(inv => `${inv.invoiceNumber} - ${inv.date} - $${inv.amount.toFixed(2)}`).join('\n');
+            
+            // Populate modal
+            document.getElementById('reminderEmailTo').value = group.customerEmails[0];
+            document.getElementById('reminderEmailSubject').value = `Payment Reminder - ${invoiceCount} Outstanding Invoice${invoiceCount > 1 ? 's' : ''} (${totalFormatted})`;
+            document.getElementById('reminderEmailBody').value = 
+`Hi ${group.customerName},
+
+This is a friendly reminder that you have ${invoiceCount} outstanding invoice${invoiceCount > 1 ? 's' : ''} totaling ${totalFormatted}:
+
+${invoiceList}
+
+Please let us know if you have any questions.
+
+Thank you,
+Archives of Us Coffee`;
+            
+            // Show modal
+            document.getElementById('invoiceReminderModal').style.display = 'flex';
+        }
+        
+        function closeInvoiceReminderModal() {
+            document.getElementById('invoiceReminderModal').style.display = 'none';
+            window.pendingReminderGroup = null;
+        }
+        
+        async function confirmInvoiceReminder() {
+            const group = window.pendingReminderGroup;
+            if (!group) {
+                closeInvoiceReminderModal();
+                return;
+            }
+            
+            // Get edited values from modal
+            const editedTo = document.getElementById('reminderEmailTo').value;
+            const editedSubject = document.getElementById('reminderEmailSubject').value;
+            const editedBody = document.getElementById('reminderEmailBody').value;
+            
+            closeInvoiceReminderModal();
             
             try {
                 addMessage(`📝 Creating draft reminder for ${group.customerName}...`, false);
@@ -2781,9 +2821,11 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         customerName: group.customerName,
-                        customerEmails: group.customerEmails,
+                        customerEmails: [editedTo],
                         invoices: group.invoices,
-                        totalAmount: group.totalAmount
+                        totalAmount: group.totalAmount,
+                        customSubject: editedSubject,
+                        customBody: editedBody
                     })
                 });
                 
@@ -4552,9 +4594,10 @@
                     pendingInvoice = false;
                     // Route to normal processing
                     processMessage(message).then(response => {
-                        const messages = chatContainer.querySelectorAll('.message');
-                        messages[messages.length - 1].remove();
+                        // Only remove loader if processMessage didn't handle it (response is not null)
                         if (response !== null) {
+                            const messages = chatContainer.querySelectorAll('.message');
+                            messages[messages.length - 1].remove();
                             addMessage(response, false);
                         }
                     });
@@ -4570,9 +4613,10 @@
                 }
             } else {
                 processMessage(message).then(response => {
-                    const messages = chatContainer.querySelectorAll('.message');
-                    messages[messages.length - 1].remove();
+                    // Only remove loader if processMessage didn't handle it (response is not null)
                     if (response !== null) {
+                        const messages = chatContainer.querySelectorAll('.message');
+                        messages[messages.length - 1].remove();
                         addMessage(response, false);
                     }
                 });

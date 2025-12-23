@@ -819,55 +819,35 @@ let greenCoffeeInventory = [
     name: 'Colombia Antioquia',
     weight: 100,
     roastProfile: '122302',
-    dropTemp: 410,
-    origin: 'Colombia',
-    lotNumber: '',
-    supplier: '',
-    notes: ''
+    dropTemp: 410
   },
   {
     id: 'ethiopia-gera-58484',
     name: 'Ethiopia Gera 58484',
     weight: 50,
     roastProfile: '061901',
-    dropTemp: 414,
-    origin: 'Ethiopia',
-    lotNumber: '58484',
-    supplier: '',
-    notes: ''
+    dropTemp: 414
   },
   {
     id: 'ethiopia-gera-58479',
     name: 'Ethiopia Gera 58479',
     weight: 50,
     roastProfile: '061901',
-    dropTemp: 414,
-    origin: 'Ethiopia',
-    lotNumber: '58479',
-    supplier: '',
-    notes: ''
+    dropTemp: 414
   },
   {
     id: 'brazil-mogiano',
     name: 'Brazil Mogiano',
     weight: 400,
     roastProfile: '199503',
-    dropTemp: 419,
-    origin: 'Brazil',
-    lotNumber: '',
-    supplier: '',
-    notes: ''
+    dropTemp: 419
   },
   {
     id: 'ethiopia-yirgacheffe',
     name: 'Ethiopia Yirgacheffe',
     weight: 100,
     roastProfile: '141402',
-    dropTemp: 415,
-    origin: 'Ethiopia',
-    lotNumber: '',
-    supplier: '',
-    notes: ''
+    dropTemp: 415
   }
 ];
 
@@ -880,48 +860,36 @@ let roastedCoffeeInventory = [
     name: 'Archives Blend',
     weight: 150,
     type: 'Blend',
-    roastLevel: 'Medium',
     recipe: [
       { greenCoffeeId: 'brazil-mogiano', name: 'Brazil Mogiano', percentage: 66.6667 },
       { greenCoffeeId: 'ethiopia-yirgacheffe', name: 'Ethiopia Yirgacheffe', percentage: 33.3333 }
-    ],
-    specialInstructions: '',
-    notes: ''
+    ]
   },
   {
     id: 'ethiopia-gera-roasted',
     name: 'Ethiopia Gera',
     weight: 40,
     type: 'Single Origin',
-    roastLevel: 'Light',
     recipe: [
       { greenCoffeeId: 'ethiopia-gera-58484', name: 'Ethiopia Gera 58484', percentage: 50 },
       { greenCoffeeId: 'ethiopia-gera-58479', name: 'Ethiopia Gera 58479', percentage: 50 }
-    ],
-    specialInstructions: 'Split 50/50 between lot 58484 and 58479 for each batch',
-    notes: ''
+    ]
   },
   {
     id: 'colombia-excelso',
     name: 'Colombia Excelso',
     weight: 50,
     type: 'Single Origin',
-    roastLevel: 'Medium',
     recipe: [
       { greenCoffeeId: 'colombia-antioquia', name: 'Colombia Antioquia', percentage: 100 }
-    ],
-    specialInstructions: '',
-    notes: ''
+    ]
   },
   {
     id: 'colombia-decaf',
     name: 'Colombia Decaf',
     weight: 30,
     type: 'Private Label',
-    roastLevel: '',
-    recipe: null,
-    specialInstructions: '',
-    notes: ''
+    recipe: null
   }
 ];
 
@@ -1162,34 +1130,34 @@ async function syncInventoryToSheets() {
     const data = [];
     
     // Row 1: empty
-    data.push(['', '', '', '', '', '', '', '']);
+    data.push(['', '', '', '', '', '', '']);
     
     // Row 2: Last updated timestamp
-    data.push(['', `Last updated: ${pstTimestamp}`, '', '', '', '', '', '']);
+    data.push(['', `Last updated: ${pstTimestamp}`, '', '', '', '', '']);
     
     // Row 3: empty (spacing)
-    data.push(['', '', '', '', '', '', '', '']);
+    data.push(['', '', '', '', '', '', '']);
     
     // GREEN COFFEE SECTION
-    data.push(['', 'Green Coffee Inventory', '', '', '', '', '', '', '']);
-    data.push(['', 'Name', 'Weight (lb)', 'Roast Profile', 'Drop Temperature', 'Origin', 'Lot Number', 'Supplier', 'Notes']);
+    data.push(['', 'Green Coffee Inventory', '', '', '', '', '']);
+    data.push(['', 'Name', 'Weight (lb)', 'Roast Profile', 'Drop Temperature', '', '']);
     greenCoffeeInventory.forEach(c => {
-      data.push(['', c.name, c.weight, c.roastProfile || '', c.dropTemp || '', c.origin || '', c.lotNumber || '', c.supplier || '', c.notes || '']);
+      data.push(['', c.name, c.weight, c.roastProfile || '', c.dropTemp || '', '', '']);
     });
     
     // Empty row
-    data.push(['', '', '', '', '', '', '', '', '']);
+    data.push(['', '', '', '', '', '', '']);
     
     // ROASTED COFFEE SECTION
-    data.push(['', 'Roasted Coffee Inventory', '', '', '', '', '', '', '']);
-    data.push(['', 'Name', 'Weight (lb)', 'Type', 'Roast Level', 'Recipe', 'Special Instructions', 'Notes', '']);
+    data.push(['', 'Roasted Coffee Inventory', '', '', '', '', '']);
+    data.push(['', 'Name', 'Weight (lb)', 'Type', 'Recipe', '', '']);
     roastedCoffeeInventory.forEach(c => {
       const recipe = c.recipe ? c.recipe.map(r => `${r.percentage}% ${r.name}`).join(' + ') : 'N/A';
-      data.push(['', c.name, c.weight, c.type || '', c.roastLevel || '', recipe, c.specialInstructions || '', c.notes || '', '']);
+      data.push(['', c.name, c.weight, c.type || '', recipe, '', '']);
     });
     
     // Empty row
-    data.push(['', '', '', '', '', '', '', '']);
+    data.push(['', '', '', '', '', '', '']);
     
     // EN ROUTE SECTION
     // En Route: ID in column B (internal), then Name, Weight, Tracking, Date Ordered, Est. Delivery
@@ -1340,15 +1308,11 @@ async function loadInventoryFromSheets() {
           name: row[1],
           weight: parseFloat(row[2]) || 0,
           roastProfile: String(row[3] || '').replace(/\.0$/, ''), // Remove trailing .0
-          dropTemp: parseFloat(row[4]) || 0,
-          origin: row[5] || '',
-          lotNumber: row[6] || '',
-          supplier: row[7] || '',
-          notes: row[8] || ''
+          dropTemp: parseFloat(row[4]) || 0
         });
       } else if (currentSection === 'roasted' && row[1]) {
-        // Column order: B=Name, C=Weight, D=Type, E=RoastLevel, F=Recipe, G=SpecialInstructions, H=Notes
-        const recipeStr = row[5] || '';
+        // Column order: B=Name, C=Weight, D=Type, E=Recipe
+        const recipeStr = row[4] || '';
         const recipe = parseRecipeString(recipeStr);
         
         // Determine type based on recipe or column value
@@ -1362,10 +1326,7 @@ async function loadInventoryFromSheets() {
           name: row[1],
           weight: parseFloat(row[2]) || 0,
           type: type,
-          roastLevel: row[4] || '',
-          recipe: recipe,
-          specialInstructions: row[6] || '',
-          notes: row[7] || ''
+          recipe: recipe
         });
       } else if (currentSection === 'enroute' && row[1]) {
         // Current format: B=ID, C=Name, D=Weight, E=Tracking, F=Date, G=Est
@@ -2914,7 +2875,7 @@ app.post('/api/invoices/draft-reminder', async (req, res) => {
     return res.status(401).json({ error: 'Google not connected' });
   }
   
-  const { customerName, customerEmails, invoices, totalAmount } = req.body;
+  const { customerName, customerEmails, invoices, totalAmount, customSubject, customBody } = req.body;
   
   if (!invoices || invoices.length === 0) {
     return res.status(400).json({ error: 'No invoices provided' });
@@ -2932,19 +2893,29 @@ app.post('/api/invoices/draft-reminder', async (req, res) => {
     const invoiceCount = invoices.length;
     const invoiceNumbers = invoices.map(inv => inv.invoiceNumber).join(', ');
     
-    const subject = invoiceCount === 1 
-      ? `Payment Reminder - Invoice ${invoices[0].invoiceNumber}`
-      : `Payment Reminder - ${invoiceCount} Outstanding Invoices`;
+    // Use custom subject/body if provided, otherwise generate default
+    let subject, body;
     
-    // Build invoice list for email body
-    let invoiceList = '';
-    invoices.forEach(inv => {
-      invoiceList += `  • ${inv.invoiceNumber} (${inv.date}) - ${inv.amount}\n`;
-    });
+    if (customSubject) {
+      subject = customSubject;
+    } else {
+      subject = invoiceCount === 1 
+        ? `Payment Reminder - Invoice ${invoices[0].invoiceNumber}`
+        : `Payment Reminder - ${invoiceCount} Outstanding Invoices`;
+    }
     
-    const totalFormatted = `$${totalAmount.toFixed(2)}`;
-    
-    const body = `Hi ${customerName},
+    if (customBody) {
+      body = customBody;
+    } else {
+      // Build invoice list for email body
+      let invoiceList = '';
+      invoices.forEach(inv => {
+        invoiceList += `  • ${inv.invoiceNumber} (${inv.date}) - ${inv.amount}\n`;
+      });
+      
+      const totalFormatted = `$${totalAmount.toFixed(2)}`;
+      
+      body = `Hi ${customerName},
 
 This is a friendly reminder that the following invoice${invoiceCount > 1 ? 's are' : ' is'} still outstanding:
 
@@ -2961,6 +2932,7 @@ Thank you for your business!
 
 Best regards,
 Archives of Us Coffee`;
+    }
 
     // Build email with multiple PDF attachments
     const boundary = 'boundary_' + Date.now();
@@ -4147,6 +4119,9 @@ app.get('/api/todo', async (req, res) => {
         }
       }
       
+      // Get current week range to exclude it (week not finished yet)
+      const currentWeekRange = getWeekRangeStringForRetail(new Date());
+      
       const weeksWithoutData = [];
       if (totalColIndex > -1) {
         for (let i = 2; i < retailRows.length; i++) {
@@ -4156,8 +4131,8 @@ app.get('/api/todo', async (req, res) => {
           const dateRange = row[1];
           const totalSales = row[totalColIndex];
           
-          // If no total or total is 0/empty, needs data
-          if (!totalSales || totalSales === 0 || totalSales === '') {
+          // If no total or total is 0/empty, needs data (but exclude current week)
+          if ((!totalSales || totalSales === 0 || totalSales === '') && dateRange !== currentWeekRange) {
             weeksWithoutData.push(dateRange);
           }
         }
@@ -4733,7 +4708,7 @@ app.get('/api/inventory/green', async (req, res) => {
 // Update green coffee inventory
 app.post('/api/inventory/green/update', async (req, res) => {
   await ensureFreshInventory();
-  const { id, name, weight, roastProfile, dropTemp, origin, lotNumber, supplier, notes } = req.body;
+  const { id, name, weight, roastProfile, dropTemp } = req.body;
   const coffee = greenCoffeeInventory.find(c => c.id === id);
   if (!coffee) {
     return res.status(404).json({ error: 'Green coffee not found' });
@@ -4750,10 +4725,6 @@ app.post('/api/inventory/green/update', async (req, res) => {
   if (weight !== undefined) coffee.weight = weight;
   if (roastProfile !== undefined) coffee.roastProfile = roastProfile;
   if (dropTemp !== undefined) coffee.dropTemp = dropTemp;
-  if (origin !== undefined) coffee.origin = origin;
-  if (lotNumber !== undefined) coffee.lotNumber = lotNumber;
-  if (supplier !== undefined) coffee.supplier = supplier;
-  if (notes !== undefined) coffee.notes = notes;
   await syncInventoryToSheets();
   res.json({ success: true, coffee, message: `${coffee.name} updated to ${coffee.weight}lb. What else can I help you with?` });
 });
@@ -4761,12 +4732,12 @@ app.post('/api/inventory/green/update', async (req, res) => {
 // Add new green coffee
 app.post('/api/inventory/green/add', async (req, res) => {
   await ensureFreshInventory();
-  const { name, weight, roastProfile, dropTemp, origin, lotNumber, supplier, notes } = req.body;
+  const { name, weight, roastProfile, dropTemp } = req.body;
   const id = name.toLowerCase().replace(/\s+/g, '-');
   if (greenCoffeeInventory.find(c => c.id === id)) {
     return res.status(400).json({ error: 'Coffee already exists' });
   }
-  const newCoffee = { id, name, weight, roastProfile, dropTemp, origin, lotNumber, supplier, notes };
+  const newCoffee = { id, name, weight, roastProfile, dropTemp };
   greenCoffeeInventory.push(newCoffee);
   await syncInventoryToSheets();
   res.json({ success: true, coffee: newCoffee });
@@ -4794,7 +4765,7 @@ app.get('/api/inventory/roasted', async (req, res) => {
 // Update roasted coffee inventory
 app.post('/api/inventory/roasted/update', async (req, res) => {
   await ensureFreshInventory();
-  const { id, name, weight, type, roastLevel, recipe, specialInstructions, notes } = req.body;
+  const { id, name, weight, type, recipe } = req.body;
   const coffee = roastedCoffeeInventory.find(c => c.id === id);
   if (!coffee) {
     return res.status(404).json({ error: 'Roasted coffee not found' });
@@ -4810,10 +4781,7 @@ app.post('/api/inventory/roasted/update', async (req, res) => {
   if (name !== undefined) coffee.name = name;
   if (weight !== undefined) coffee.weight = weight;
   if (type !== undefined) coffee.type = type;
-  if (roastLevel !== undefined) coffee.roastLevel = roastLevel;
   if (recipe !== undefined) coffee.recipe = recipe;
-  if (specialInstructions !== undefined) coffee.specialInstructions = specialInstructions;
-  if (notes !== undefined) coffee.notes = notes;
   await syncInventoryToSheets();
   res.json({ success: true, coffee, message: `${coffee.name} updated to ${coffee.weight}lb. What else can I help you with?` });
 });
@@ -4821,14 +4789,13 @@ app.post('/api/inventory/roasted/update', async (req, res) => {
 // Add new roasted coffee
 app.post('/api/inventory/roasted/add', async (req, res) => {
   await ensureFreshInventory();
-  const { name, weight, type, roastLevel, recipe, specialInstructions, notes } = req.body;
+  const { name, weight, type, recipe } = req.body;
   const id = name.toLowerCase().replace(/\s+/g, '-') + '-roasted';
-  const newCoffee = { id, name, weight, type, roastLevel, recipe, specialInstructions, notes };
+  const newCoffee = { id, name, weight, type, recipe };
   roastedCoffeeInventory.push(newCoffee);
   await syncInventoryToSheets();
   res.json({ success: true, coffee: newCoffee });
 });
-
 // Remove roasted coffee
 app.post('/api/inventory/roasted/remove', async (req, res) => {
   await ensureFreshInventory();
@@ -5131,24 +5098,26 @@ app.get('/api/retail/data', async (req, res) => {
     
     // Calculate weeks that need to be added up to current date
     const today = new Date();
-    const currentWeekRange = getWeekRangeString(today);
+    const currentWeekRange = getWeekRangeStringForRetail(today);
     
     // Find the last week end date in the sheet
-    let lastWeekEndDate = null;
+    let lastWeekStart = null;
     if (weeks.length > 0) {
       const lastWeek = weeks[weeks.length - 1];
-      lastWeekEndDate = parseWeekRangeEndDate(lastWeek.dateRange);
+      lastWeekStart = parseWeekStartDateForRetail(lastWeek.dateRange);
     }
     
     // Generate missing weeks
     const missingWeeks = [];
-    if (lastWeekEndDate) {
-      let nextWeekStart = new Date(lastWeekEndDate);
-      nextWeekStart.setDate(nextWeekStart.getDate() + 1);
+    if (lastWeekStart) {
+      let nextWeekStart = new Date(lastWeekStart);
+      nextWeekStart.setDate(nextWeekStart.getDate() + 7);
+      
+      const currentWeekStart = parseWeekStartDateForRetail(currentWeekRange);
       
       // Add weeks until we reach the current week
-      while (nextWeekStart <= today) {
-        const weekRange = getWeekRangeString(nextWeekStart);
+      while (currentWeekStart && nextWeekStart <= currentWeekStart) {
+        const weekRange = getWeekRangeStringForRetail(nextWeekStart);
         // Don't add if it's already in the list
         if (!weeks.find(w => w.dateRange === weekRange) && !missingWeeks.includes(weekRange)) {
           missingWeeks.push(weekRange);
@@ -5157,8 +5126,8 @@ app.get('/api/retail/data', async (req, res) => {
       }
     }
     
-    // Find weeks without sales data (incomplete)
-    const incompleteWeeks = weeks.filter(w => !w.hasData);
+    // Find weeks without sales data (incomplete), excluding current week since it's not finished yet
+    const incompleteWeeks = weeks.filter(w => !w.hasData && w.dateRange !== currentWeekRange);
     
     res.json({
       products,
@@ -6317,27 +6286,55 @@ app.post('/api/roast-order/generate-email', async (req, res) => {
       
       packagingItems.push(`~${Math.round(item.weight)}lb ${roastedCoffee.name}`);
       
+    } else if (roastedCoffee && roastedCoffee.type === 'Blend' && roastedCoffee.recipe) {
+      // Generic Blend (not Archives Blend)
+      const totalGreenWeight = Math.round(item.weight / 0.85);
+      
+      emailBody += `${roastedCoffee.name} (~${Math.round(item.weight)}lb roasted):\n`;
+      
+      roastedCoffee.recipe.forEach(comp => {
+        const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
+        const compGreenWeight = Math.round(totalGreenWeight * comp.percentage / 100);
+        const { batches, batchWeight } = calcBatches(compGreenWeight);
+        
+        if (greenCoffee) {
+          emailBody += `- ${batches} batch${batches > 1 ? 'es' : ''} of ${comp.name} (${batchWeight}lb - profile ${greenCoffee.roastProfile || 'TBD'} - drop temp ${greenCoffee.dropTemp || 'TBD'})\n`;
+        }
+      });
+      emailBody += '\n';
+      
+      packagingItems.push(`~${Math.round(item.weight)}lb ${roastedCoffee.name}`);
+      
     } else if (roastedCoffee && roastedCoffee.type === 'Private Label') {
       // Private Label - output = input (comes roasted)
       emailBody += `${roastedCoffee.name}:\n`;
       emailBody += `- ${Math.round(item.weight)}lb private label\n\n`;
       packagingItems.push(`${Math.round(item.weight)}lb ${roastedCoffee.name}`);
+    } else {
+      // Fallback for any other coffee type
+      emailBody += `${item.name} (~${Math.round(item.weight)}lb):\n`;
+      emailBody += `- ${Math.round(item.weight)}lb (details TBD)\n\n`;
+      packagingItems.push(`~${Math.round(item.weight)}lb ${item.name}`);
     }
   });
   
   // Packaging instructions - format list with 'and' before last item
-  emailBody += 'Can we have the ';
-  if (packagingItems.length === 1) {
-    emailBody += packagingItems[0];
-  } else if (packagingItems.length === 2) {
-    emailBody += packagingItems.join(' and ');
+  if (packagingItems.length > 0) {
+    emailBody += 'Can we have the ';
+    if (packagingItems.length === 1) {
+      emailBody += packagingItems[0];
+    } else if (packagingItems.length === 2) {
+      emailBody += packagingItems.join(' and ');
+    } else {
+      const lastItem = packagingItems.pop();
+      emailBody += packagingItems.join(', ') + ', and ' + lastItem;
+    }
+    emailBody += ' packed in our stamped/labeled bags and shipped using your labels to:\n';
   } else {
-    const lastItem = packagingItems.pop();
-    emailBody += packagingItems.join(', ') + ', and ' + lastItem;
+    emailBody += 'Please pack and ship using your labels to:\n';
   }
-  emailBody += ' packed in our stamped/labeled bags and shipped using your labels to:\n';
   
-  emailBody += '\nRay Park\n869 Estepona Way\nBuena Park, CA 90621\n';
+  emailBody += '\nRay Park\n4869 Estepona Way\nBuena Park, CA 90621\n';
   emailBody += '\nThanks so much!\n\nBest,\nRay';
   
   res.json({

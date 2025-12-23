@@ -3754,6 +3754,156 @@ app.get('/api/inventory', async (req, res) => {
   });
 });
 
+// ============ Retail Week Helpers (for To Do and Retail endpoints) ============
+
+// Helper to get week date range string (MM/DD/YY-MM/DD/YY format, Thu-Wed) for a given date
+function getWeekRangeStringForRetail(date) {
+  const d = new Date(date);
+  // Find the Thursday of the week (day 4)
+  const day = d.getDay();
+  const diffToThursday = (day >= 4) ? (day - 4) : (day + 3);
+  const thursday = new Date(d);
+  thursday.setDate(d.getDate() - diffToThursday);
+  
+  // Wednesday is 6 days after Thursday
+  const wednesday = new Date(thursday);
+  wednesday.setDate(thursday.getDate() + 6);
+  
+  const formatDate = (dt) => {
+    const m = (dt.getMonth() + 1).toString().padStart(2, '0');
+    const dd = dt.getDate().toString().padStart(2, '0');
+    const yy = dt.getFullYear().toString().slice(-2);
+    return `${m}/${dd}/${yy}`;
+  };
+  
+  return `${formatDate(thursday)}-${formatDate(wednesday)}`;
+}
+
+// Helper to parse week range string to get start date (Thursday)
+function parseWeekStartDateForRetail(weekStr) {
+  if (!weekStr) return null;
+  const parts = String(weekStr).split('-');
+  if (parts.length < 1) return null;
+  
+  const datePart = parts[0].trim();
+  const dateMatch = datePart.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (!dateMatch) return null;
+  
+  let [, month, day, year] = dateMatch;
+  if (year.length === 2) {
+    year = '20' + year;
+  }
+  return new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
+}
+
+// Ensure retail weeks are filled up to the current week
+async function ensureRetailWeeksUpToDate(sheets) {
+  try {
+    // Get current sheet data
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Retail Sales!A1:Z100'
+    });
+    
+    const rows = response.data.values || [];
+    const headerRow = rows[1] || [];
+    
+    // Find Total Retail Sales column to know structure
+    let totalColIndex = -1;
+    for (let i = 0; i < headerRow.length; i++) {
+      if (headerRow[i] === 'Total Retail Sales') {
+        totalColIndex = i;
+        break;
+      }
+    }
+    
+    if (totalColIndex === -1) {
+      console.log('Could not find Total Retail Sales column');
+      return;
+    }
+    
+    // Find existing weeks and last week date
+    const existingWeeks = [];
+    let lastDataRow = 2;
+    
+    for (let i = 2; i < rows.length; i++) {
+      const row = rows[i];
+      if (row && row[1]) {
+        existingWeeks.push(String(row[1]));
+        lastDataRow = i + 1;
+      }
+    }
+    
+    // Get current week range
+    const today = new Date();
+    const currentWeekRange = getWeekRangeStringForRetail(today);
+    
+    // Find the latest week in the sheet
+    let latestWeekStart = null;
+    if (existingWeeks.length > 0) {
+      const lastWeek = existingWeeks[existingWeeks.length - 1];
+      latestWeekStart = parseWeekStartDateForRetail(lastWeek);
+    }
+    
+    // Calculate which weeks are missing
+    const weeksToAdd = [];
+    
+    if (latestWeekStart) {
+      // Start from the week after the latest existing week
+      let nextWeekStart = new Date(latestWeekStart);
+      nextWeekStart.setDate(nextWeekStart.getDate() + 7);
+      
+      const currentWeekStart = parseWeekStartDateForRetail(currentWeekRange);
+      
+      // Add all weeks up to and including current week
+      while (currentWeekStart && nextWeekStart <= currentWeekStart) {
+        const weekRange = getWeekRangeStringForRetail(nextWeekStart);
+        if (!existingWeeks.includes(weekRange)) {
+          weeksToAdd.push(weekRange);
+        }
+        nextWeekStart.setDate(nextWeekStart.getDate() + 7);
+      }
+    } else {
+      // No existing weeks, add current week
+      weeksToAdd.push(currentWeekRange);
+    }
+    
+    if (weeksToAdd.length === 0) {
+      return; // Already up to date
+    }
+    
+    console.log(`📅 Adding ${weeksToAdd.length} missing week(s) to Retail Sales: ${weeksToAdd.join(', ')}`);
+    
+    // Build rows to append
+    const newRows = weeksToAdd.map(weekRange => {
+      const row = [];
+      for (let i = 0; i <= totalColIndex + 2; i++) {
+        if (i === 1) {
+          row.push(weekRange); // Column B = date
+        } else {
+          row.push(''); // Empty cell
+        }
+      }
+      return row;
+    });
+    
+    // Append the new rows
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Retail Sales!A${lastDataRow + 1}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: newRows
+      }
+    });
+    
+    console.log(`✅ Added ${weeksToAdd.length} week(s) to Retail Sales sheet`);
+    
+  } catch (error) {
+    console.error('Error ensuring retail weeks up to date:', error.message);
+  }
+}
+
 // Get To Do items - pending tasks needing attention
 app.get('/api/todo', async (req, res) => {
   if (!userTokens) {
@@ -3824,12 +3974,20 @@ app.get('/api/todo', async (req, res) => {
       inventoryItems.push({ name: c.name, weight: c.weight, type: 'enroute', status: 'delivery', id: c.id, tracking: c.trackingNumber });
     });
     
-    // Sort inventory items: critical first, then low, then alphabetically within each group
+    // Sort inventory items: critical vs low -> green vs roasted vs enroute -> alphabetical
     inventoryItems.sort((a, b) => {
       const statusOrder = { critical: 0, low: 1, tracking: 2, delivery: 3 };
+      const typeOrder = { green: 0, roasted: 1, enroute: 2 };
+      
+      // First sort by status
       if (statusOrder[a.status] !== statusOrder[b.status]) {
         return statusOrder[a.status] - statusOrder[b.status];
       }
+      // Then by type (green before roasted)
+      if (typeOrder[a.type] !== typeOrder[b.type]) {
+        return typeOrder[a.type] - typeOrder[b.type];
+      }
+      // Then alphabetically
       return a.name.localeCompare(b.name);
     });
     
@@ -3843,14 +4001,14 @@ app.get('/api/todo', async (req, res) => {
       todoItems.push({
         type: 'inventory_overview',
         priority: criticalCount > 0 ? 'high' : 'medium',
-        title: '📦 Inventory Overview',
+        title: 'Inventory Overview',
         description: inventoryItems.map(i => {
           const typeLabel = i.type === 'green' ? 'green' : i.type === 'roasted' ? 'roasted' : 'en route';
-          if (i.status === 'critical') return `🔴 ${i.name} (${i.weight}lb ${typeLabel}) - CRITICAL`;
-          if (i.status === 'low') return `🟡 ${i.name} (${i.weight}lb ${typeLabel}) - Low`;
-          if (i.status === 'tracking') return `📦 ${i.name} (${i.weight}lb) - Needs tracking`;
-          if (i.status === 'delivery') return `🚚 ${i.name} (${i.weight}lb) - Check delivery`;
-          return `${i.name} (${i.weight}lb ${typeLabel})`;
+          if (i.status === 'critical') return `critical|${i.name} (${i.weight}lb ${typeLabel}) - Very Low`;
+          if (i.status === 'low') return `low|${i.name} (${i.weight}lb ${typeLabel}) - Low`;
+          if (i.status === 'tracking') return `tracking|${i.name} (${i.weight}lb) - Needs tracking`;
+          if (i.status === 'delivery') return `delivery|${i.name} (${i.weight}lb) - Check delivery`;
+          return `ok|${i.name} (${i.weight}lb ${typeLabel})`;
         }).join('\n'),
         items: inventoryItems,
         action: 'checkInventory',
@@ -3918,7 +4076,7 @@ app.get('/api/todo', async (req, res) => {
         todoItems.push({
           type: 'outstanding_invoices',
           priority: 'high',
-          title: '💰 Outstanding Invoices',
+          title: 'Outstanding Invoices',
           description: `${totalInvoices} invoice${totalInvoices > 1 ? 's' : ''} from ${customerCount} customer${customerCount > 1 ? 's' : ''}: ${customerSummaries}`,
           items: invoicesByCustomer,
           action: 'viewInvoices'
@@ -3930,6 +4088,9 @@ app.get('/api/todo', async (req, res) => {
     
     // 3. Check for retail weeks without sales data
     try {
+      // First ensure weeks are up to date
+      await ensureRetailWeeksUpToDate(sheets);
+      
       const retailResponse = await sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
         range: 'Retail Sales!A1:Z100',
@@ -3971,7 +4132,7 @@ app.get('/api/todo', async (req, res) => {
         todoItems.push({
           type: 'retail_overview',
           priority: 'low',
-          title: '🛒 Retail Overview',
+          title: 'Retail Overview',
           description: `${recentWeeksWithoutData.length} week(s) need sales data: ${recentWeeksWithoutData.join(', ')}`,
           items: recentWeeksWithoutData,
           action: 'manageRetail'
@@ -4829,49 +4990,6 @@ app.post('/api/tracking/lookup', async (req, res) => {
 
 // ============ Retail Sales Management API ============
 
-// Helper to get week date range string (MM/DD-MM/DD format) for a given date
-function getWeekRangeString(date) {
-  const d = new Date(date);
-  const day = d.getDay();
-  const start = new Date(d);
-  start.setDate(d.getDate() - day); // Sunday
-  const end = new Date(start);
-  end.setDate(start.getDate() + 6); // Saturday
-  
-  const formatDate = (dt) => {
-    return `${(dt.getMonth() + 1).toString().padStart(2, '0')}/${dt.getDate().toString().padStart(2, '0')}`;
-  };
-  
-  return `${formatDate(start)}-${formatDate(end)}`;
-}
-
-// Helper to parse week range string back to end date
-function parseWeekRangeEndDate(weekStr) {
-  // Format: "11/28-12/04" or "12/05-12/11"
-  const parts = weekStr.split('-');
-  if (parts.length !== 2) return null;
-  
-  const currentYear = new Date().getFullYear();
-  const endParts = parts[1].split('/');
-  
-  if (endParts.length !== 2) return null;
-  
-  const endMonth = parseInt(endParts[0]) - 1;
-  const endDay = parseInt(endParts[1]);
-  
-  // Determine year based on context
-  const startParts = parts[0].split('/');
-  const startMonth = parseInt(startParts[0]) - 1;
-  
-  let endYear = currentYear;
-  // Handle year rollover (e.g., 12/28-01/03)
-  if (endMonth < startMonth) {
-    endYear = currentYear + 1;
-  }
-  
-  return new Date(endYear, endMonth, endDay);
-}
-
 // Get retail data (products and weeks)
 app.get('/api/retail/data', async (req, res) => {
   if (!userTokens) {
@@ -4881,6 +4999,9 @@ app.get('/api/retail/data', async (req, res) => {
   try {
     oauth2Client.setCredentials(userTokens);
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Ensure weeks are up to date before fetching data
+    await ensureRetailWeeksUpToDate(sheets);
     
     // Read the Retail Sales sheet - use valueRenderOption to get calculated values
     const response = await sheets.spreadsheets.values.get({
@@ -6340,6 +6461,127 @@ app.post('/api/roast-order/confirm', async (req, res) => {
     enRouteItems,
     draftCreated,
     message: `Order confirmed! ${deductions.length > 0 ? 'Green coffee inventory updated.' : ''} ${enRouteItems.length} item(s) added to en route.${draftCreated ? ' Email draft created in Gmail.' : ''} What else can I help you with?`
+  });
+});
+
+// Confirm roast order without creating email draft (for copy to clipboard)
+app.post('/api/roast-order/confirm-no-draft', async (req, res) => {
+  // Always fetch fresh inventory from Google Sheets before modifying
+  await ensureFreshInventory();
+  
+  const { orderItems } = req.body;
+  
+  // VALIDATION: Check if we have enough green coffee BEFORE making any changes
+  const shortages = [];
+  const requiredGreen = {};
+  
+  const calcBatches = (totalWeight) => {
+    const batches = Math.ceil(totalWeight / 65);
+    if (totalWeight <= 65) {
+      return { batches: 1, batchWeight: Math.round(totalWeight) };
+    }
+    const batchWeight = Math.round(totalWeight / batches);
+    return { batches, batchWeight };
+  };
+  
+  orderItems.forEach(item => {
+    const roastedCoffee = roastedCoffeeInventory.find(c => c.name === item.name);
+    
+    if (roastedCoffee && roastedCoffee.recipe) {
+      const totalGreenWeight = Math.round(item.weight / 0.85);
+      
+      roastedCoffee.recipe.forEach(comp => {
+        const compGreenWeight = Math.round(totalGreenWeight * comp.percentage / 100);
+        const { batches, batchWeight } = calcBatches(compGreenWeight);
+        const actualGreenWeight = batches * batchWeight;
+        
+        const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
+        if (greenCoffee) {
+          if (!requiredGreen[greenCoffee.id]) {
+            requiredGreen[greenCoffee.id] = { name: greenCoffee.name, required: 0, available: greenCoffee.weight };
+          }
+          requiredGreen[greenCoffee.id].required += actualGreenWeight;
+        }
+      });
+    }
+  });
+  
+  // Check for shortages
+  Object.values(requiredGreen).forEach(gc => {
+    if (gc.required > gc.available) {
+      shortages.push({
+        name: gc.name,
+        required: gc.required,
+        available: gc.available,
+        shortage: gc.required - gc.available
+      });
+    }
+  });
+  
+  if (shortages.length > 0) {
+    const shortageList = shortages.map(s => 
+      `${s.name}: need ${s.required}lb but only ${s.available}lb available (short ${s.shortage}lb)`
+    ).join('; ');
+    
+    return res.json({
+      success: false,
+      error: 'insufficient_inventory',
+      message: `Not enough green coffee. ${shortageList}.`,
+      shortages
+    });
+  }
+  
+  const deductions = [];
+  const enRouteItems = [];
+  
+  // Calculate green coffee deductions
+  orderItems.forEach(item => {
+    const roastedCoffee = roastedCoffeeInventory.find(c => c.name === item.name);
+    
+    if (roastedCoffee && roastedCoffee.recipe) {
+      const totalGreenWeight = Math.round(item.weight / 0.85);
+      
+      roastedCoffee.recipe.forEach(comp => {
+        const compGreenWeight = Math.round(totalGreenWeight * comp.percentage / 100);
+        const { batches, batchWeight } = calcBatches(compGreenWeight);
+        const actualGreenWeight = batches * batchWeight;
+        
+        const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
+        if (greenCoffee) {
+          greenCoffee.weight -= actualGreenWeight;
+          deductions.push({
+            name: greenCoffee.name,
+            deducted: actualGreenWeight,
+            remaining: greenCoffee.weight
+          });
+        }
+      });
+    }
+    
+    // Add to en route inventory
+    const now = new Date();
+    enRouteItems.push({
+      id: `enroute-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      name: item.name,
+      weight: item.weight,
+      type: roastedCoffee ? roastedCoffee.type : 'Unknown',
+      recipe: roastedCoffee ? roastedCoffee.recipe : null,
+      trackingNumber: '',
+      dateOrdered: formatDateMMDDYY(now)
+    });
+  });
+  
+  // Add items to en route inventory
+  enRouteCoffeeInventory.push(...enRouteItems);
+  
+  // Sync inventory to Sheets
+  await syncInventoryToSheets();
+  
+  res.json({
+    success: true,
+    deductions,
+    enRouteItems,
+    message: `Order confirmed! Inventory updated.`
   });
 });
 

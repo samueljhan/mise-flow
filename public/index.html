@@ -743,7 +743,7 @@
             <textarea id="roastEmailBody" style="min-height: 300px;"></textarea>
             <div class="modal-buttons">
                 <button class="modal-btn cancel" onclick="closeRoastEmailModal()">Back</button>
-                <button class="modal-btn send" onclick="confirmRoastOrder()">✓ Confirm Order</button>
+                <button class="modal-btn send" onclick="confirmRoastOrderWithCopy()">Copy Email</button>
             </div>
         </div>
     </div>
@@ -773,6 +773,22 @@
             <div class="modal-buttons">
                 <button class="modal-btn cancel" onclick="closeEditOrderModal()">Cancel</button>
                 <button class="modal-btn send" onclick="applyOrderEdits()">Apply Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Customize Blend Modal -->
+    <div class="modal-overlay" id="customizeBlendModal">
+        <div class="modal" style="max-width: 550px; max-height: 85vh; overflow-y: auto;">
+            <h3>Customize Blend</h3>
+            <p style="color: #888; margin-bottom: 15px;">Adjust green coffee ratios and add components:</p>
+            
+            <div id="customizeBlendList"></div>
+            <div id="inventoryWarnings" style="margin-top: 12px;"></div>
+            
+            <div class="modal-buttons">
+                <button class="modal-btn cancel" onclick="closeCustomizeBlendModal()">Cancel</button>
+                <button class="modal-btn send" onclick="applyBlendCustomization()">Apply Changes</button>
             </div>
         </div>
     </div>
@@ -1334,6 +1350,7 @@
             html += '<div class="response-buttons" style="margin-top: 12px;">';
             html += '<button class="action-btn" onclick="confirmDefaultOrder()">Confirm</button>';
             html += '<button class="action-btn" onclick="openEditOrderModal()">Edit Order</button>';
+            html += '<button class="action-btn" onclick="openCustomizeBlendModal()">Customize Blend</button>';
             html += '<button class="action-btn" onclick="cancelRoastOrder()">Cancel</button>';
             html += '</div>';
             
@@ -1365,12 +1382,12 @@
                 pendingRoastEmail = data;
                 
                 // Show email preview in chat
-                let html = '<strong>Email Draft Preview</strong><br><br>';
+                let html = '<strong>Email Preview</strong><br><br>';
                 html += `<strong>To:</strong> ${data.to}<br>`;
                 html += `<strong>Subject:</strong> ${data.subject}<br><br>`;
                 html += `<div style="background:#1a1a1a; padding:12px; border-radius:8px; white-space:pre-wrap; font-size:13px;">${data.body}</div><br>`;
                 html += '<div class="response-buttons" style="margin-top: 12px;">';
-                html += '<button class="action-btn" onclick="confirmRoastOrderFromChat()">Confirm & Create Draft</button>';
+                html += '<button class="action-btn" onclick="copyRoastEmail()">Copy Email</button>';
                 html += '<button class="action-btn" onclick="editRoastEmail()">Edit Email</button>';
                 html += '<button class="action-btn" onclick="cancelRoastOrder()">Cancel</button>';
                 html += '</div>';
@@ -1408,6 +1425,67 @@
             };
             
             await finalizeRoastOrder(emailData);
+        }
+
+        // Copy email to clipboard
+        async function copyRoastEmail() {
+            if (!pendingRoastEmail) return;
+            
+            // Format email as plain text
+            const emailText = `To: ${pendingRoastEmail.to}\nSubject: ${pendingRoastEmail.subject}\n\n${pendingRoastEmail.body}`;
+            
+            try {
+                await navigator.clipboard.writeText(emailText);
+                
+                // Update inventory and en route without creating Gmail draft
+                const response = await fetch('/api/roast-order/confirm-no-draft', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        orderItems: pendingRoastOrder
+                    })
+                });
+                
+                const data = await response.json();
+                
+                // Show confirmation message
+                let confirmHtml = '<strong>Email Copied to Clipboard</strong><br><br>';
+                confirmHtml += '<div style="color: #90EE90; margin-bottom: 12px;">✓ Email copied - paste into your email client</div>';
+                
+                if (data.deductions && data.deductions.length > 0) {
+                    confirmHtml += 'Green coffee inventory updated:<br>';
+                    data.deductions.forEach(d => {
+                        confirmHtml += `   ${d.name}: -${d.deducted}lb (${d.remaining}lb remaining)<br>`;
+                    });
+                    confirmHtml += '<br>';
+                }
+                
+                confirmHtml += `Added ${data.enRouteItems?.length || 0} item(s) to en route.`;
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML = confirmHtml;
+                }
+                
+                // Reload inventory
+                await loadInventory();
+                
+                // Reset state
+                pendingRoastOrder = [];
+                pendingRoastEmail = null;
+                waitingForRoastOrder = false;
+                window.waitingForOrderConfirmation = false;
+                userInput.placeholder = 'Describe what you want to do…';
+                
+                // Add conversational follow-up
+                addConversationalFollowUp('roast_order_confirmed');
+                
+            } catch (error) {
+                console.error('Error copying email:', error);
+                addMessage('Error: ' + error.message, false);
+            }
         }
 
         // Cancel roast order
@@ -1507,23 +1585,86 @@
             const availableCoffees = roastedCoffeeInventory.map(c => c.name);
             
             pendingRoastOrder.forEach((item, index) => {
-                html += `<div style="background:#1a1a1a; padding:12px; border-radius:8px; margin-bottom:8px;">`;
+                // Calculate green coffee requirements for this item
+                const roasted = roastedCoffeeInventory.find(r => r.name === item.name);
+                let inventoryWarning = '';
+                
+                if (roasted && roasted.recipe) {
+                    const greenNeeded = Math.round(item.weight / 0.85);
+                    const warnings = [];
+                    
+                    roasted.recipe.forEach(comp => {
+                        const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
+                        if (greenCoffee) {
+                            const compNeeded = Math.round(greenNeeded * comp.percentage / 100);
+                            if (compNeeded > greenCoffee.weight) {
+                                warnings.push(`${greenCoffee.name}: need ${compNeeded}lb, only ${greenCoffee.weight}lb available`);
+                            }
+                        }
+                    });
+                    
+                    if (warnings.length > 0) {
+                        inventoryWarning = `<div style="color: #ff6b6b; font-size: 11px; margin-top: 6px;">⚠️ ${warnings.join(', ')}</div>`;
+                    }
+                }
+                
+                html += `<div style="background:#1a1a1a; padding:12px; border-radius:8px; margin-bottom:8px;" id="orderItem${index}">`;
                 html += `<div style="display:flex; gap:10px; align-items:center;">`;
-                html += `<select style="flex:1; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-order-coffee="${index}">`;
+                html += `<select style="flex:1; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-order-coffee="${index}" onchange="validateOrderInventory()">`;
                 availableCoffees.forEach(name => {
                     html += `<option value="${name}" ${item.name === name ? 'selected' : ''}>${name}</option>`;
                 });
                 html += `</select>`;
                 html += `<label style="font-size:12px; color:white; display:flex; align-items:center; gap:4px;">`;
-                html += `<input type="number" value="${item.weight}" style="width:70px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-order-weight="${index}"> lb</label>`;
+                html += `<input type="number" value="${item.weight}" style="width:70px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-order-weight="${index}" oninput="validateOrderInventory()"> lb</label>`;
                 html += `<button onclick="removeOrderItem(${index})" style="background:#6a4141; border:none; color:white; padding:6px 10px; border-radius:4px; cursor:pointer;">×</button>`;
-                html += `</div></div>`;
+                html += `</div>`;
+                html += `<div id="inventoryWarning${index}">${inventoryWarning}</div>`;
+                html += `</div>`;
             });
             
             html += `<button onclick="addOrderItem()" style="background:#28a745; border:none; color:white; padding:8px 16px; border-radius:4px; cursor:pointer; margin-top:8px;">+ Add Coffee</button>`;
             
             document.getElementById('editOrderList').innerHTML = html;
             document.getElementById('editOrderModal').style.display = 'flex';
+        }
+
+        // Validate order inventory on input change
+        function validateOrderInventory() {
+            pendingRoastOrder.forEach((item, index) => {
+                const coffeeEl = document.querySelector(`[data-order-coffee="${index}"]`);
+                const weightEl = document.querySelector(`[data-order-weight="${index}"]`);
+                const warningEl = document.getElementById(`inventoryWarning${index}`);
+                
+                if (!coffeeEl || !weightEl || !warningEl) return;
+                
+                const coffeeName = coffeeEl.value;
+                const weight = parseFloat(weightEl.value) || 0;
+                const roasted = roastedCoffeeInventory.find(r => r.name === coffeeName);
+                
+                let inventoryWarning = '';
+                
+                if (roasted && roasted.recipe && weight > 0) {
+                    const greenNeeded = Math.round(weight / 0.85);
+                    const warnings = [];
+                    
+                    roasted.recipe.forEach(comp => {
+                        const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
+                        if (greenCoffee) {
+                            const compNeeded = Math.round(greenNeeded * comp.percentage / 100);
+                            if (compNeeded > greenCoffee.weight) {
+                                warnings.push(`${greenCoffee.name}: need ${compNeeded}lb, only ${greenCoffee.weight}lb available`);
+                            }
+                        }
+                    });
+                    
+                    if (warnings.length > 0) {
+                        inventoryWarning = `<div style="color: #ff6b6b; font-size: 11px; margin-top: 6px;">⚠️ ${warnings.join(', ')}</div>`;
+                    }
+                }
+                
+                warningEl.innerHTML = inventoryWarning;
+            });
         }
 
         // Close edit order modal
@@ -1623,6 +1764,236 @@
             });
             
             // Add placeholder message that showDefaultOrderInChat will update
+            addMessage('Generating updated order...', false);
+            showDefaultOrderInChat();
+        }
+
+        // Open customize blend modal
+        function openCustomizeBlendModal() {
+            window.waitingForOrderConfirmation = false;
+            
+            // Store the blend being customized
+            window.customizingBlendIndex = pendingRoastOrder.findIndex(item => 
+                item.type === 'Blend' || (item.name && item.name.toLowerCase().includes('blend'))
+            );
+            
+            if (window.customizingBlendIndex === -1) {
+                // No blend in order - use first item or create new blend
+                window.customizingBlendIndex = 0;
+            }
+            
+            const blendItem = pendingRoastOrder[window.customizingBlendIndex];
+            if (!blendItem) {
+                alert('No items in order to customize.');
+                return;
+            }
+            
+            // Initialize custom recipe if not exists
+            if (!blendItem.customRecipe) {
+                blendItem.customRecipe = blendItem.recipe ? 
+                    blendItem.recipe.map(r => ({ ...r })) : 
+                    [{ greenCoffeeId: 'brazil-mogiano', name: 'Brazil Mogiano', percentage: 100 }];
+            }
+            
+            renderCustomizeBlendModal();
+            document.getElementById('customizeBlendModal').style.display = 'flex';
+        }
+
+        // Render customize blend modal content
+        function renderCustomizeBlendModal() {
+            const blendItem = pendingRoastOrder[window.customizingBlendIndex];
+            if (!blendItem) return;
+            
+            let html = `<div style="margin-bottom: 15px;">`;
+            html += `<strong>${blendItem.name}</strong> (~${blendItem.weight}lb roasted)`;
+            html += `</div>`;
+            
+            html += `<div style="margin-bottom: 10px; color: #aaa; font-size: 12px;">Green coffee components:</div>`;
+            
+            // Available green coffees
+            const availableGreens = greenCoffeeInventory.map(g => ({
+                id: g.id,
+                name: g.name,
+                weight: g.weight
+            }));
+            
+            blendItem.customRecipe.forEach((comp, index) => {
+                const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
+                const available = greenCoffee ? greenCoffee.weight : 0;
+                const totalGreenNeeded = Math.round(blendItem.weight / 0.85);
+                const compGreenNeeded = Math.round(totalGreenNeeded * comp.percentage / 100);
+                const exceedsInventory = compGreenNeeded > available;
+                
+                html += `<div style="background:#1a1a1a; padding:12px; border-radius:8px; margin-bottom:8px; ${exceedsInventory ? 'border: 1px solid #ff6b6b;' : ''}">`;
+                html += `<div style="display:flex; gap:10px; align-items:center; flex-wrap: wrap;">`;
+                
+                // Green coffee dropdown
+                html += `<select style="flex:1; min-width: 150px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-blend-green="${index}" onchange="updateBlendComponent(${index}, 'green', this.value)">`;
+                availableGreens.forEach(g => {
+                    html += `<option value="${g.id}" ${comp.greenCoffeeId === g.id ? 'selected' : ''}>${g.name} (${g.weight}lb avail)</option>`;
+                });
+                html += `</select>`;
+                
+                // Percentage input
+                html += `<label style="font-size:12px; color:white; display:flex; align-items:center; gap:4px;">`;
+                html += `<input type="number" value="${comp.percentage}" min="1" max="100" style="width:60px; padding:6px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;" data-blend-pct="${index}" onchange="updateBlendComponent(${index}, 'percentage', this.value)"> %</label>`;
+                
+                // Remove button (only if more than 1 component)
+                if (blendItem.customRecipe.length > 1) {
+                    html += `<button onclick="removeBlendComponent(${index})" style="background:#6a4141; border:none; color:white; padding:6px 10px; border-radius:4px; cursor:pointer;">×</button>`;
+                }
+                
+                html += `</div>`;
+                
+                // Show weight needed and inventory warning
+                html += `<div style="font-size: 11px; margin-top: 6px; color: ${exceedsInventory ? '#ff6b6b' : '#888'};">`;
+                html += `Needs ~${compGreenNeeded}lb green`;
+                if (exceedsInventory) {
+                    html += ` ⚠️ Exceeds inventory (only ${available}lb available)`;
+                }
+                html += `</div>`;
+                
+                html += `</div>`;
+            });
+            
+            // Add component button
+            html += `<button onclick="addBlendComponent()" style="background:#28a745; border:none; color:white; padding:8px 16px; border-radius:4px; cursor:pointer; margin-top:8px;">+ Add Green Coffee</button>`;
+            
+            // Total percentage check
+            const totalPct = blendItem.customRecipe.reduce((sum, c) => sum + (parseFloat(c.percentage) || 0), 0);
+            if (Math.abs(totalPct - 100) > 0.1) {
+                html += `<div style="color: #f0ad4e; margin-top: 12px; font-size: 12px;">⚠️ Percentages total ${totalPct.toFixed(1)}% (should be 100%)</div>`;
+            }
+            
+            document.getElementById('customizeBlendList').innerHTML = html;
+            updateInventoryWarnings();
+        }
+
+        // Update blend component
+        function updateBlendComponent(index, field, value) {
+            const blendItem = pendingRoastOrder[window.customizingBlendIndex];
+            if (!blendItem || !blendItem.customRecipe[index]) return;
+            
+            if (field === 'green') {
+                const greenCoffee = greenCoffeeInventory.find(g => g.id === value);
+                blendItem.customRecipe[index].greenCoffeeId = value;
+                blendItem.customRecipe[index].name = greenCoffee ? greenCoffee.name : value;
+            } else if (field === 'percentage') {
+                blendItem.customRecipe[index].percentage = parseFloat(value) || 0;
+            }
+            
+            renderCustomizeBlendModal();
+        }
+
+        // Add new blend component
+        function addBlendComponent() {
+            const blendItem = pendingRoastOrder[window.customizingBlendIndex];
+            if (!blendItem) return;
+            
+            // Find a green coffee not already in the blend
+            const usedIds = blendItem.customRecipe.map(c => c.greenCoffeeId);
+            const availableGreen = greenCoffeeInventory.find(g => !usedIds.includes(g.id));
+            
+            if (availableGreen) {
+                blendItem.customRecipe.push({
+                    greenCoffeeId: availableGreen.id,
+                    name: availableGreen.name,
+                    percentage: 10
+                });
+            } else {
+                // All greens used, add the first one
+                const firstGreen = greenCoffeeInventory[0];
+                blendItem.customRecipe.push({
+                    greenCoffeeId: firstGreen?.id || 'unknown',
+                    name: firstGreen?.name || 'Unknown',
+                    percentage: 10
+                });
+            }
+            
+            renderCustomizeBlendModal();
+        }
+
+        // Remove blend component
+        function removeBlendComponent(index) {
+            const blendItem = pendingRoastOrder[window.customizingBlendIndex];
+            if (!blendItem || blendItem.customRecipe.length <= 1) return;
+            
+            blendItem.customRecipe.splice(index, 1);
+            renderCustomizeBlendModal();
+        }
+
+        // Update inventory warnings display
+        function updateInventoryWarnings() {
+            const blendItem = pendingRoastOrder[window.customizingBlendIndex];
+            if (!blendItem) return;
+            
+            const warnings = [];
+            const totalGreenNeeded = Math.round(blendItem.weight / 0.85);
+            
+            blendItem.customRecipe.forEach(comp => {
+                const greenCoffee = greenCoffeeInventory.find(g => g.id === comp.greenCoffeeId);
+                const available = greenCoffee ? greenCoffee.weight : 0;
+                const compGreenNeeded = Math.round(totalGreenNeeded * comp.percentage / 100);
+                
+                if (compGreenNeeded > available) {
+                    warnings.push(`${comp.name}: need ${compGreenNeeded}lb, only ${available}lb available`);
+                }
+            });
+            
+            const warningsDiv = document.getElementById('inventoryWarnings');
+            if (warnings.length > 0) {
+                warningsDiv.innerHTML = `<div style="background: #4a3030; padding: 10px; border-radius: 8px; color: #ff6b6b; font-size: 12px;">
+                    <strong>⚠️ Inventory Warning:</strong><br>
+                    ${warnings.join('<br>')}
+                </div>`;
+            } else {
+                warningsDiv.innerHTML = '';
+            }
+        }
+
+        // Close customize blend modal
+        function closeCustomizeBlendModal() {
+            document.getElementById('customizeBlendModal').style.display = 'none';
+            window.waitingForOrderConfirmation = true;
+        }
+
+        // Apply blend customization
+        function applyBlendCustomization() {
+            const blendItem = pendingRoastOrder[window.customizingBlendIndex];
+            if (!blendItem) return;
+            
+            // Validate percentages sum to 100
+            const totalPct = blendItem.customRecipe.reduce((sum, c) => sum + (parseFloat(c.percentage) || 0), 0);
+            if (Math.abs(totalPct - 100) > 0.5) {
+                alert(`Percentages must total 100%. Currently: ${totalPct.toFixed(1)}%`);
+                return;
+            }
+            
+            // Apply custom recipe to the blend
+            blendItem.recipe = blendItem.customRecipe.map(c => ({
+                greenCoffeeId: c.greenCoffeeId,
+                name: c.name,
+                percentage: c.percentage
+            }));
+            
+            // Clear custom recipe storage
+            delete blendItem.customRecipe;
+            
+            closeCustomizeBlendModal();
+            
+            // Disable old buttons
+            const allMessages = chatContainer.querySelectorAll('.message');
+            allMessages.forEach(msg => {
+                const buttons = msg.querySelectorAll('.action-btn');
+                buttons.forEach(btn => {
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
+                    btn.style.cursor = 'not-allowed';
+                    btn.onclick = null;
+                });
+            });
+            
+            // Re-render order summary
             addMessage('Generating updated order...', false);
             showDefaultOrderInChat();
         }
@@ -1835,6 +2206,73 @@
             await finalizeRoastOrder(emailData);
         }
 
+        // Confirm roast order with copy to clipboard (from modal)
+        async function confirmRoastOrderWithCopy() {
+            const to = document.getElementById('roastEmailTo').value;
+            const subject = document.getElementById('roastEmailSubject').value;
+            const body = document.getElementById('roastEmailBody').value;
+            
+            // Format email as plain text
+            const emailText = `To: ${to}\nSubject: ${subject}\n\n${body}`;
+            
+            document.getElementById('roastEmailModal').style.display = 'none';
+            
+            try {
+                await navigator.clipboard.writeText(emailText);
+                
+                addMessage('Copying email and updating inventory...', false);
+                
+                // Update inventory and en route without creating Gmail draft
+                const response = await fetch('/api/roast-order/confirm-no-draft', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        orderItems: pendingRoastOrder
+                    })
+                });
+                
+                const data = await response.json();
+                
+                // Show confirmation message
+                let confirmHtml = '<strong>Email Copied to Clipboard</strong><br><br>';
+                confirmHtml += '<div style="color: #90EE90; margin-bottom: 12px;">✓ Email copied - paste into your email client</div>';
+                
+                if (data.deductions && data.deductions.length > 0) {
+                    confirmHtml += 'Green coffee inventory updated:<br>';
+                    data.deductions.forEach(d => {
+                        confirmHtml += `   ${d.name}: -${d.deducted}lb (${d.remaining}lb remaining)<br>`;
+                    });
+                    confirmHtml += '<br>';
+                }
+                
+                confirmHtml += `Added ${data.enRouteItems?.length || 0} item(s) to en route.`;
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML = confirmHtml;
+                }
+                
+                // Reload inventory
+                await loadInventory();
+                
+                // Reset state
+                pendingRoastOrder = [];
+                pendingRoastEmail = null;
+                waitingForRoastOrder = false;
+                window.waitingForOrderConfirmation = false;
+                userInput.placeholder = 'Describe what you want to do…';
+                
+                // Add conversational follow-up
+                addConversationalFollowUp('roast_order_confirmed');
+                
+            } catch (error) {
+                console.error('Error copying email:', error);
+                addMessage('Error: ' + error.message, false);
+            }
+        }
+
         // ============ Manage Inventory Modal ============
 
         function openManageInventory() {
@@ -1977,17 +2415,15 @@
                 const content = lastMsg?.querySelector('.message-content') || lastMsg;
                 
                 if (data.todoItems.length === 0) {
-                    content.innerHTML = `<div style="color: #4a6741;">✅ All caught up! No pending tasks.</div>`;
+                    content.innerHTML = `<div style="color: #4a6741;">All caught up! No pending tasks.</div>`;
                     addConversationalFollowUp('todo_empty');
                     return;
                 }
                 
-                let html = `<div style="margin-bottom: 16px;"><strong>📋 To Do List</strong> <span style="color:#888;">(${data.count} item${data.count > 1 ? 's' : ''})</span></div>`;
+                let html = `<div style="margin-bottom: 16px;"><strong>To Do List</strong> <span style="color:#888;">(${data.count} item${data.count > 1 ? 's' : ''})</span></div>`;
                 
                 data.todoItems.forEach((item, index) => {
-                    const priorityColor = item.priority === 'high' ? '#ff6b6b' : item.priority === 'medium' ? '#f0ad4e' : '#888';
-                    
-                    html += `<div style="background: #2a2a2a; border-radius: 8px; padding: 12px; margin-bottom: 10px; border-left: 3px solid ${priorityColor};">`;
+                    html += `<div style="background: #2a2a2a; border-radius: 8px; padding: 12px; margin-bottom: 10px;">`;
                     html += `<div style="display: flex; justify-content: space-between; align-items: flex-start;">`;
                     html += `<div style="flex: 1;">`;
                     html += `<div style="font-weight: 600; margin-bottom: 4px;">${item.title}</div>`;
@@ -1995,9 +2431,13 @@
                     // Handle multi-line descriptions (inventory overview)
                     if (item.type === 'inventory_overview') {
                         const lines = item.description.split('\n');
-                        html += `<div style="color: #999; font-size: 13px;">`;
+                        html += `<div style="font-size: 13px;">`;
                         lines.forEach(line => {
-                            html += `<div style="margin: 2px 0;">${line}</div>`;
+                            // Parse status prefix: "critical|text" or "low|text"
+                            const [status, ...textParts] = line.split('|');
+                            const text = textParts.join('|');
+                            const textColor = status === 'critical' ? '#ff6b6b' : '#999';
+                            html += `<div style="margin: 2px 0; color: ${textColor};">${text}</div>`;
                         });
                         html += `</div>`;
                     } else {

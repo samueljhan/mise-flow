@@ -2316,8 +2316,11 @@
             await loadInventory();
             
             if (enRouteCoffeeInventory.length === 0) {
-                addMessage('No coffee currently en route.', false);
-                addConversationalFollowUp('en_route_empty');
+                let html = 'No coffee currently en route.';
+                html += `<div style="margin-top: 12px;">`;
+                html += `<button class="action-btn" onclick="addFollowUpMessage()">Done</button>`;
+                html += `</div>`;
+                addMessage(html, false);
                 return;
             }
             
@@ -2380,10 +2383,12 @@
                 html += `</div>`;
             });
             
-            addMessage(html, false);
+            // Add Done button at the end
+            html += `<div style="margin-top: 12px;">`;
+            html += `<button class="action-btn" onclick="addFollowUpMessage()">Done</button>`;
+            html += `</div>`;
             
-            // Add standard conversational follow-up
-            addConversationalFollowUp('en_route_viewed');
+            addMessage(html, false);
         }
         
         async function viewTracking(itemId, trackingNumber) {

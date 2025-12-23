@@ -1058,12 +1058,6 @@
                     content.style.whiteSpace = 'pre-wrap';
                     content.style.fontFamily = 'monospace';
                     await typeText(content, summary, 8);
-                    
-                    // Add Done button after the summary
-                    const buttonDiv = document.createElement('div');
-                    buttonDiv.style.marginTop = '12px';
-                    buttonDiv.innerHTML = '<button class="action-btn" onclick="addFollowUpMessage()">Done</button>';
-                    content.appendChild(buttonDiv);
                 }
                 
             } catch (error) {

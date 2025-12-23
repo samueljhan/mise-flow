@@ -1054,26 +1054,21 @@
                     content.style.whiteSpace = 'pre-wrap';
                     content.style.fontFamily = 'monospace';
                     await typeText(content, summary, 8);
+                    
+                    // Add Manage Inventory button after the summary
+                    const buttonDiv = document.createElement('div');
+                    buttonDiv.style.marginTop = '12px';
+                    buttonDiv.innerHTML = '<button class="action-btn" onclick="openManageInventory()">📦 Manage Inventory</button>';
+                    content.appendChild(buttonDiv);
                 }
                 
-                // Add inventory-specific follow-up with Manage Inventory, En Route, and other options
-                addInventoryFollowUp();
+                // Add conversational follow-up after typing completes
+                addConversationalFollowUp('inventory_checked');
                 
             } catch (error) {
                 console.error('Error:', error);
                 addMessage('Error loading inventory: ' + error.message, false);
             }
-        }
-        
-        function addInventoryFollowUp() {
-            let html = '<div style="margin-bottom: 12px;">What would you like to do?</div>';
-            html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
-            html += '<button class="action-btn" onclick="openManageInventory()">📦 Manage Inventory</button>';
-            html += '<button class="action-btn" onclick="viewEnRoute()">🚚 En Route Coffee</button>';
-            html += '<button class="action-btn" onclick="addFollowUpMessage()">Something Else</button>';
-            html += '</div>';
-            
-            addMessage(html, false);
         }
 
         // Start Roast Order
@@ -2322,7 +2317,7 @@
             
             if (enRouteCoffeeInventory.length === 0) {
                 addMessage('No coffee currently en route.', false);
-                addEnRouteFollowUp();
+                addConversationalFollowUp('en_route_empty');
                 return;
             }
             
@@ -2387,17 +2382,8 @@
             
             addMessage(html, false);
             
-            // Add follow-up buttons
-            addEnRouteFollowUp();
-        }
-        
-        function addEnRouteFollowUp() {
-            let html = '<div style="display: flex; gap: 8px; margin-top: 8px;">';
-            html += '<button class="action-btn" onclick="checkCurrentInventory()">← Back to Inventory</button>';
-            html += '<button class="action-btn" onclick="addFollowUpMessage()">Done</button>';
-            html += '</div>';
-            
-            addMessage(html, false);
+            // Add standard conversational follow-up
+            addConversationalFollowUp('en_route_viewed');
         }
         
         async function viewTracking(itemId, trackingNumber) {

@@ -4882,7 +4882,18 @@ app.get('/api/todo', async (req, res) => {
       });
       
       const retailRows = retailResponse.data.values || [];
-      const headerRow = retailRows[1] || [];
+      
+      // Find the sales header row (handle new structure)
+      let salesHeaderRowIndex = 1; // Default: old structure
+      for (let i = 0; i < Math.min(retailRows.length, 12); i++) {
+        const cellB = (retailRows[i]?.[1] || '').toString().toLowerCase().trim();
+        if (cellB.includes('retail sales') && !cellB.includes('total')) {
+          salesHeaderRowIndex = i + 1; // Header row is next row
+          break;
+        }
+      }
+      
+      const headerRow = retailRows[salesHeaderRowIndex] || [];
       
       // Find Total Retail Sales column
       let totalColIndex = -1;
@@ -4900,7 +4911,7 @@ app.get('/api/todo', async (req, res) => {
       const recentWeeksWithData = [];
       
       if (totalColIndex > -1) {
-        for (let i = 2; i < retailRows.length; i++) {
+        for (let i = salesHeaderRowIndex + 1; i < retailRows.length; i++) {
           const row = retailRows[i];
           if (!row || !row[1]) continue;
           

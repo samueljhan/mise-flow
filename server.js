@@ -599,7 +599,7 @@ async function buildSheetContextForChatGPT() {
         }).catch(() => ({ data: { values: [] } })),
         sheets.spreadsheets.values.get({
           spreadsheetId: SPREADSHEET_ID,
-          range: 'Invoices!A:F'
+          range: 'Invoices!A:I'
         }).catch(() => ({ data: { values: [] } }))
       ]);
       
@@ -1433,8 +1433,8 @@ async function formatAllSheetsCurrency() {
     // Bank Transactions: Column E (Debit, index 4) and Column F (Credit, index 5)
     await applyCurrencyFormat(sheets, 'Bank Transactions', [4, 5], 3);
     
-    // Invoices: Column D (Total, index 3)
-    await applyCurrencyFormat(sheets, 'Invoices', [3], 3);
+    // Invoices: Column G (Adjustments, index 6) and Column H (Price, index 7)
+    await applyCurrencyFormat(sheets, 'Invoices', [6, 7], 3);
     
     // Retail Sales: Need to find columns dynamically based on header
     try {
@@ -2333,21 +2333,25 @@ app.get('/api/customers/wholesale', async (req, res) => {
         
         const invoicesResponse = await sheets.spreadsheets.values.get({
           spreadsheetId: SPREADSHEET_ID,
-          range: 'Invoices!A:F'
+          range: 'Invoices!A:I'
         });
         
         const invoiceRows = invoicesResponse.data.values || [];
         
-        // Find last invoice date for each customer (column C = customer, column D = date)
-        for (let i = 1; i < invoiceRows.length; i++) {
+        // Find last invoice date for each customer 
+        // Structure: B=Date(1), C=Invoice#(2) - invoice # contains customer code like C-CED-1000
+        for (let i = 2; i < invoiceRows.length; i++) {
           const row = invoiceRows[i];
-          const customer = (row[2] || '').toString().toLowerCase();
-          const date = row[3] || '';
+          const invoiceNum = (row[2] || '').toString();
+          const date = row[1] || '';
           
-          if (customer && date) {
+          // Extract customer code from invoice number (C-CED-1000 -> CED)
+          const codeMatch = invoiceNum.match(/^C-([A-Z]{3})-/);
+          if (codeMatch && date) {
+            const customerCode = codeMatch[1].toLowerCase();
             // Keep track of the most recent date for each customer
-            if (!lastInvoiceDates[customer] || date > lastInvoiceDates[customer]) {
-              lastInvoiceDates[customer] = date;
+            if (!lastInvoiceDates[customerCode] || date > lastInvoiceDates[customerCode]) {
+              lastInvoiceDates[customerCode] = date;
             }
           }
         }
@@ -2853,7 +2857,7 @@ Respond ONLY with valid JSON (no markdown):
     // Step 2: Get last invoice number from Invoices sheet
     const invoicesResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!A:E'
+      range: 'Invoices!A:I'
     });
     
     const invoiceRows = invoicesResponse.data.values || [];
@@ -3007,27 +3011,28 @@ app.post('/api/invoice/confirm', async (req, res) => {
     }
 
     // Record in Invoices sheet with new structure:
-    // B: Date, C: Invoice #, D: Archives Blend, E: Ethiopia Gera, F: Colombia Decaf, G: Price, H: Paid
+    // B: Date, C: Invoice #, D: Archives Blend (lb), E: Ethiopia Gera (lb), F: Colombia Decaf (lb), G: Adjustments, H: Price, I: Paid
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!B:H',
+      range: 'Invoices!B:I',
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
         values: [[
           date, 
           invoiceNumber, 
-          archivesBlendWeight || '', 
-          ethiopiaGeraWeight || '', 
-          colombiaDecafWeight || '', 
+          archivesBlendWeight > 0 ? archivesBlendWeight : '', 
+          ethiopiaGeraWeight > 0 ? ethiopiaGeraWeight : '', 
+          colombiaDecafWeight > 0 ? colombiaDecafWeight : '', 
+          '',  // Adjustments (empty for regular invoices)
           parseFloat(total), 
-          ''
+          ''   // Paid
         ]]
       }
     });
 
-    // Apply currency format to Price column (column G, index 6)
-    await applyCurrencyFormat(sheets, 'Invoices', [6], 3);
+    // Apply currency format to Adjustments (G, index 6) and Price (H, index 7)
+    await applyCurrencyFormat(sheets, 'Invoices', [6, 7], 3);
 
     console.log(`✅ Invoice ${invoiceNumber} confirmed and recorded in spreadsheet`);
     
@@ -3117,7 +3122,7 @@ async function matchPaymentToInvoice(paymentAmount, paymentDate, paymentDescript
     // Get all invoices from Invoices sheet
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!A:H'
+      range: 'Invoices!A:I'
     });
 
     const rows = response.data.values || [];
@@ -3288,7 +3293,7 @@ async function markInvoicePaid(invoiceNumber, paymentDate, paymentMethod) {
     // Find the invoice row
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!A:H'
+      range: 'Invoices!A:I'
     });
 
     const rows = response.data.values || [];
@@ -3305,10 +3310,10 @@ async function markInvoicePaid(invoiceNumber, paymentDate, paymentMethod) {
       return { success: false, error: 'Invoice not found' };
     }
 
-    // Update the row to mark as paid (column H in new structure)
+    // Update the row to mark as paid (column I in new structure)
     await sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
-      range: `Invoices!H${targetRow}`,
+      range: `Invoices!I${targetRow}`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [['x']]
@@ -3418,29 +3423,29 @@ app.get('/api/invoices/outstanding', async (req, res) => {
     
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!A:H',
+      range: 'Invoices!A:I',
       valueRenderOption: 'UNFORMATTED_VALUE'
     });
     
     const rows = response.data.values || [];
     const invoicesByCustomer = {};
     
-    // New structure: B=Date(1), C=Invoice#(2), D=Archives(3), E=Ethiopia(4), F=Decaf(5), G=Price(6), H=Paid(7)
+    // New structure: B=Date(1), C=Invoice#(2), D=Archives(3), E=Ethiopia(4), F=Decaf(5), G=Adjustments(6), H=Price(7), I=Paid(8)
     for (let i = 2; i < rows.length; i++) {
       const row = rows[i];
       if (!row || !row[2]) continue;
       
       const invoiceNumber = row[2];
-      // Parse amount from column G (index 6)
+      // Parse amount from column H (index 7)
       let amountNum = 0;
-      if (row[6] !== undefined && row[6] !== null) {
-        if (typeof row[6] === 'number') {
-          amountNum = row[6];
+      if (row[7] !== undefined && row[7] !== null) {
+        if (typeof row[7] === 'number') {
+          amountNum = row[7];
         } else {
-          amountNum = parseFloat(String(row[6]).replace(/[$,]/g, '')) || 0;
+          amountNum = parseFloat(String(row[7]).replace(/[$,]/g, '')) || 0;
         }
       }
-      const paidDate = row[7];  // Column H (index 7)
+      const paidDate = row[8];  // Column I (index 8)
       
       // If no paid date, it's outstanding (handle both string and number types)
       const isPaid = paidDate !== undefined && paidDate !== null && paidDate !== '' && String(paidDate).trim() !== '';
@@ -4982,29 +4987,29 @@ app.get('/api/todo', async (req, res) => {
     try {
       const invoicesResponse = await sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: 'Invoices!A:H',
+        range: 'Invoices!A:I',
         valueRenderOption: 'UNFORMATTED_VALUE'
       });
       
       const invoiceRows = invoicesResponse.data.values || [];
       const invoicesByCustomer = {};
       
-      // New structure: B=Date(1), C=Invoice#(2), D=Archives(3), E=Ethiopia(4), F=Decaf(5), G=Price(6), H=Paid(7)
+      // New structure: B=Date(1), C=Invoice#(2), D=Archives(3), E=Ethiopia(4), F=Decaf(5), G=Adjustments(6), H=Price(7), I=Paid(8)
       for (let i = 2; i < invoiceRows.length; i++) {
         const row = invoiceRows[i];
         if (!row || !row[2]) continue; // Skip empty rows
         
         const invoiceNumber = row[2];
-        // Parse amount from column G (index 6)
+        // Parse amount from column H (index 7)
         let amount = 0;
-        if (row[6] !== undefined && row[6] !== null) {
-          if (typeof row[6] === 'number') {
-            amount = row[6];
+        if (row[7] !== undefined && row[7] !== null) {
+          if (typeof row[7] === 'number') {
+            amount = row[7];
           } else {
-            amount = parseFloat(String(row[6]).replace(/[$,]/g, '')) || 0;
+            amount = parseFloat(String(row[7]).replace(/[$,]/g, '')) || 0;
           }
         }
-        const paidDate = row[7];  // Column H (index 7)
+        const paidDate = row[8];  // Column I (index 8)
         
         // If no paid date, it's outstanding (handle both string and number types)
         const isPaid = paidDate !== undefined && paidDate !== null && paidDate !== '' && String(paidDate).trim() !== '';
@@ -5233,7 +5238,7 @@ app.get('/api/forecast', async (req, res) => {
     try {
       const invoicesResponse = await sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: 'Invoices!A:F'
+        range: 'Invoices!A:I'
       });
       invoiceData = invoicesResponse.data.values || [];
     } catch (e) {
@@ -5264,12 +5269,13 @@ app.get('/api/forecast', async (req, res) => {
     
     for (let i = 2; i < invoiceData.length; i++) {
       const row = invoiceData[i];
-      if (!row || !row[1] || !row[3]) continue;
+      if (!row || !row[1] || !row[7]) continue;
       
+      // New structure: B=Date(1), C=Invoice#(2), D=Archives(3), E=Ethiopia(4), F=Decaf(5), G=Adjustments(6), H=Price(7), I=Paid(8)
       const dateStr = row[1];
       const invoiceNumber = row[2];
-      const amountStr = row[3];
-      const paidDate = row[4];
+      const amountStr = row[7];  // Column H = Price
+      const paidDate = row[8];   // Column I = Paid
       
       // Parse amount (remove $ and parse)
       const amount = parseFloat(String(amountStr).replace(/[$,]/g, '')) || 0;
@@ -7410,7 +7416,7 @@ async function generateAOUInvoiceForWeek(rowIndex) {
     
     console.log(`📄 Generated AOU reconciliation invoice ${invoiceNumber} for week ${weekRange}: $${invoiceTotal.toFixed(2)}`);
     
-    // Calculate weights by coffee type for the new sheet structure
+    // Calculate PURE delivered weights (not net) for the sheet
     let archivesBlendWeight = 0;
     let ethiopiaGeraWeight = 0;
     let colombiaDecafWeight = 0;
@@ -7418,30 +7424,34 @@ async function generateAOUInvoiceForWeek(rowIndex) {
     for (const [product, usage] of Object.entries(wholesaleUsage)) {
       const prodLower = product.toLowerCase();
       if (prodLower.includes('archives')) {
-        archivesBlendWeight += usage.netWeight;
+        archivesBlendWeight += usage.deliveredWeight;  // Use delivered, not net
       } else if (prodLower.includes('ethiopia')) {
-        ethiopiaGeraWeight += usage.netWeight;
+        ethiopiaGeraWeight += usage.deliveredWeight;   // Use delivered, not net
       } else if (prodLower.includes('decaf') || prodLower.includes('colombia')) {
-        colombiaDecafWeight += usage.netWeight;
+        colombiaDecafWeight += usage.deliveredWeight;  // Use delivered, not net
       }
     }
     
+    // Calculate adjustments = (-retail deduction) + retail payout
+    const adjustments = -totalRetailDeductionAmount + netRetailPayout;
+    
     // Save to Invoices sheet with new structure:
-    // B: Date, C: Invoice #, D: Archives Blend, E: Ethiopia Gera, F: Colombia Decaf, G: Price, H: Paid
+    // B: Date, C: Invoice #, D: Archives (lb), E: Ethiopia (lb), F: Decaf (lb), G: Adjustments ($), H: Price ($), I: Paid
     const today = new Date();
     const dateValue = today.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
     
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!B:H',
+      range: 'Invoices!B:I',
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [[
           dateValue, 
           invoiceNumber, 
-          archivesBlendWeight || '', 
-          ethiopiaGeraWeight || '', 
-          colombiaDecafWeight || '', 
+          archivesBlendWeight > 0 ? archivesBlendWeight : '', 
+          ethiopiaGeraWeight > 0 ? ethiopiaGeraWeight : '', 
+          colombiaDecafWeight > 0 ? colombiaDecafWeight : '', 
+          adjustments !== 0 ? adjustments : '',  // Adjustments column (will be formatted as currency)
           invoiceTotal, 
           ''
         ]]
@@ -7602,14 +7612,14 @@ app.get('/api/aou/invoices', async (req, res) => {
     
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!B:H',
+      range: 'Invoices!B:I',
       valueRenderOption: 'UNFORMATTED_VALUE'
     });
     
     const rows = response.data.values || [];
     const aouInvoices = [];
     
-    // New structure: B=Date, C=Invoice#, D=Archives, E=Ethiopia, F=Decaf, G=Price, H=Paid
+    // New structure: B=Date(0), C=Invoice#(1), D=Archives(2), E=Ethiopia(3), F=Decaf(4), G=Adjustments(5), H=Price(6), I=Paid(7)
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
       if (row && row[1] && row[1].toString().includes('-AOU-')) {
@@ -7624,8 +7634,8 @@ app.get('/api/aou/invoices', async (req, res) => {
         aouInvoices.push({
           date: dateStr,
           invoiceNumber: row[1],
-          amount: parseFloat(row[5]) || 0,  // Column G (index 5) = Price
-          paid: row[6] ? true : false        // Column H (index 6) = Paid
+          amount: parseFloat(row[6]) || 0,  // Column H (index 6) = Price
+          paid: row[7] ? true : false        // Column I (index 7) = Paid
         });
       }
     }
@@ -7715,9 +7725,10 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
           { description: 'Retail Sales Adjustment (4 lb Archives, 1 lb Ethiopia)', quantity: 1, unitPrice: -(4 * AT_COST['Archives Blend'] + 1 * AT_COST['Ethiopia Gera Natural']), total: -(4 * AT_COST['Archives Blend'] + 1 * AT_COST['Ethiopia Gera Natural']) },
           { description: 'Net Retail Payout (11/28-12/04)', quantity: 1, unitPrice: 156.46, total: 156.46 }
         ],
-        archivesWeight: 126, // 130 - 4 retail
-        ethiopiaWeight: 3, // 4 - 1 retail
+        archivesWeight: 130, // Pure delivered weight
+        ethiopiaWeight: 4,   // Pure delivered weight
         decafWeight: 0,
+        adjustments: -(4 * AT_COST['Archives Blend'] + 1 * AT_COST['Ethiopia Gera Natural']) + 156.46, // Retail deduction + payout
         total: 1298.51,
         paid: null,
         isReconciliation: true
@@ -7873,30 +7884,34 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
     // First, clear existing data (keep header)
     await sheets.spreadsheets.values.clear({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!B3:H100'
+      range: 'Invoices!B3:I100'
     });
     
     // Prepare all rows for batch update
-    // Columns: B=Date, C=Invoice#, D=Archives(lb), E=Ethiopia(lb), F=Decaf(lb), G=Price, H=Paid
+    // Columns: B=Date, C=Invoice#, D=Archives(lb), E=Ethiopia(lb), F=Decaf(lb), G=Adjustments($), H=Price($), I=Paid
     const invoiceRows = allInvoices.map(inv => [
       inv.date,
       inv.invoiceNumber,
       inv.archivesWeight > 0 ? inv.archivesWeight : '',  // Plain number (pounds)
       inv.ethiopiaWeight > 0 ? inv.ethiopiaWeight : '',  // Plain number (pounds)
       inv.decafWeight > 0 ? inv.decafWeight : '',        // Plain number (pounds)
-      inv.total,  // This one is dollars
+      inv.adjustments ? inv.adjustments : '',             // Adjustments (dollars) - for AOU reconciliation invoices
+      inv.total,  // Price (dollars)
       inv.paid || ''
     ]);
     
     // Write all invoice data at once
     await sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!B3:H' + (3 + invoiceRows.length - 1),
+      range: 'Invoices!B3:I' + (3 + invoiceRows.length - 1),
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: invoiceRows
       }
     });
+    
+    // Apply currency format to Adjustments (G, index 6) and Price (H, index 7) columns
+    await applyCurrencyFormat(sheets, 'Invoices', [6, 7], 3);
     
     console.log(`✅ Updated ${invoiceRows.length} invoices in sheet`);
     

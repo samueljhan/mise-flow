@@ -1365,7 +1365,7 @@ async function applyCurrencyFormat(sheets, sheetName, columns, startRow = 3) {
   }
 }
 
-// Clear currency format from columns (set to plain number)
+// Clear currency format from columns (set to plain integer)
 async function clearCurrencyFormat(sheets, sheetName, columns, startRow = 3) {
   try {
     const spreadsheet = await sheets.spreadsheets.get({
@@ -1380,7 +1380,7 @@ async function clearCurrencyFormat(sheets, sheetName, columns, startRow = 3) {
     
     const sheetId = sheet.properties.sheetId;
     
-    // Build format requests to clear number format (use NUMBER type)
+    // Build format requests to clear number format (plain integer)
     const requests = columns.map(colIndex => ({
       repeatCell: {
         range: {
@@ -1393,7 +1393,7 @@ async function clearCurrencyFormat(sheets, sheetName, columns, startRow = 3) {
           userEnteredFormat: {
             numberFormat: {
               type: 'NUMBER',
-              pattern: '#,##0.##'
+              pattern: '0'
             }
           }
         },
@@ -7827,7 +7827,7 @@ app.post('/api/invoices/fix-formatting', async (req, res) => {
             userEnteredFormat: {
               numberFormat: {
                 type: 'NUMBER',
-                pattern: '#,##0.##'
+                pattern: '0'
               }
             }
           },
@@ -7847,7 +7847,7 @@ app.post('/api/invoices/fix-formatting', async (req, res) => {
             userEnteredFormat: {
               numberFormat: {
                 type: 'NUMBER',
-                pattern: '#,##0.##'
+                pattern: '0'
               }
             }
           },
@@ -7867,7 +7867,7 @@ app.post('/api/invoices/fix-formatting', async (req, res) => {
             userEnteredFormat: {
               numberFormat: {
                 type: 'NUMBER',
-                pattern: '#,##0.##'
+                pattern: '0'
               }
             }
           },

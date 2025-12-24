@@ -2976,7 +2976,8 @@ app.get('/api/invoices/outstanding', async (req, res) => {
     
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!A:F'
+      range: 'Invoices!A:F',
+      valueRenderOption: 'UNFORMATTED_VALUE'
     });
     
     const rows = response.data.values || [];
@@ -2987,11 +2988,20 @@ app.get('/api/invoices/outstanding', async (req, res) => {
       if (!row || !row[2]) continue;
       
       const invoiceNumber = row[2];
-      const amount = row[3];
+      // Parse amount - handle both numbers and formatted strings
+      let amountNum = 0;
+      if (row[3] !== undefined && row[3] !== null) {
+        if (typeof row[3] === 'number') {
+          amountNum = row[3];
+        } else {
+          amountNum = parseFloat(String(row[3]).replace(/[$,]/g, '')) || 0;
+        }
+      }
       const paidDate = row[4];
       
-      // If no paid date, it's outstanding
-      if (!paidDate || paidDate.trim() === '') {
+      // If no paid date, it's outstanding (handle both string and number types)
+      const isPaid = paidDate !== undefined && paidDate !== null && paidDate !== '' && String(paidDate).trim() !== '';
+      if (!isPaid) {
         // Extract customer code from invoice number (e.g., C-ABC-1000 -> ABC)
         const codeMatch = invoiceNumber.match(/C-([A-Z]{3})-/);
         const customerCode = codeMatch ? codeMatch[1] : null;
@@ -3021,14 +3031,14 @@ app.get('/api/invoices/outstanding', async (req, res) => {
           };
         }
         
-        // Parse amount for total calculation
-        const amountNum = parseFloat(String(amount).replace(/[$,]/g, '')) || 0;
+        // Format amount for display
+        const amountDisplay = `$${amountNum.toFixed(2)}`;
         
         invoicesByCustomer[customerKey].invoices.push({
           rowIndex: i + 1,
           date: row[1],
           invoiceNumber,
-          amount,
+          amount: amountDisplay,
           amountNum
         });
         
@@ -4024,9 +4034,9 @@ wss.on('connection', async (clientWs) => {
 app.get('/api/inventory', async (req, res) => {
   await ensureFreshInventory();
   res.json({
-    green: greenCoffeeInventory,
-    roasted: roastedCoffeeInventory,
-    enRoute: enRouteCoffeeInventory
+    green: greenCoffeeInventory || [],
+    roasted: roastedCoffeeInventory || [],
+    enRoute: enRouteCoffeeInventory || []
   });
 });
 

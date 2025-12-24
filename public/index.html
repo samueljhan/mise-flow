@@ -1260,26 +1260,45 @@
                 // Fetch full inventory data
                 const invResponse = await fetch('/api/inventory');
                 const inv = await invResponse.json();
-                greenCoffeeInventory = inv.green;
-                roastedCoffeeInventory = inv.roasted;
-                enRouteCoffeeInventory = inv.enRoute;
+                
+                // Handle error response
+                if (inv.error) {
+                    throw new Error(inv.error);
+                }
+                
+                // Ensure arrays exist
+                const green = inv.green || [];
+                const roasted = inv.roasted || [];
+                const enRoute = inv.enRoute || [];
+                
+                greenCoffeeInventory = green;
+                roastedCoffeeInventory = roasted;
+                enRouteCoffeeInventory = enRoute;
                 
                 // Build the summary text - clean and simple
                 let summary = 'Current Coffee Inventory\n\n';
                 
                 summary += 'GREEN COFFEE\n';
-                inv.green.forEach(coffee => {
-                    summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
-                });
+                if (green.length > 0) {
+                    green.forEach(coffee => {
+                        summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
+                    });
+                } else {
+                    summary += '   None\n';
+                }
                 
                 summary += '\nROASTED COFFEE\n';
-                inv.roasted.forEach(coffee => {
-                    summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
-                });
+                if (roasted.length > 0) {
+                    roasted.forEach(coffee => {
+                        summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
+                    });
+                } else {
+                    summary += '   None\n';
+                }
                 
                 summary += '\nEN ROUTE\n';
-                if (inv.enRoute && inv.enRoute.length > 0) {
-                    inv.enRoute.forEach(coffee => {
+                if (enRoute.length > 0) {
+                    enRoute.forEach(coffee => {
                         summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
                     });
                 } else {

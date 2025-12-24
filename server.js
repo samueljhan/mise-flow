@@ -7852,6 +7852,15 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
       inv.dueDate = calculateDueDate(inv.date, 15);
     });
     
+    // Sort invoices by date
+    allInvoices.sort((a, b) => {
+      const parseDate = (dateStr) => {
+        const parts = dateStr.split('/');
+        return new Date(parts[2], parts[0] - 1, parts[1]);
+      };
+      return parseDate(a.date) - parseDate(b.date);
+    });
+    
     const results = {
       generated: [],
       uploaded: [],
@@ -7868,13 +7877,14 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
     });
     
     // Prepare all rows for batch update
+    // Columns: B=Date, C=Invoice#, D=Archives(lb), E=Ethiopia(lb), F=Decaf(lb), G=Price, H=Paid
     const invoiceRows = allInvoices.map(inv => [
       inv.date,
       inv.invoiceNumber,
-      inv.archivesWeight || '',
-      inv.ethiopiaWeight || '',
-      inv.decafWeight || '',
-      inv.total,
+      inv.archivesWeight > 0 ? inv.archivesWeight : '',  // Plain number (pounds)
+      inv.ethiopiaWeight > 0 ? inv.ethiopiaWeight : '',  // Plain number (pounds)
+      inv.decafWeight > 0 ? inv.decafWeight : '',        // Plain number (pounds)
+      inv.total,  // This one is dollars
       inv.paid || ''
     ]);
     

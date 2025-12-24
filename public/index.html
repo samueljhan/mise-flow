@@ -3277,13 +3277,112 @@
                     if (item.type === 'inventory_overview') {
                         const lines = item.description.split('\n');
                         html += `<div style="font-size: 13px;">`;
+                        
+                        // Group items by type
+                        const greenItems = [];
+                        const roastedItems = [];
+                        const enRouteItems = [];
+                        
                         lines.forEach(line => {
-                            // Parse status prefix: "critical|text" or "low|text"
-                            const [status, ...textParts] = line.split('|');
-                            const text = textParts.join('|');
-                            const textColor = status === 'critical' ? '#ff6b6b' : '#999';
-                            html += `<div style="margin: 2px 0; color: ${textColor};">${text}</div>`;
+                            if (line.includes('lb green)')) {
+                                greenItems.push(line);
+                            } else if (line.includes('lb roasted)')) {
+                                roastedItems.push(line);
+                            } else if (line.includes('en route)') || line.includes('Needs tracking') || line.includes('Check delivery')) {
+                                enRouteItems.push(line);
+                            }
                         });
+                        
+                        // Helper to clean up display text (remove type label since we have section headers)
+                        const cleanText = (text) => {
+                            return text
+                                .replace(/\s*\(\d+lb green\)/, '')
+                                .replace(/\s*\(\d+lb roasted\)/, '')
+                                .replace(/\s*\(\d+lb en route\)/, '');
+                        };
+                        
+                        // Extract weight for cleaner display
+                        const formatItem = (text) => {
+                            const weightMatch = text.match(/\((\d+)lb/);
+                            const weight = weightMatch ? weightMatch[1] : '0';
+                            const nameMatch = text.match(/^(.+?)\s*\(/);
+                            const name = nameMatch ? nameMatch[1] : text.split(' - ')[0];
+                            const status = text.includes('Very Low') ? 'Very Low' : text.includes('Low') ? 'Low' : 
+                                          text.includes('Needs tracking') ? 'Needs tracking' : 
+                                          text.includes('Check delivery') ? 'Check delivery' : '';
+                            return `${name} — ${weight}lb ${status ? '— ' + status : ''}`;
+                        };
+                        
+                        // Display green coffee section
+                        if (greenItems.length > 0) {
+                            html += `<div style="color: #90EE90; font-weight: 600; margin: 8px 0 4px 0; font-size: 11px; text-transform: uppercase;">Green Coffee</div>`;
+                            greenItems.forEach(line => {
+                                const [status, ...textParts] = line.split('|');
+                                const text = textParts.join('|');
+                                const textColor = status === 'critical' ? '#ff6b6b' : '#999';
+                                html += `<div style="margin: 2px 0 2px 8px; color: ${textColor};">${formatItem(text)}</div>`;
+                            });
+                        }
+                        
+                        // Display roasted coffee section
+                        if (roastedItems.length > 0) {
+                            html += `<div style="color: #DEB887; font-weight: 600; margin: 10px 0 4px 0; font-size: 11px; text-transform: uppercase;">Roasted Coffee</div>`;
+                            roastedItems.forEach(line => {
+                                const [status, ...textParts] = line.split('|');
+                                const text = textParts.join('|');
+                                const textColor = status === 'critical' ? '#ff6b6b' : '#999';
+                                html += `<div style="margin: 2px 0 2px 8px; color: ${textColor};">${formatItem(text)}</div>`;
+                            });
+                        }
+                        
+                        // Display en route section
+                        if (enRouteItems.length > 0) {
+                            html += `<div style="color: #87CEEB; font-weight: 600; margin: 10px 0 4px 0; font-size: 11px; text-transform: uppercase;">En Route</div>`;
+                            enRouteItems.forEach(line => {
+                                const [status, ...textParts] = line.split('|');
+                                const text = textParts.join('|');
+                                const textColor = status === 'tracking' ? '#f0ad4e' : status === 'delivery' ? '#87CEEB' : '#999';
+                                html += `<div style="margin: 2px 0 2px 8px; color: ${textColor};">${formatItem(text)}</div>`;
+                            });
+                        }
+                        
+                        html += `</div>`;
+                    } else if (item.type === 'outstanding_invoices') {
+                        // Display outstanding invoices grouped by customer
+                        const lines = item.description.split('\n');
+                        html += `<div style="font-size: 13px;">`;
+                        
+                        lines.forEach(line => {
+                            const [type, ...textParts] = line.split('|');
+                            const text = textParts.join('|');
+                            
+                            if (type === 'customer') {
+                                html += `<div style="color: #f0ad4e; font-weight: 600; margin: 8px 0 4px 0; font-size: 12px;">${text}</div>`;
+                            } else if (type === 'invoice') {
+                                html += `<div style="margin: 2px 0 2px 12px; color: #999;">${text}</div>`;
+                            }
+                        });
+                        
+                        html += `</div>`;
+                    } else if (item.type === 'retail_overview') {
+                        // Display retail weeks with sections
+                        const lines = item.description.split('\n');
+                        html += `<div style="font-size: 13px;">`;
+                        
+                        lines.forEach(line => {
+                            const [type, ...textParts] = line.split('|');
+                            const text = textParts.join('|');
+                            
+                            if (type === 'header') {
+                                const headerColor = text.includes('Needs') ? '#f0ad4e' : '#90EE90';
+                                html += `<div style="color: ${headerColor}; font-weight: 600; margin: 8px 0 4px 0; font-size: 11px; text-transform: uppercase;">${text}</div>`;
+                            } else if (type === 'missing') {
+                                html += `<div style="margin: 2px 0 2px 8px; color: #f0ad4e;">${text}</div>`;
+                            } else if (type === 'completed') {
+                                html += `<div style="margin: 2px 0 2px 8px; color: #999;">${text}</div>`;
+                            }
+                        });
+                        
                         html += `</div>`;
                     } else {
                         html += `<div style="color: #999; font-size: 13px;">${item.description}</div>`;

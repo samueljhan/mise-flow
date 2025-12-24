@@ -4282,8 +4282,8 @@ app.get('/api/todo', async (req, res) => {
           const typeLabel = i.type === 'green' ? 'green' : i.type === 'roasted' ? 'roasted' : 'en route';
           if (i.status === 'critical') return `critical|${i.name} (${i.weight}lb ${typeLabel}) - Very Low`;
           if (i.status === 'low') return `low|${i.name} (${i.weight}lb ${typeLabel}) - Low`;
-          if (i.status === 'tracking') return `tracking|${i.name} (${i.weight}lb) - Needs tracking`;
-          if (i.status === 'delivery') return `delivery|${i.name} (${i.weight}lb) - Check delivery`;
+          if (i.status === 'tracking') return `tracking|${i.name} (${i.weight}lb en route) - Needs tracking`;
+          if (i.status === 'delivery') return `delivery|${i.name} (${i.weight}lb en route) - Check delivery`;
           return `ok|${i.name} (${i.weight}lb ${typeLabel})`;
         }).join('\n'),
         items: inventoryItems,
@@ -4343,17 +4343,30 @@ app.get('/api/todo', async (req, res) => {
       const totalInvoices = Object.values(invoicesByCustomer).flat().length;
       
       if (totalInvoices > 0) {
-        // Build description showing customer groups
-        const customerSummaries = Object.entries(invoicesByCustomer)
-          .sort((a, b) => a[0].localeCompare(b[0]))
-          .map(([name, invoices]) => `${name} (${invoices.length})`)
-          .join(', ');
+        // Build detailed description with invoices by customer
+        let detailedDesc = '';
+        const sortedCustomers = Object.entries(invoicesByCustomer).sort((a, b) => a[0].localeCompare(b[0]));
+        
+        sortedCustomers.forEach(([name, invoices]) => {
+          // Calculate total for this customer
+          const customerTotal = invoices.reduce((sum, inv) => {
+            const amt = parseFloat(inv.amount) || 0;
+            return sum + amt;
+          }, 0);
+          
+          detailedDesc += `customer|${name} — $${customerTotal.toFixed(2)} total\n`;
+          invoices.forEach(inv => {
+            const amt = parseFloat(inv.amount) || 0;
+            detailedDesc += `invoice|${inv.invoiceNumber} — $${amt.toFixed(2)} (${inv.date})\n`;
+          });
+        });
         
         todoItems.push({
           type: 'outstanding_invoices',
           priority: 'high',
           title: 'Outstanding Invoices',
-          description: `${totalInvoices} invoice${totalInvoices > 1 ? 's' : ''} from ${customerCount} customer${customerCount > 1 ? 's' : ''}: ${customerSummaries}`,
+          description: detailedDesc.trim(),
+          summary: `${totalInvoices} invoice${totalInvoices > 1 ? 's' : ''} from ${customerCount} customer${customerCount > 1 ? 's' : ''}`,
           items: invoicesByCustomer,
           action: 'viewInvoices'
         });
@@ -4389,6 +4402,8 @@ app.get('/api/todo', async (req, res) => {
       const currentWeekRange = getWeekRangeStringForRetail(new Date());
       
       const weeksWithoutData = [];
+      const recentWeeksWithData = [];
+      
       if (totalColIndex > -1) {
         for (let i = 2; i < retailRows.length; i++) {
           const row = retailRows[i];
@@ -4397,23 +4412,54 @@ app.get('/api/todo', async (req, res) => {
           const dateRange = row[1];
           const totalSales = row[totalColIndex];
           
-          // If no total or total is 0/empty, needs data (but exclude current week)
-          if ((!totalSales || totalSales === 0 || totalSales === '') && dateRange !== currentWeekRange) {
+          // Skip current week (not finished yet)
+          if (dateRange === currentWeekRange) continue;
+          
+          // If no total or total is 0/empty, needs data
+          if (!totalSales || totalSales === 0 || totalSales === '') {
             weeksWithoutData.push(dateRange);
+          } else {
+            // Has data - keep for recent summary
+            recentWeeksWithData.push({ dateRange, total: totalSales });
           }
         }
       }
       
       // Only show last 4 weeks without data
       const recentWeeksWithoutData = weeksWithoutData.slice(-4);
+      // Get last 3 weeks with data for summary
+      const lastWeeksWithData = recentWeeksWithData.slice(-3).reverse();
       
-      if (recentWeeksWithoutData.length > 0) {
+      if (recentWeeksWithoutData.length > 0 || lastWeeksWithData.length > 0) {
+        let detailedDesc = '';
+        
+        // Add weeks needing data
+        if (recentWeeksWithoutData.length > 0) {
+          detailedDesc += `header|Needs Sales Data\n`;
+          recentWeeksWithoutData.forEach(week => {
+            detailedDesc += `missing|${week}\n`;
+          });
+        }
+        
+        // Add recent weeks summary
+        if (lastWeeksWithData.length > 0) {
+          detailedDesc += `header|Recent Weeks\n`;
+          lastWeeksWithData.forEach(week => {
+            const total = typeof week.total === 'number' ? week.total.toFixed(2) : week.total;
+            detailedDesc += `completed|${week.dateRange} — $${total}\n`;
+          });
+        }
+        
         todoItems.push({
           type: 'retail_overview',
-          priority: 'low',
+          priority: recentWeeksWithoutData.length > 0 ? 'medium' : 'low',
           title: 'Retail Overview',
-          description: `${recentWeeksWithoutData.length} week(s) need sales data: ${recentWeeksWithoutData.join(', ')}`,
+          description: detailedDesc.trim(),
+          summary: recentWeeksWithoutData.length > 0 
+            ? `${recentWeeksWithoutData.length} week(s) need sales data`
+            : `${lastWeeksWithData.length} recent week(s) recorded`,
           items: recentWeeksWithoutData,
+          recentWeeks: lastWeeksWithData,
           action: 'manageRetail'
         });
       }

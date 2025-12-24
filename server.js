@@ -5126,14 +5126,14 @@ app.get('/api/todo', async (req, res) => {
       console.log('Could not check invoices:', e.message);
     }
     
-    // 3. Check for retail weeks without sales data
+    // 3. Check for retail weeks without sales data OR with sales but not invoiced
     try {
       // First ensure weeks are up to date
       await ensureRetailWeeksUpToDate(sheets);
       
       const retailResponse = await sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: 'Retail Sales!A1:Z100',
+        range: 'Retail Sales!A1:K100',
         valueRenderOption: 'UNFORMATTED_VALUE'
       });
       
@@ -5160,10 +5160,14 @@ app.get('/api/todo', async (req, res) => {
         }
       }
       
+      // Invoice Sent column is J (index 9)
+      const invoiceSentColIndex = 9;
+      
       // Get current week range to exclude it (week not finished yet)
       const currentWeekRange = getWeekRangeStringForRetail(new Date());
       
       const weeksWithoutData = [];
+      const weeksNeedingInvoice = [];
       const recentWeeksWithData = [];
       
       if (totalColIndex > -1) {
@@ -5172,17 +5176,23 @@ app.get('/api/todo', async (req, res) => {
           if (!row || !row[1]) continue;
           
           const dateRange = row[1];
-          const totalSales = row[totalColIndex];
+          const totalSales = parseFloat(row[totalColIndex]) || 0;
+          const netPayout = parseFloat(row[totalColIndex + 2]) || 0;
+          const invoiceSent = row[invoiceSentColIndex] && String(row[invoiceSentColIndex]).trim().toLowerCase() === 'x';
           
           // Skip current week (not finished yet)
           if (dateRange === currentWeekRange) continue;
           
           // If no total or total is 0/empty, needs data
-          if (!totalSales || totalSales === 0 || totalSales === '') {
+          if (!totalSales || totalSales === 0) {
             weeksWithoutData.push(dateRange);
           } else {
-            // Has data - keep for recent summary
-            recentWeeksWithData.push({ dateRange, total: totalSales });
+            // Has data - check if invoiced
+            if (!invoiceSent) {
+              weeksNeedingInvoice.push({ dateRange, total: totalSales, netPayout, rowIndex: i + 1 });
+            }
+            // Keep for recent summary
+            recentWeeksWithData.push({ dateRange, total: totalSales, invoiceSent });
           }
         }
       }
@@ -5192,32 +5202,43 @@ app.get('/api/todo', async (req, res) => {
       // Get last 3 weeks with data for summary
       const lastWeeksWithData = recentWeeksWithData.slice(-3).reverse();
       
-      // Only show retail section if there are weeks needing data
-      if (recentWeeksWithoutData.length > 0) {
+      // Show retail section if there are weeks needing data OR weeks needing invoice
+      if (recentWeeksWithoutData.length > 0 || weeksNeedingInvoice.length > 0) {
         let detailedDesc = '';
         
-        // Add weeks needing data
-        detailedDesc += `header|Needs Sales Data\n`;
-        recentWeeksWithoutData.forEach(week => {
-          detailedDesc += `missing|${week}\n`;
-        });
-        
-        // Add recent weeks summary for context
-        if (lastWeeksWithData.length > 0) {
-          detailedDesc += `header|Recent Weeks\n`;
-          lastWeeksWithData.forEach(week => {
-            const total = typeof week.total === 'number' ? week.total.toFixed(2) : week.total;
-            detailedDesc += `completed|${week.dateRange} — $${total}\n`;
+        // Add weeks needing invoice (higher priority)
+        if (weeksNeedingInvoice.length > 0) {
+          detailedDesc += `header|Needs Invoice Sent\n`;
+          weeksNeedingInvoice.forEach(week => {
+            detailedDesc += `uninvoiced|${week.dateRange} — $${week.total.toFixed(2)} (net: $${week.netPayout.toFixed(2)})\n`;
           });
+        }
+        
+        // Add weeks needing data
+        if (recentWeeksWithoutData.length > 0) {
+          detailedDesc += `header|Needs Sales Data\n`;
+          recentWeeksWithoutData.forEach(week => {
+            detailedDesc += `missing|${week}\n`;
+          });
+        }
+        
+        // Build summary
+        let summaryParts = [];
+        if (weeksNeedingInvoice.length > 0) {
+          summaryParts.push(`${weeksNeedingInvoice.length} week(s) need invoicing`);
+        }
+        if (recentWeeksWithoutData.length > 0) {
+          summaryParts.push(`${recentWeeksWithoutData.length} week(s) need sales data`);
         }
         
         todoItems.push({
           type: 'retail_overview',
-          priority: 'medium',
+          priority: weeksNeedingInvoice.length > 0 ? 'high' : 'medium',
           title: 'Retail Sales',
           description: detailedDesc.trim(),
-          summary: `${recentWeeksWithoutData.length} week(s) need sales data`,
+          summary: summaryParts.join(', '),
           items: recentWeeksWithoutData,
+          uninvoicedWeeks: weeksNeedingInvoice,
           recentWeeks: lastWeeksWithData,
           action: 'manageRetail'
         });

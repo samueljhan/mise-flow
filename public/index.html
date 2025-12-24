@@ -3426,6 +3426,8 @@
                             
                             if (type === 'header') {
                                 html += `<div style="color: #ccc; font-weight: 600; margin: 8px 0 4px 0; font-size: 11px; text-transform: uppercase;">${text}</div>`;
+                            } else if (type === 'uninvoiced') {
+                                html += `<div style="margin: 2px 0 2px 8px; color: #f0ad4e;">💰 ${text}</div>`;
                             } else if (type === 'missing') {
                                 html += `<div style="margin: 2px 0 2px 8px; color: #999;">${text}</div>`;
                             } else if (type === 'completed') {
@@ -3467,6 +3469,11 @@
                         html += `<button class="action-btn" onclick="startRoastOrder()" style="font-size: 11px; padding: 5px 10px;">Order Roast</button>`;
                         html += `<button class="action-btn" onclick="openManageInventory()" style="font-size: 11px; padding: 5px 10px;">Manage</button>`;
                         html += `</div>`;
+                    } else if (item.type === 'retail_overview' && item.uninvoicedWeeks && item.uninvoicedWeeks.length > 0) {
+                        // Retail with uninvoiced weeks - show Send Invoices button
+                        html += `<button class="action-btn" onclick="checkUninvoicedRetailWeeks()" style="margin-left: 10px; font-size: 11px; padding: 5px 10px;">`;
+                        html += `Send Invoices`;
+                        html += `</button>`;
                     } else {
                         html += `<button class="action-btn" onclick="${getToDoAction(item)}" style="margin-left: 10px; font-size: 11px; padding: 5px 10px;">`;
                         html += `${getToDoButtonText(item.type)}`;

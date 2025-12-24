@@ -463,6 +463,10 @@
             cursor: pointer;
             transition: all 0.2s;
             text-align: left;
+            height: 70px;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
 
         .example-prompt:hover {
@@ -472,7 +476,7 @@
 
         .example-prompt strong {
             display: block;
-            margin-bottom: 6px;
+            margin-bottom: 4px;
             font-size: 13px;
             color: #e0e0e0;
         }
@@ -480,7 +484,10 @@
         .example-prompt span {
             font-size: 12px;
             color: #808080;
-            line-height: 1.4;
+            line-height: 1.3;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
 
         /* Prevent body scroll */
@@ -559,6 +566,7 @@
             
             .example-prompt {
                 padding: 10px;
+                height: 60px;
             }
             
             .example-prompt strong {
@@ -626,39 +634,39 @@
                 <div class="example-prompts">
                     <div class="example-prompt" onclick="showToDo()">
                         <strong>📋 To Do</strong>
-                        <span>View pending tasks and items needing attention</span>
+                        <span>View pending tasks and alerts</span>
                     </div>
                     <div class="example-prompt" onclick="checkCurrentInventory()">
                         <strong>☕ Check Current Inventory</strong>
-                        <span>"What's our current coffee inventory for all our roasts?"</span>
+                        <span>View all coffee stock levels</span>
                     </div>
                     <div class="example-prompt" onclick="openManageInventory()">
                         <strong>📦 Manage Inventory</strong>
-                        <span>Edit green and roasted coffee stock levels</span>
+                        <span>Edit green and roasted coffee</span>
                     </div>
                     <div class="example-prompt" onclick="startRoastOrder()">
                         <strong>🔥 Order Roast</strong>
-                        <span>Draft a new roasted coffee order</span>
+                        <span>Draft a new roast order</span>
                     </div>
                     <div class="example-prompt" onclick="viewEnRoute()">
                         <strong>🚚 En Route Coffee</strong>
-                        <span>View and manage shipped orders</span>
+                        <span>View and manage shipments</span>
                     </div>
                     <div class="example-prompt" onclick="startInvoice()">
                         <strong>🧾 Generate Invoice</strong>
-                        <span>Create a new invoice for a wholesale customer</span>
+                        <span>Create a wholesale invoice</span>
                     </div>
                     <div class="example-prompt" onclick="manageRetailPlaceholder()">
                         <strong>🛒 Manage Retail</strong>
-                        <span>Update retail coffee bag sales</span>
+                        <span>Update retail bag sales</span>
                     </div>
                     <div class="example-prompt" onclick="openManageCustomers()">
                         <strong>👥 Manage Customers</strong>
-                        <span>View and add wholesale customers</span>
+                        <span>View and add customers</span>
                     </div>
                     <div class="example-prompt" onclick="showForecast()">
                         <strong>📊 Forecast</strong>
-                        <span>Sales analytics and inventory predictions</span>
+                        <span>Sales and inventory analytics</span>
                     </div>
                 </div>
             </div>

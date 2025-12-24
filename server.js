@@ -3730,9 +3730,14 @@ Understand what the user wants and respond helpfully.
 
 AVAILABLE ACTIONS:
 - "check_inventory": User asking about stock levels, inventory, how much of something
+- "manage_inventory": User wants to edit, update, or manage their inventory
+- "manage_customers": User wants to view, add, or manage customers
 - "create_invoice": User wants to invoice a customer (needs customer + quantity + product)
 - "order_roast": User wants to place a roast order
 - "view_en_route": User asking about shipments or tracking
+- "show_todo": User wants to see their to-do list or pending tasks
+- "show_forecast": User wants to see forecast or analytics
+- "manage_retail": User wants to manage retail sales
 - "decline": User canceling, saying never mind, changing topics, or saying no/cancel/nope
 - "general": Conversation, questions, or unclear requests
 
@@ -3795,6 +3800,51 @@ Respond with JSON only:
         response: geminiResponse,
         action: 'check_inventory',
         showFollowUp: !needsFollowUp
+      });
+    }
+    
+    // Handle manage_inventory
+    if (intent === 'manage_inventory') {
+      return res.json({
+        response: "Opening inventory management...",
+        action: 'manage_inventory',
+        showFollowUp: false
+      });
+    }
+    
+    // Handle manage_customers
+    if (intent === 'manage_customers') {
+      return res.json({
+        response: "Opening customer management...",
+        action: 'manage_customers',
+        showFollowUp: false
+      });
+    }
+    
+    // Handle show_todo
+    if (intent === 'show_todo') {
+      return res.json({
+        response: "Loading your to-do list...",
+        action: 'show_todo',
+        showFollowUp: false
+      });
+    }
+    
+    // Handle show_forecast
+    if (intent === 'show_forecast') {
+      return res.json({
+        response: "Generating forecast...",
+        action: 'show_forecast',
+        showFollowUp: false
+      });
+    }
+    
+    // Handle manage_retail
+    if (intent === 'manage_retail') {
+      return res.json({
+        response: "Opening retail management...",
+        action: 'manage_retail',
+        showFollowUp: false
       });
     }
     

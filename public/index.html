@@ -1315,6 +1315,11 @@
                     await typeText(content, summary, 8);
                 }
                 
+                // Add follow-up suggestions
+                setTimeout(() => {
+                    addConversationalFollowUp('inventory_checked');
+                }, 300);
+                
             } catch (error) {
                 console.error('Error:', error);
                 addMessage('Error loading inventory: ' + error.message, false);
@@ -3854,11 +3859,10 @@ Archives of Us Coffee`;
             await loadInventory();
             
             if (enRouteCoffeeInventory.length === 0) {
-                let html = 'No coffee currently en route.';
-                html += `<div style="margin-top: 12px;">`;
-                html += `<button class="action-btn" onclick="addFollowUpMessage()">Done</button>`;
-                html += `</div>`;
-                addMessage(html, false);
+                addMessage('No coffee currently en route.', false);
+                setTimeout(() => {
+                    addConversationalFollowUp('en_route_empty');
+                }, 300);
                 return;
             }
             
@@ -4738,6 +4742,24 @@ Archives of Us Coffee`;
                     return null; // Don't return a message, function handles it
                 }
                 
+                if (data.action === 'manage_inventory') {
+                    const messages = chatContainer.querySelectorAll('.message');
+                    if (messages.length > 0) {
+                        messages[messages.length - 1].remove();
+                    }
+                    openManageInventory();
+                    return null;
+                }
+                
+                if (data.action === 'manage_customers') {
+                    const messages = chatContainer.querySelectorAll('.message');
+                    if (messages.length > 0) {
+                        messages[messages.length - 1].remove();
+                    }
+                    openManageCustomers();
+                    return null;
+                }
+                
                 if (data.action === 'order_roast') {
                     const messages = chatContainer.querySelectorAll('.message');
                     if (messages.length > 0) {
@@ -5213,6 +5235,51 @@ Archives of Us Coffee`;
             const isChangingTopic = topicChangePhrases.some(p => lowerMsg.includes(p));
             const wantsToSwitch = isCanceling || isChangingTopic;
             
+            // Direct command detection - handle common phrases without LLM
+            const directCommands = {
+                'manage inventory': () => { openManageInventory(); return true; },
+                'edit inventory': () => { openManageInventory(); return true; },
+                'manage customers': () => { openManageCustomers(); return true; },
+                'customers': () => { openManageCustomers(); return true; },
+                'to do': () => { showToDo(); return true; },
+                'todo': () => { showToDo(); return true; },
+                'check inventory': () => { checkCurrentInventory(); return true; },
+                'view inventory': () => { checkCurrentInventory(); return true; },
+                'order roast': () => { startRoastOrder(); return true; },
+                'roast order': () => { startRoastOrder(); return true; },
+                'en route': () => { viewEnRoute(); return true; },
+                'generate invoice': () => { startInvoice(); return true; },
+                'create invoice': () => { startInvoice(); return true; },
+                'new invoice': () => { startInvoice(); return true; },
+                'manage retail': () => { manageRetail(); return true; },
+                'retail': () => { manageRetail(); return true; },
+                'forecast': () => { showForecast(); return true; },
+            };
+            
+            // Check for direct command match
+            for (const [cmd, action] of Object.entries(directCommands)) {
+                if (lowerMsg === cmd || lowerMsg === cmd + '?' || lowerMsg === cmd + '.') {
+                    action();
+                    return;
+                }
+            }
+            
+            // Handle pure cancel phrases - just show follow-up options
+            const pureCancelPhrases = ['never mind', 'nevermind', 'cancel', 'forget it', 'nope'];
+            if (pureCancelPhrases.some(p => lowerMsg === p || lowerMsg === p + '.' || lowerMsg === p + '!')) {
+                // Clear any pending states
+                waitingForRoastOrder = false;
+                window.waitingForOrderConfirmation = false;
+                window.pendingClarification = null;
+                pendingRoastOrder = [];
+                
+                addMessage('No problem! What would you like to do?', false);
+                setTimeout(() => {
+                    addFollowUpButtons();
+                }, 100);
+                return;
+            }
+            
             // Check if there's a pending invoice that hasn't been confirmed
             if (window.pendingInvoiceData && !window.pendingInvoiceWarningShown) {
                 // Check if user is trying to correct the invoice (mentions same customer or product)
@@ -5264,6 +5331,14 @@ Archives of Us Coffee`;
                     confirmDefaultOrder();
                     return;
                 }
+                if (isCanceling && !isChangingTopic) {
+                    // Pure cancel - just exit and show follow-up
+                    window.waitingForOrderConfirmation = false;
+                    pendingRoastOrder = [];
+                    addMessage('Order cancelled. What would you like to do?', false);
+                    setTimeout(() => addFollowUpButtons(), 100);
+                    return;
+                }
                 if (wantsToSwitch) {
                     window.waitingForOrderConfirmation = false;
                     pendingRoastOrder = [];
@@ -5282,6 +5357,14 @@ Archives of Us Coffee`;
 
             // Check if we're waiting for roast order input
             if (waitingForRoastOrder) {
+                if (isCanceling && !isChangingTopic) {
+                    // Pure cancel - just exit and show follow-up
+                    waitingForRoastOrder = false;
+                    window.pendingClarification = null;
+                    addMessage('No problem! What would you like to do?', false);
+                    setTimeout(() => addFollowUpButtons(), 100);
+                    return;
+                }
                 if (wantsToSwitch) {
                     waitingForRoastOrder = false;
                     window.pendingClarification = null;
@@ -5520,10 +5603,19 @@ Archives of Us Coffee`;
             html += '</div>';
             
             html += '<div class="response-buttons" id="invoiceButtons-' + data.invoiceNumber + '">';
-            html += '<button class="action-btn" onclick="confirmInvoice(\'' + data.invoiceNumber + '\')" style="background:#28a745;color:white;">Confirm Invoice</button>';
+            html += '<button class="action-btn" onclick="confirmInvoice(\'' + data.invoiceNumber + '\')" style="background:#28a745;color:white;">Confirm</button>';
+            html += '<button class="action-btn" onclick="cancelInvoice()">Cancel</button>';
             html += '</div>';
             
             return html;
+        }
+        
+        function cancelInvoice() {
+            window.pendingInvoiceData = null;
+            window.pendingInvoiceWarningShown = false;
+            window.pendingMessageAfterWarning = null;
+            addMessage('Invoice cancelled.', false);
+            setTimeout(() => addFollowUpButtons(), 100);
         }
         
         async function confirmInvoice(invoiceNumber) {
@@ -5561,12 +5653,10 @@ Archives of Us Coffee`;
                     // Update buttons to show PDF and Email options
                     const buttonsDiv = document.getElementById('invoiceButtons-' + data.invoiceNumber);
                     if (buttonsDiv) {
-                        buttonsDiv.innerHTML = '<span style="color:#28a745;font-weight:bold;">Confirmed</span>' +
-                            '<a href="' + data.pdfUrl + '" download="' + data.invoiceNumber + '.pdf" class="action-btn" style="text-decoration:none;">Download PDF</a>' +
-                            '<button class="action-btn" onclick="openEmailModalWithInvoice(\'' + data.pdfUrl + '\', \'' + data.invoiceNumber + '\', \'' + data.customer.replace(/'/g, "\\'") + '\')">Draft Invoice Email</button>';
+                        buttonsDiv.innerHTML = '<span style="color:#28a745;font-weight:bold;">✓ Confirmed</span>';
                     }
                     
-                    // Build confirmation message with inventory updates
+                    // Build confirmation message with inventory updates and action buttons
                     let confirmMsg = 'Invoice ' + data.invoiceNumber + ' confirmed and added to spreadsheet.';
                     if (result.deductions && result.deductions.length > 0) {
                         confirmMsg += '<br><br><strong>Roasted inventory updated:</strong><br>';
@@ -5574,6 +5664,13 @@ Archives of Us Coffee`;
                             confirmMsg += `• ${d.product}: -${d.deducted} lb (${d.remaining} lb remaining)<br>`;
                         });
                     }
+                    
+                    // Add action buttons
+                    confirmMsg += '<div class="response-buttons" style="margin-top: 12px;">';
+                    confirmMsg += '<button class="action-btn" onclick="openEmailModalWithInvoice(\'' + data.pdfUrl + '\', \'' + data.invoiceNumber + '\', \'' + data.customer.replace(/'/g, "\\'") + '\')">Draft Invoice Email</button>';
+                    confirmMsg += '<a href="' + data.pdfUrl + '" download="' + data.invoiceNumber + '.pdf" class="action-btn" style="text-decoration:none;">Download PDF</a>';
+                    confirmMsg += '<button class="action-btn" onclick="addFollowUpMessage()">Done</button>';
+                    confirmMsg += '</div>';
                     
                     addMessage(confirmMsg, false);
                     
@@ -5583,11 +5680,6 @@ Archives of Us Coffee`;
                     window.pendingInvoiceData = null;
                     window.pendingInvoiceWarningShown = false;
                     window.pendingMessageAfterWarning = null;
-                    
-                    // Add follow-up after confirmation
-                    setTimeout(() => {
-                        addConversationalFollowUp('invoice_confirmed');
-                    }, 500);
                 } else {
                     // Handle insufficient inventory with detailed message
                     if (result.error === 'insufficient_inventory' && result.shortages) {
@@ -5657,8 +5749,8 @@ Archives of Us Coffee`;
             html += '</div>';
             
             html += '<div class="response-buttons">';
-            html += '<button class="action-btn" onclick="confirmInvoice(\'' + data.invoiceNumber + '\')" style="background:#28a745;color:white;">Confirm Invoice</button>';
-            html += '<button class="action-btn" onclick="discardPendingInvoice()">Discard</button>';
+            html += '<button class="action-btn" onclick="confirmInvoice(\'' + data.invoiceNumber + '\')" style="background:#28a745;color:white;">Confirm</button>';
+            html += '<button class="action-btn" onclick="cancelInvoice()">Cancel</button>';
             html += '</div>';
             
             addMessage(html, false);

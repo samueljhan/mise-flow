@@ -6013,7 +6013,6 @@ Archives of Us Coffee`;
             html += `<div style="background: #2a3a2a; padding: 10px; border-radius: 8px; margin-bottom: 12px;">`;
             html += `<strong>🧾 AOU Weekly Reconciliation</strong><br>`;
             html += `<div style="font-size: 12px; color: #aaa; margin: 4px 0;">Invoices are auto-generated when retail sales are entered for completed weeks.</div>`;
-            html += `<button class="action-btn" style="margin-top: 8px;" onclick="generateHistoricalAOUInvoices()">Generate Historical Invoices</button>`;
             html += `<button class="action-btn" style="margin-top: 8px;" onclick="viewAOUInvoices()">View AOU Invoices</button>`;
             html += `</div>`;
             
@@ -6029,48 +6028,6 @@ Archives of Us Coffee`;
             if (lastMsg) {
                 const content = lastMsg.querySelector('.message-content') || lastMsg;
                 content.innerHTML = html;
-            }
-        }
-        
-        async function generateHistoricalAOUInvoices() {
-            addMessage('Generating historical AOU invoices since 12/02/2025...', false);
-            
-            try {
-                const response = await fetch('/api/aou/generate-historical', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ sinceDate: '12/02/2025' })
-                });
-                
-                const data = await response.json();
-                
-                const messages = chatContainer.querySelectorAll('.message');
-                const lastMsg = messages[messages.length - 1];
-                const content = lastMsg?.querySelector('.message-content') || lastMsg;
-                
-                if (data.success) {
-                    let html = `<div style="color: #4a6741;">✅ ${data.message}</div>`;
-                    if (data.invoices && data.invoices.length > 0) {
-                        html += `<div style="margin-top: 8px;">`;
-                        data.invoices.forEach(inv => {
-                            html += `<div style="font-size: 12px; margin: 4px 0;">`;
-                            html += `${inv.invoiceNumber} (${inv.weekRange}): $${inv.total?.toFixed(2) || '0.00'}`;
-                            html += `</div>`;
-                        });
-                        html += `</div>`;
-                    }
-                    html += `<div class="response-buttons" style="margin-top: 12px;">`;
-                    html += `<button class="action-btn" onclick="manageRetail()">Back to Retail</button>`;
-                    html += `<button class="action-btn" onclick="addConversationalFollowUp('completed')">Done</button>`;
-                    html += `</div>`;
-                    content.innerHTML = html;
-                } else {
-                    content.innerHTML = `<div style="color: #dc3545;">Error: ${data.error}</div>`;
-                }
-                
-            } catch (error) {
-                console.error('Error generating AOU invoices:', error);
-                addMessage(`Error: ${error.message}`, false);
             }
         }
         

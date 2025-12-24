@@ -103,7 +103,8 @@ app.get('/auth/google', (req, res) => {
     'https://www.googleapis.com/auth/gmail.compose',
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/userinfo.email',
-    'https://www.googleapis.com/auth/userinfo.profile'
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/drive.file'
   ];
 
   const url = oauth2Client.generateAuthUrl({
@@ -523,6 +524,7 @@ function getPrivacyPage() {
 
 // Archives of Us Coffee Spreadsheet ID
 const SPREADSHEET_ID = '1D5JuAEpOC2ZXD2IAel1ImBXqFUrcMzFY-gXu4ocOMCw';
+const INVOICE_DRIVE_FOLDER_ID = '1F6vA452gNBlIQ3oTG4cc9bpwOibRbwNv';
 
 // Create invoices directory if it doesn't exist
 const invoicesDir = path.join(__dirname, 'public', 'invoices');
@@ -2882,7 +2884,7 @@ Respond ONLY with valid JSON (no markdown):
     const dueDateStr = dueDateObj.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
 
     // Step 4: Generate PDF with all items
-    const pdfFilename = `${invoiceNumber}.pdf`;
+    const pdfFilename = `Invoice-${invoiceNumber}.pdf`;
     const pdfPath = path.join(invoicesDir, pdfFilename);
     
     await generateInvoicePDF({
@@ -2984,21 +2986,62 @@ app.post('/api/invoice/confirm', async (req, res) => {
     oauth2Client.setCredentials(userTokens);
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
 
-    // Record in Invoices sheet (store as number, format will display as currency)
+    // Calculate weights by coffee type from line items
+    let archivesBlendWeight = 0;
+    let ethiopiaGeraWeight = 0;
+    let colombiaDecafWeight = 0;
+    
+    if (items && items.length > 0) {
+      for (const item of items) {
+        const productName = (item.description || item.product || '').toLowerCase();
+        const quantity = parseFloat(item.quantity) || 0;
+        
+        if (productName.includes('archives')) {
+          archivesBlendWeight += quantity;
+        } else if (productName.includes('ethiopia')) {
+          ethiopiaGeraWeight += quantity;
+        } else if (productName.includes('decaf') || productName.includes('colombia')) {
+          colombiaDecafWeight += quantity;
+        }
+      }
+    }
+
+    // Record in Invoices sheet with new structure:
+    // B: Date, C: Invoice #, D: Archives Blend, E: Ethiopia Gera, F: Colombia Decaf, G: Price, H: Paid
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!B:E',
+      range: 'Invoices!B:H',
       valueInputOption: 'USER_ENTERED',
       insertDataOption: 'INSERT_ROWS',
       requestBody: {
-        values: [[date, invoiceNumber, parseFloat(total), '']]
+        values: [[
+          date, 
+          invoiceNumber, 
+          archivesBlendWeight || '', 
+          ethiopiaGeraWeight || '', 
+          colombiaDecafWeight || '', 
+          parseFloat(total), 
+          ''
+        ]]
       }
     });
 
-    // Apply currency format to Total column (column D, index 3)
-    await applyCurrencyFormat(sheets, 'Invoices', [3], 3);
+    // Apply currency format to Price column (column G, index 6)
+    await applyCurrencyFormat(sheets, 'Invoices', [6], 3);
 
     console.log(`✅ Invoice ${invoiceNumber} confirmed and recorded in spreadsheet`);
+    
+    // Upload PDF to Google Drive (async, don't block response)
+    const pdfPath = path.join(invoicesDir, `Invoice-${invoiceNumber}.pdf`);
+    if (fs.existsSync(pdfPath)) {
+      uploadInvoiceToDrive(pdfPath, invoiceNumber)
+        .then(result => {
+          if (result) {
+            console.log(`📤 Invoice ${invoiceNumber} uploaded to Drive`);
+          }
+        })
+        .catch(e => console.log('Drive upload failed:', e.message));
+    }
 
     // Deduct items from roasted coffee inventory
     const deductions = [];
@@ -3074,7 +3117,7 @@ async function matchPaymentToInvoice(paymentAmount, paymentDate, paymentDescript
     // Get all invoices from Invoices sheet
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!A:F'
+      range: 'Invoices!A:H'
     });
 
     const rows = response.data.values || [];
@@ -3245,7 +3288,7 @@ async function markInvoicePaid(invoiceNumber, paymentDate, paymentMethod) {
     // Find the invoice row
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!A:F'
+      range: 'Invoices!A:H'
     });
 
     const rows = response.data.values || [];
@@ -3262,13 +3305,13 @@ async function markInvoicePaid(invoiceNumber, paymentDate, paymentMethod) {
       return { success: false, error: 'Invoice not found' };
     }
 
-    // Update the row to mark as paid (add to column E or next available)
+    // Update the row to mark as paid (column H in new structure)
     await sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
-      range: `Invoices!E${targetRow}`,
+      range: `Invoices!H${targetRow}`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
-        values: [['Paid']]
+        values: [['x']]
       }
     });
 
@@ -3375,28 +3418,29 @@ app.get('/api/invoices/outstanding', async (req, res) => {
     
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!A:F',
+      range: 'Invoices!A:H',
       valueRenderOption: 'UNFORMATTED_VALUE'
     });
     
     const rows = response.data.values || [];
     const invoicesByCustomer = {};
     
+    // New structure: B=Date(1), C=Invoice#(2), D=Archives(3), E=Ethiopia(4), F=Decaf(5), G=Price(6), H=Paid(7)
     for (let i = 2; i < rows.length; i++) {
       const row = rows[i];
       if (!row || !row[2]) continue;
       
       const invoiceNumber = row[2];
-      // Parse amount - handle both numbers and formatted strings
+      // Parse amount from column G (index 6)
       let amountNum = 0;
-      if (row[3] !== undefined && row[3] !== null) {
-        if (typeof row[3] === 'number') {
-          amountNum = row[3];
+      if (row[6] !== undefined && row[6] !== null) {
+        if (typeof row[6] === 'number') {
+          amountNum = row[6];
         } else {
-          amountNum = parseFloat(String(row[3]).replace(/[$,]/g, '')) || 0;
+          amountNum = parseFloat(String(row[6]).replace(/[$,]/g, '')) || 0;
         }
       }
-      const paidDate = row[4];
+      const paidDate = row[7];  // Column H (index 7)
       
       // If no paid date, it's outstanding (handle both string and number types)
       const isPaid = paidDate !== undefined && paidDate !== null && paidDate !== '' && String(paidDate).trim() !== '';
@@ -3625,7 +3669,7 @@ Archives of Us Coffee`;
     // Try to attach each invoice PDF
     let attachedCount = 0;
     for (const inv of invoices) {
-      const pdfFilename = `${inv.invoiceNumber}.pdf`;
+      const pdfFilename = `Invoice-${inv.invoiceNumber}.pdf`;
       const pdfPath = path.join(invoicesDir, pdfFilename);
       
       let pdfData = null;
@@ -3633,11 +3677,25 @@ Archives of Us Coffee`;
       // Check if PDF exists locally
       if (fs.existsSync(pdfPath)) {
         pdfData = fs.readFileSync(pdfPath);
-        console.log(`📎 Found existing PDF: ${pdfFilename}`);
+        console.log(`📎 Found local PDF: ${pdfFilename}`);
       } else {
-        // Generate a simple invoice summary PDF
+        // Try to fetch from Google Drive
         try {
-          console.log(`📄 Generating PDF for: ${inv.invoiceNumber}`);
+          console.log(`🔍 Checking Google Drive for: ${pdfFilename}`);
+          const driveFile = await getInvoiceFromDrive(inv.invoiceNumber);
+          if (driveFile && driveFile.buffer) {
+            pdfData = driveFile.buffer;
+            console.log(`📎 Found PDF in Google Drive: ${pdfFilename}`);
+          }
+        } catch (driveErr) {
+          console.log(`⚠️ Drive fetch failed for ${inv.invoiceNumber}:`, driveErr.message);
+        }
+      }
+      
+      // If still no PDF, generate a summary
+      if (!pdfData) {
+        try {
+          console.log(`📄 Generating summary PDF for: ${inv.invoiceNumber}`);
           const tempPdfPath = path.join(invoicesDir, `temp_${pdfFilename}`);
           
           // Parse amount string to number if needed
@@ -3913,6 +3971,12 @@ async function generateInvoicePDF(data, outputPath) {
     doc.moveDown(2);
     doc.fontSize(24).font('Helvetica-Bold').text('Invoice', { align: 'right' });
     doc.fontSize(10).font('Helvetica').text(`Submitted on ${data.date}`, { align: 'right' });
+    
+    // Add week range for reconciliation invoices
+    if (data.weekRange) {
+      doc.fontSize(9).fillColor('#666666').text(`Week: ${data.weekRange}`, { align: 'right' });
+      doc.fillColor('#000000');
+    }
 
     // Invoice details box
     doc.moveDown(2);
@@ -3949,8 +4013,17 @@ async function generateInvoicePDF(data, outputPath) {
     doc.font('Helvetica');
     
     for (const item of data.items) {
-      doc.text(item.description, 55, rowY);
-      doc.text(item.quantity.toString(), 280, rowY);
+      // Truncate long descriptions
+      let desc = item.description;
+      if (desc.length > 40) {
+        desc = desc.substring(0, 37) + '...';
+      }
+      doc.text(desc, 55, rowY);
+      
+      // Format quantity (show as integer if whole number)
+      const qtyStr = Number.isInteger(item.quantity) ? item.quantity.toString() : item.quantity.toFixed(2);
+      doc.text(qtyStr, 280, rowY);
+      
       doc.text(`$${item.unitPrice.toFixed(2)}`, 350, rowY);
       doc.text(`$${item.total.toFixed(2)}`, 450, rowY);
       rowY += 20;
@@ -3970,7 +4043,8 @@ async function generateInvoicePDF(data, outputPath) {
     // Totals on right side
     doc.font('Helvetica-Bold').fontSize(10);
     doc.text('Subtotal', 380, bankY);
-    doc.text(`$${data.subtotal.toFixed(2)}`, 450, bankY);
+    const subtotal = data.subtotal || data.total;
+    doc.text(`$${subtotal.toFixed(2)}`, 450, bankY);
     
     doc.text('Adjustments', 380, bankY + 20);
     
@@ -3982,6 +4056,84 @@ async function generateInvoicePDF(data, outputPath) {
     writeStream.on('finish', resolve);
     writeStream.on('error', reject);
   });
+}
+
+// Upload invoice PDF to Google Drive
+async function uploadInvoiceToDrive(pdfPath, invoiceNumber) {
+  if (!userTokens) {
+    console.log('⚠️ Cannot upload to Drive - Google not connected');
+    return null;
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+    
+    const fileMetadata = {
+      name: `Invoice-${invoiceNumber}.pdf`,
+      parents: [INVOICE_DRIVE_FOLDER_ID]
+    };
+    
+    const media = {
+      mimeType: 'application/pdf',
+      body: fs.createReadStream(pdfPath)
+    };
+    
+    const response = await drive.files.create({
+      requestBody: fileMetadata,
+      media: media,
+      fields: 'id, webViewLink'
+    });
+    
+    console.log(`📤 Uploaded Invoice-${invoiceNumber}.pdf to Google Drive: ${response.data.id}`);
+    
+    return {
+      fileId: response.data.id,
+      webViewLink: response.data.webViewLink
+    };
+  } catch (error) {
+    console.error('Drive upload error:', error.message);
+    return null;
+  }
+}
+
+// Get invoice PDF from Google Drive
+async function getInvoiceFromDrive(invoiceNumber) {
+  if (!userTokens) {
+    return null;
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+    
+    // Search for the file in the invoices folder
+    const response = await drive.files.list({
+      q: `name='Invoice-${invoiceNumber}.pdf' and '${INVOICE_DRIVE_FOLDER_ID}' in parents and trashed=false`,
+      fields: 'files(id, name, webViewLink)'
+    });
+    
+    if (response.data.files && response.data.files.length > 0) {
+      const file = response.data.files[0];
+      
+      // Download the file content
+      const fileResponse = await drive.files.get({
+        fileId: file.id,
+        alt: 'media'
+      }, { responseType: 'arraybuffer' });
+      
+      return {
+        fileId: file.id,
+        webViewLink: file.webViewLink,
+        buffer: Buffer.from(fileResponse.data)
+      };
+    }
+    
+    return null;
+  } catch (error) {
+    console.error('Drive fetch error:', error.message);
+    return null;
+  }
 }
 
 // ============ AI Processing ============
@@ -4811,28 +4963,29 @@ app.get('/api/todo', async (req, res) => {
     try {
       const invoicesResponse = await sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: 'Invoices!A:F',
+        range: 'Invoices!A:H',
         valueRenderOption: 'UNFORMATTED_VALUE'
       });
       
       const invoiceRows = invoicesResponse.data.values || [];
       const invoicesByCustomer = {};
       
+      // New structure: B=Date(1), C=Invoice#(2), D=Archives(3), E=Ethiopia(4), F=Decaf(5), G=Price(6), H=Paid(7)
       for (let i = 2; i < invoiceRows.length; i++) {
         const row = invoiceRows[i];
         if (!row || !row[2]) continue; // Skip empty rows
         
         const invoiceNumber = row[2];
-        // Parse amount - handle both numbers and formatted strings like "$1,150.00"
+        // Parse amount from column G (index 6)
         let amount = 0;
-        if (row[3] !== undefined && row[3] !== null) {
-          if (typeof row[3] === 'number') {
-            amount = row[3];
+        if (row[6] !== undefined && row[6] !== null) {
+          if (typeof row[6] === 'number') {
+            amount = row[6];
           } else {
-            amount = parseFloat(String(row[3]).replace(/[$,]/g, '')) || 0;
+            amount = parseFloat(String(row[6]).replace(/[$,]/g, '')) || 0;
           }
         }
-        const paidDate = row[4];
+        const paidDate = row[7];  // Column H (index 7)
         
         // If no paid date, it's outstanding (handle both string and number types)
         const isPaid = paidDate !== undefined && paidDate !== null && paidDate !== '' && String(paidDate).trim() !== '';
@@ -7238,16 +7391,41 @@ async function generateAOUInvoiceForWeek(rowIndex) {
     
     console.log(`📄 Generated AOU reconciliation invoice ${invoiceNumber} for week ${weekRange}: $${invoiceTotal.toFixed(2)}`);
     
-    // Save to Invoices sheet
+    // Calculate weights by coffee type for the new sheet structure
+    let archivesBlendWeight = 0;
+    let ethiopiaGeraWeight = 0;
+    let colombiaDecafWeight = 0;
+    
+    for (const [product, usage] of Object.entries(wholesaleUsage)) {
+      const prodLower = product.toLowerCase();
+      if (prodLower.includes('archives')) {
+        archivesBlendWeight += usage.netWeight;
+      } else if (prodLower.includes('ethiopia')) {
+        ethiopiaGeraWeight += usage.netWeight;
+      } else if (prodLower.includes('decaf') || prodLower.includes('colombia')) {
+        colombiaDecafWeight += usage.netWeight;
+      }
+    }
+    
+    // Save to Invoices sheet with new structure:
+    // B: Date, C: Invoice #, D: Archives Blend, E: Ethiopia Gera, F: Colombia Decaf, G: Price, H: Paid
     const today = new Date();
     const dateValue = today.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
     
     await sheets.spreadsheets.values.append({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!B:E',
+      range: 'Invoices!B:H',
       valueInputOption: 'USER_ENTERED',
       requestBody: {
-        values: [[dateValue, invoiceNumber, invoiceTotal, '']]
+        values: [[
+          dateValue, 
+          invoiceNumber, 
+          archivesBlendWeight || '', 
+          ethiopiaGeraWeight || '', 
+          colombiaDecafWeight || '', 
+          invoiceTotal, 
+          ''
+        ]]
       }
     });
     
@@ -7405,13 +7583,14 @@ app.get('/api/aou/invoices', async (req, res) => {
     
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Invoices!B:E',
+      range: 'Invoices!B:H',
       valueRenderOption: 'UNFORMATTED_VALUE'
     });
     
     const rows = response.data.values || [];
     const aouInvoices = [];
     
+    // New structure: B=Date, C=Invoice#, D=Archives, E=Ethiopia, F=Decaf, G=Price, H=Paid
     for (let i = 1; i < rows.length; i++) {
       const row = rows[i];
       if (row && row[1] && row[1].toString().includes('-AOU-')) {
@@ -7426,8 +7605,8 @@ app.get('/api/aou/invoices', async (req, res) => {
         aouInvoices.push({
           date: dateStr,
           invoiceNumber: row[1],
-          amount: parseFloat(row[2]) || 0,
-          paid: row[3] ? true : false
+          amount: parseFloat(row[5]) || 0,  // Column G (index 5) = Price
+          paid: row[6] ? true : false        // Column H (index 6) = Paid
         });
       }
     }
@@ -7436,6 +7615,311 @@ app.get('/api/aou/invoices', async (req, res) => {
     
   } catch (error) {
     console.error('AOU invoices list error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ============ ONE-TIME INVOICE RECONCILIATION ============
+// This endpoint populates the Invoices sheet and generates/uploads all PDFs to Google Drive
+
+app.post('/api/invoices/reconcile-all', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // At-cost pricing (per lb)
+    const AT_COST = {
+      'Archives Blend': 10.22,
+      'Ethiopia Gera Natural': 10.39,
+      'Colombia Decaf': 12.54
+    };
+    
+    // Define all historical invoices
+    const allInvoices = [
+      // ===== AOU INVOICES =====
+      // C-AOU-1000 and C-AOU-1001: Initial wholesale setup
+      // 310lb Archives + 105lb Ethiopia split into two payments with $743.31 discount
+      {
+        invoiceNumber: 'C-AOU-1000',
+        customer: 'AOU Cafe (11/07/25-11/20/25)',
+        customerCode: 'AOU',
+        date: '11/17/2025',
+        dueDate: '12/01/2025',
+        items: [
+          { description: 'Archives Blend (wholesale setup)', quantity: 155, unitPrice: AT_COST['Archives Blend'], total: 155 * AT_COST['Archives Blend'] },
+          { description: 'Ethiopia Gera Natural (wholesale setup)', quantity: 52.5, unitPrice: AT_COST['Ethiopia Gera Natural'], total: 52.5 * AT_COST['Ethiopia Gera Natural'] },
+          { description: 'Initial Setup Discount (1/2)', quantity: 1, unitPrice: -371.66, total: -371.66 }
+        ],
+        archivesWeight: 155,
+        ethiopiaWeight: 52.5,
+        decafWeight: 0,
+        total: 1757.53,
+        paid: 'x'
+      },
+      {
+        invoiceNumber: 'C-AOU-1001',
+        customer: 'AOU Cafe (11/21/25-11/27/25)',
+        customerCode: 'AOU',
+        date: '11/25/2025',
+        dueDate: '12/09/2025',
+        items: [
+          { description: 'Archives Blend (wholesale setup)', quantity: 155, unitPrice: AT_COST['Archives Blend'], total: 155 * AT_COST['Archives Blend'] },
+          { description: 'Ethiopia Gera Natural (wholesale setup)', quantity: 52.5, unitPrice: AT_COST['Ethiopia Gera Natural'], total: 52.5 * AT_COST['Ethiopia Gera Natural'] },
+          { description: 'Initial Setup Discount (2/2)', quantity: 1, unitPrice: -371.65, total: -371.65 }
+        ],
+        archivesWeight: 155,
+        ethiopiaWeight: 52.5,
+        decafWeight: 0,
+        total: 1757.53,
+        paid: 'x'
+      },
+      // C-AOU-1002: Week 11/28-12/04 reconciliation
+      {
+        invoiceNumber: 'C-AOU-1002',
+        customer: 'AOU Cafe (11/28/25-12/04/25)',
+        customerCode: 'AOU',
+        date: '12/24/2025',
+        dueDate: '01/07/2026',
+        weekRange: '11/28/25-12/04/25',
+        items: [
+          { description: 'Archives Blend (wholesale) - Week 11/28-12/04', quantity: 130, unitPrice: AT_COST['Archives Blend'], total: 130 * AT_COST['Archives Blend'] },
+          { description: 'Ethiopia Gera Natural (wholesale) - Week 11/28-12/04', quantity: 4, unitPrice: AT_COST['Ethiopia Gera Natural'], total: 4 * AT_COST['Ethiopia Gera Natural'] },
+          { description: 'Retail Sales Adjustment (4 lb Archives, 1 lb Ethiopia)', quantity: 1, unitPrice: -(4 * AT_COST['Archives Blend'] + 1 * AT_COST['Ethiopia Gera Natural']), total: -(4 * AT_COST['Archives Blend'] + 1 * AT_COST['Ethiopia Gera Natural']) },
+          { description: 'Net Retail Payout (11/28-12/04)', quantity: 1, unitPrice: 156.46, total: 156.46 }
+        ],
+        archivesWeight: 126, // 130 - 4 retail
+        ethiopiaWeight: 3, // 4 - 1 retail
+        decafWeight: 0,
+        total: 1298.51,
+        paid: null,
+        isReconciliation: true
+      },
+      
+      // ===== CED INVOICES =====
+      {
+        invoiceNumber: 'C-CED-1000',
+        customer: 'Ced Coffee & Donut',
+        customerCode: 'CED',
+        date: '11/30/2025',
+        dueDate: '11/30/2025',
+        items: [
+          { description: 'Archives Blend Coffee (units in lbs)', quantity: 50, unitPrice: 11.50, total: 575.00 },
+          { description: 'Decaf Coffee (units in lbs)', quantity: 10, unitPrice: 13.00, total: 130.00 },
+          { description: 'Archives Blend Coffee (units in lbs)', quantity: 20, unitPrice: 11.50, total: 230.00 }
+        ],
+        archivesWeight: 70,
+        ethiopiaWeight: 0,
+        decafWeight: 10,
+        total: 935.00,
+        paid: 'x'
+      },
+      {
+        invoiceNumber: 'C-CED-1001',
+        customer: 'Ced Coffee & Donut',
+        customerCode: 'CED',
+        date: '12/02/2025',
+        dueDate: '12/03/2025',
+        items: [
+          { description: 'Archives Blend Coffee (units in lbs)', quantity: 50, unitPrice: 11.50, total: 575.00 }
+        ],
+        archivesWeight: 50,
+        ethiopiaWeight: 0,
+        decafWeight: 0,
+        total: 575.00,
+        paid: null
+      },
+      {
+        invoiceNumber: 'C-CED-1002',
+        customer: 'Ced Coffee & Donut',
+        customerCode: 'CED',
+        date: '12/12/2025',
+        dueDate: '12/14/2025',
+        items: [
+          { description: 'Archives Blend Coffee (units in lbs)', quantity: 100, unitPrice: 11.50, total: 1150.00 }
+        ],
+        archivesWeight: 100,
+        ethiopiaWeight: 0,
+        decafWeight: 0,
+        total: 1150.00,
+        paid: null
+      },
+      
+      // ===== DEX INVOICES =====
+      {
+        invoiceNumber: 'C-DEX-1000',
+        customer: 'Dex Coffee',
+        customerCode: 'DEX',
+        date: '12/04/2025',
+        dueDate: '12/05/2025',
+        items: [
+          { description: 'Archives Blend (units in lbs)', quantity: 40, unitPrice: 12.00, total: 480.00 },
+          { description: 'Decaf Coffee (units in lbs)', quantity: 10, unitPrice: 13.00, total: 130.00 },
+          { description: 'Archives Blend (units in lbs)', quantity: 20, unitPrice: 12.00, total: 240.00 }
+        ],
+        archivesWeight: 60,
+        ethiopiaWeight: 0,
+        decafWeight: 10,
+        total: 850.00,
+        paid: null
+      },
+      {
+        invoiceNumber: 'C-DEX-1001',
+        customer: 'Dex Coffee',
+        customerCode: 'DEX',
+        date: '12/11/2025',
+        dueDate: '12/13/2025',
+        items: [
+          { description: 'Archives Blend (units in lbs)', quantity: 20, unitPrice: 12.00, total: 240.00 }
+        ],
+        archivesWeight: 20,
+        ethiopiaWeight: 0,
+        decafWeight: 0,
+        total: 240.00,
+        paid: null
+      },
+      {
+        invoiceNumber: 'C-DEX-1002',
+        customer: 'Dex Coffee',
+        customerCode: 'DEX',
+        date: '12/24/2025',
+        dueDate: '01/07/2026',
+        items: [
+          { description: 'Archives Blend (units in lbs)', quantity: 20, unitPrice: 12.00, total: 240.00 }
+        ],
+        archivesWeight: 20,
+        ethiopiaWeight: 0,
+        decafWeight: 0,
+        total: 240.00,
+        paid: null
+      },
+      {
+        invoiceNumber: 'C-DEX-1003',
+        customer: 'Dex Coffee',
+        customerCode: 'DEX',
+        date: '12/24/2025',
+        dueDate: '01/07/2026',
+        items: [
+          { description: 'Archives Blend (units in lbs)', quantity: 15, unitPrice: 12.00, total: 180.00 },
+          { description: 'Ethiopia Gera Natural (units in lbs)', quantity: 5, unitPrice: 12.60, total: 63.00 }
+        ],
+        archivesWeight: 15,
+        ethiopiaWeight: 5,
+        decafWeight: 0,
+        total: 243.00,
+        paid: null
+      },
+      
+      // ===== JUN INVOICE =====
+      {
+        invoiceNumber: 'C-JUN-1000',
+        customer: 'Junia Cafe',
+        customerCode: 'JUN',
+        date: '12/01/2025',
+        dueDate: '12/15/2025',
+        items: [
+          { description: 'Coffee (units in lbs)', quantity: 11, unitPrice: 14.00, total: 154.00 }
+        ],
+        archivesWeight: 11,
+        ethiopiaWeight: 0,
+        decafWeight: 0,
+        total: 154.00,
+        paid: 'x'
+      }
+    ];
+    
+    const results = {
+      generated: [],
+      uploaded: [],
+      errors: []
+    };
+    
+    // Clear and rebuild Invoices sheet
+    console.log('📋 Clearing and rebuilding Invoices sheet...');
+    
+    // First, clear existing data (keep header)
+    await sheets.spreadsheets.values.clear({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Invoices!B3:H100'
+    });
+    
+    // Prepare all rows for batch update
+    const invoiceRows = allInvoices.map(inv => [
+      inv.date,
+      inv.invoiceNumber,
+      inv.archivesWeight || '',
+      inv.ethiopiaWeight || '',
+      inv.decafWeight || '',
+      inv.total,
+      inv.paid || ''
+    ]);
+    
+    // Write all invoice data at once
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Invoices!B3:H' + (3 + invoiceRows.length - 1),
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: invoiceRows
+      }
+    });
+    
+    console.log(`✅ Updated ${invoiceRows.length} invoices in sheet`);
+    
+    // Generate PDFs and upload to Drive
+    for (const inv of allInvoices) {
+      try {
+        // Calculate subtotal from items
+        const subtotal = inv.items.reduce((sum, item) => sum + (item.total > 0 ? item.total : 0), 0);
+        
+        // Generate PDF
+        const pdfFilename = `Invoice-${inv.invoiceNumber}.pdf`;
+        const pdfPath = path.join(invoicesDir, pdfFilename);
+        
+        await generateInvoicePDF({
+          invoiceNumber: inv.invoiceNumber,
+          customer: inv.customer,
+          customerCode: inv.customerCode,
+          date: inv.date,
+          dueDate: inv.dueDate,
+          items: inv.items,
+          subtotal: subtotal,
+          total: inv.total,
+          weekRange: inv.weekRange || null,
+          isReconciliation: inv.isReconciliation || false
+        }, pdfPath);
+        
+        results.generated.push(inv.invoiceNumber);
+        console.log(`📄 Generated PDF: ${pdfFilename}`);
+        
+        // Upload to Google Drive
+        const driveResult = await uploadInvoiceToDrive(pdfPath, inv.invoiceNumber);
+        if (driveResult) {
+          results.uploaded.push({
+            invoiceNumber: inv.invoiceNumber,
+            fileId: driveResult.fileId,
+            link: driveResult.webViewLink
+          });
+          console.log(`📤 Uploaded to Drive: ${inv.invoiceNumber}`);
+        }
+        
+      } catch (err) {
+        console.error(`Error processing ${inv.invoiceNumber}:`, err.message);
+        results.errors.push({ invoiceNumber: inv.invoiceNumber, error: err.message });
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Reconciliation complete. Generated ${results.generated.length} PDFs, uploaded ${results.uploaded.length} to Drive.`,
+      results
+    });
+    
+  } catch (error) {
+    console.error('Reconciliation error:', error);
     res.status(500).json({ error: error.message });
   }
 });

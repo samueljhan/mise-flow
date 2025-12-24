@@ -5450,7 +5450,18 @@ Archives of Us Coffee`;
                         addConversationalFollowUp('invoice_confirmed');
                     }, 500);
                 } else {
-                    addMessage('Failed: ' + (result.error || 'Failed to confirm invoice'), false);
+                    // Handle insufficient inventory with detailed message
+                    if (result.error === 'insufficient_inventory' && result.shortages) {
+                        let errorHtml = '<strong style="color: #ff6b6b;">Cannot Confirm Invoice</strong><br><br>';
+                        errorHtml += '<div style="margin-bottom: 12px;">Not enough roasted coffee in inventory:</div>';
+                        result.shortages.forEach(s => {
+                            errorHtml += `<div style="color: #ff6b6b; margin-bottom: 4px;">• ${s.name}: need ${s.required}lb but only <strong>${s.available}lb</strong> available</div>`;
+                        });
+                        errorHtml += '<br><div>Please reduce the quantity or order more roasted coffee first.</div>';
+                        addMessage(errorHtml, false);
+                    } else {
+                        addMessage('Failed: ' + (result.message || result.error || 'Failed to confirm invoice'), false);
+                    }
                 }
             } catch (error) {
                 console.error('Error confirming invoice:', error);

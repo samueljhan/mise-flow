@@ -2433,6 +2433,8 @@
             pendingRoastOrder = [];
             waitingForRoastOrder = false;
             userInput.placeholder = 'Describe what you want to do…';
+            // Show follow-up after closing modal
+            addConversationalFollowUp('order_cancelled');
         }
 
         // Generate Roast Order Email (from modal)
@@ -2467,6 +2469,12 @@
 
         function closeRoastEmailModal() {
             document.getElementById('roastEmailModal').style.display = 'none';
+            // Clear order state
+            pendingRoastOrder = [];
+            waitingForRoastOrder = false;
+            userInput.placeholder = 'Describe what you want to do…';
+            // Show follow-up after closing
+            addConversationalFollowUp('order_cancelled');
         }
 
         // Confirm Roast Order (from modal)
@@ -2593,6 +2601,8 @@
         
         function closeManageCustomersModal() {
             document.getElementById('manageCustomersModal').style.display = 'none';
+            // Show follow-up after closing modal
+            addConversationalFollowUp('cancelled');
         }
         
         async function loadCustomersList() {
@@ -3289,6 +3299,8 @@
 
         function closeInventoryModal() {
             document.getElementById('inventoryModal').style.display = 'none';
+            // Show follow-up after closing modal (exclude manage_inventory since that's what was just done)
+            addConversationalFollowUp('cancelled');
         }
 
         // ============ To Do Feature ============

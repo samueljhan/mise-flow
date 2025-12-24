@@ -668,6 +668,10 @@
                         <strong>📊 Forecast</strong>
                         <span>Sales and inventory analytics</span>
                     </div>
+                    <div class="example-prompt" onclick="runReconciliation()" style="background: #4a3a2a; border: 1px solid #f0ad4e;">
+                        <strong>🔄 Reconcile Invoices</strong>
+                        <span>One-time: Rebuild sheet & PDFs</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -3886,6 +3890,45 @@ Archives of Us Coffee`;
             
             addMessage(html, false);
         }
+        
+        // ============ TEMPORARY: Invoice Reconciliation ============
+        async function runReconciliation() {
+            const welcomeMsg = chatContainer.querySelector('.welcome-message');
+            if (welcomeMsg) welcomeMsg.remove();
+            
+            addMessage('Reconcile all invoices', true);
+            addMessage('🔄 Running invoice reconciliation... This will rebuild the Invoices sheet and upload all PDFs to Google Drive.', false);
+            
+            try {
+                const response = await fetch('/api/invoices/reconcile-all', { method: 'POST' });
+                const data = await response.json();
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                if (data.success) {
+                    let html = '<div style="color: #90EE90; margin-bottom: 12px;">✅ Reconciliation Complete!</div>';
+                    html += `<div style="margin-bottom: 8px;">Generated ${data.results.generated.length} PDFs</div>`;
+                    html += `<div style="margin-bottom: 8px;">Uploaded ${data.results.uploaded.length} to Google Drive</div>`;
+                    if (data.results.errors.length > 0) {
+                        html += `<div style="color: #ff6b6b;">Errors: ${data.results.errors.length}</div>`;
+                    }
+                    html += '<div style="margin-top: 12px; font-size: 12px; color: #888;">You can now remove this button from the code.</div>';
+                    content.innerHTML = html;
+                } else {
+                    content.innerHTML = `<div style="color: #ff6b6b;">Error: ${data.error}</div>`;
+                }
+            } catch (error) {
+                console.error('Reconciliation error:', error);
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML = `<div style="color: #ff6b6b;">Error: ${error.message}</div>`;
+                }
+            }
+        }
 
         // ============ En Route Modal ============
 
@@ -5134,9 +5177,9 @@ Archives of Us Coffee`;
                 
                 // If this is an invoice email, include the PDF path
                 if (emailData.pdfUrl && emailData.invoiceNumber) {
-                    // Convert URL to file path (e.g., /invoices/C-ARC-1000.pdf -> public/invoices/C-ARC-1000.pdf)
+                    // Convert URL to file path (e.g., /invoices/Invoice-C-ARC-1000.pdf -> public/invoices/Invoice-C-ARC-1000.pdf)
                     requestBody.attachmentPath = 'public' + emailData.pdfUrl;
-                    requestBody.attachmentName = emailData.invoiceNumber + '.pdf';
+                    requestBody.attachmentName = 'Invoice-' + emailData.invoiceNumber + '.pdf';
                 }
                 
                 const response = await fetch('/api/gmail/send', {

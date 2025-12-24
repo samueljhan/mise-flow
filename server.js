@@ -3583,7 +3583,7 @@ app.post('/api/invoices/draft-reminder', async (req, res) => {
       // Build invoice list for email body
       let invoiceList = '';
       invoices.forEach(inv => {
-        invoiceList += `  • ${inv.invoiceNumber} (${inv.date}) - ${inv.amount}\n`;
+        invoiceList += `  • ${inv.invoiceNumber} - ${inv.amount}\n`;
       });
       
       const totalFormatted = `$${totalAmount.toFixed(2)}`;
@@ -3595,8 +3595,6 @@ This is a friendly reminder that the following invoice${invoiceCount > 1 ? 's ar
 ${invoiceList}
 Total: ${totalFormatted}
 
-${invoiceCount > 1 ? 'The invoices are' : 'The invoice is'} attached to this email for your reference.
-
 If you've already sent payment, please disregard this message. Otherwise, we'd appreciate payment at your earliest convenience.
 
 Please let us know if you have any questions.
@@ -3607,7 +3605,7 @@ Best regards,
 Archives of Us Coffee`;
     }
 
-    // Build email with multiple PDF attachments
+    // Build email with PDF attachments (regenerate if needed)
     const boundary = 'boundary_' + Date.now();
     
     let emailParts = [
@@ -3622,14 +3620,55 @@ Archives of Us Coffee`;
       body
     ];
     
-    // Attach each invoice PDF
+    // Try to attach each invoice PDF
     let attachedCount = 0;
     for (const inv of invoices) {
       const pdfFilename = `${inv.invoiceNumber}.pdf`;
       const pdfPath = path.join(invoicesDir, pdfFilename);
       
+      let pdfData = null;
+      
+      // Check if PDF exists locally
       if (fs.existsSync(pdfPath)) {
-        const pdfData = fs.readFileSync(pdfPath);
+        pdfData = fs.readFileSync(pdfPath);
+        console.log(`📎 Found existing PDF: ${pdfFilename}`);
+      } else {
+        // Generate a simple invoice summary PDF
+        try {
+          console.log(`📄 Generating PDF for: ${inv.invoiceNumber}`);
+          const tempPdfPath = path.join(invoicesDir, `temp_${pdfFilename}`);
+          
+          // Parse amount string to number if needed
+          let amountNum = inv.amount;
+          if (typeof amountNum === 'string') {
+            amountNum = parseFloat(amountNum.replace(/[$,]/g, '')) || 0;
+          }
+          
+          await generateInvoicePDF({
+            invoiceNumber: inv.invoiceNumber,
+            customer: customerName,
+            date: inv.date || new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' }),
+            items: [{
+              description: 'Invoice Total (see original invoice for details)',
+              quantity: 1,
+              unitPrice: amountNum,
+              total: amountNum
+            }],
+            total: amountNum,
+            isReminder: true
+          }, tempPdfPath);
+          
+          if (fs.existsSync(tempPdfPath)) {
+            pdfData = fs.readFileSync(tempPdfPath);
+            // Clean up temp file
+            fs.unlinkSync(tempPdfPath);
+          }
+        } catch (pdfErr) {
+          console.log(`⚠️ Could not generate PDF for ${inv.invoiceNumber}:`, pdfErr.message);
+        }
+      }
+      
+      if (pdfData) {
         const pdfBase64 = pdfData.toString('base64');
         
         emailParts.push('');
@@ -3642,8 +3681,6 @@ Archives of Us Coffee`;
         
         attachedCount++;
         console.log(`📎 Attaching PDF: ${pdfFilename}`);
-      } else {
-        console.log(`⚠️ PDF not found: ${pdfPath}`);
       }
     }
     
@@ -3670,7 +3707,9 @@ Archives of Us Coffee`;
     
     res.json({ 
       success: true, 
-      message: `Draft created with ${attachedCount} invoice${attachedCount > 1 ? 's' : ''} attached. Check your Gmail drafts.`,
+      message: attachedCount > 0 
+        ? `Draft created with ${attachedCount} invoice${attachedCount > 1 ? 's' : ''} attached. Check your Gmail drafts.`
+        : `Draft created. Invoice details included in email body. Check your Gmail drafts.`,
       to: toAddress,
       attachedCount,
       draftId: draft.data.id

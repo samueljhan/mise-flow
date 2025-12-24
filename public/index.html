@@ -3567,7 +3567,6 @@
                         html += `<div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #333;">`;
                         html += `<div style="font-size: 13px;">`;
                         html += `<span style="color: #90EE90;">${inv.invoiceNumber}</span>`;
-                        html += `<span style="color: #888; margin-left: 10px;">${inv.date}</span>`;
                         html += `</div>`;
                         html += `<div style="display: flex; align-items: center; gap: 10px;">`;
                         html += `<span style="font-size: 13px;">${inv.amount}</span>`;
@@ -3615,7 +3614,7 @@
             const totalFormatted = `$${group.totalAmount.toFixed(2)}`;
             const invoiceList = group.invoices.map(inv => {
                 const amt = inv.amountNum || parseFloat(String(inv.amount).replace(/[$,]/g, '')) || 0;
-                return `${inv.invoiceNumber} - ${inv.date} - $${amt.toFixed(2)}`;
+                return `${inv.invoiceNumber} — $${amt.toFixed(2)}`;
             }).join('\n');
             
             // Populate modal

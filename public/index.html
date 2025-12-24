@@ -601,6 +601,41 @@
                 padding: 8px 12px;
             }
         }
+    
+.mode-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    margin: 8px 0 0 0;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: #1f1f1f;
+    border: 1px solid #333;
+    color: #bbb;
+    font-size: 12px;
+    width: fit-content;
+}
+.mode-pill strong { color: #e6e6e6; font-weight: 600; }
+.tabs {
+    display: flex;
+    gap: 8px;
+    margin: 10px 0 14px 0;
+}
+.tab-btn {
+    background: #2a2a2a;
+    border: 1px solid #444;
+    color: #bbb;
+    padding: 6px 10px;
+    border-radius: 10px;
+    cursor: pointer;
+    font-size: 12px;
+}
+.tab-btn.active {
+    background: #4a6741;
+    border-color: #4a6741;
+    color: #fff;
+}
+
     </style>
 </head>
 <body>
@@ -625,6 +660,8 @@
             <div class="mic-indicator" id="micIndicator"></div>
             <span id="micStatus">Ready</span>
         </div>
+
+        <div class="mode-pill" id="modePill" style="display:none;"><strong id="modePillText">Chat</strong></div>
 
         <div class="chat-container" id="chatContainer">
             <div class="welcome-message">
@@ -1074,6 +1111,7 @@
                 // Check Google status
                 const response = await fetch('/api/google/status');
                 const data = await response.json();
+
                 googleConnected = data.connected;
             } catch (error) {
                 console.error('Error checking auth status:', error);
@@ -2612,7 +2650,10 @@
                     html += `<div style="color: #90EE90; font-family: monospace;">${customer.code}</div>`;
                     html += `<div style="color: #888; font-size: 12px;">${customer.pricingTable || 'Tier 1'}</div>`;
                     html += `<div style="color: #888; font-size: 12px;">${customer.dateSince || 'N/A'}</div>`;
-                    html += `<div style="color: #888; font-size: 12px;">${customer.lastInvoice || 'No invoices'}</div>`;
+                    html += `<div style="display:flex; align-items:center; justify-content:space-between; gap:8px; color: #888; font-size: 12px;">` +
+                        `<span>${customer.lastInvoice || 'No invoices'}</span>` +
+                        `<button onclick="removeWholesaleCustomer('${customer.code}')" style="background:#241414; color:#ff6b6b; border:1px solid #553; border-radius:6px; padding:4px 8px; font-size:11px; cursor:pointer;">Remove</button>` +
+                        `</div>`;
                     html += `</div>`;
                 });
                 
@@ -2624,7 +2665,29 @@
             }
         }
         
-        function openAddCustomerModal() {
+        
+        async function removeWholesaleCustomer(code) {
+            if (!confirm(`Remove ${code} from Customer Directory? This will delete the row in your Google Sheet.`)) return;
+            try {
+                const resp = await fetch('/api/customers/wholesale/remove', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ code })
+                });
+                const data = await resp.json();
+                if (!data.success) {
+                    alert(data.error || 'Failed to remove customer');
+                    return;
+                }
+                // Refresh list
+                openManageCustomers();
+            } catch (e) {
+                console.error('Remove customer error:', e);
+                alert('Failed to remove customer: ' + e.message);
+            }
+        }
+
+function openAddCustomerModal() {
             // Clear fields
             document.getElementById('newCustomerName').value = '';
             document.getElementById('newCustomerCode').value = '';
@@ -3475,86 +3538,110 @@
             }
         }
         
-        async function showOutstandingInvoices() {
-            // Clear welcome message
-            const welcomeMsg = chatContainer.querySelector('.welcome-message');
-            if (welcomeMsg) welcomeMsg.remove();
-            
-            addMessage('Loading outstanding invoices...', false);
-            
-            try {
-                const response = await fetch('/api/invoices/outstanding');
-                const data = await response.json();
-                
-                const messages = chatContainer.querySelectorAll('.message');
-                const lastMsg = messages[messages.length - 1];
-                const content = lastMsg?.querySelector('.message-content') || lastMsg;
-                
-                if (!data.groupedInvoices || data.groupedInvoices.length === 0) {
-                    content.innerHTML = `<div style="color: #4a6741;">✅ No outstanding invoices!</div>`;
-                    addConversationalFollowUp('invoices_clear');
-                    return;
-                }
-                
-                let html = `<div style="margin-bottom: 12px;"><strong>Outstanding Invoices</strong></div>`;
-                
-                // Display grouped by customer
-                data.groupedInvoices.forEach((group, groupIndex) => {
-                    const hasEmail = group.customerEmails && group.customerEmails.length > 0;
-                    const totalFormatted = `$${group.totalAmount.toFixed(2)}`;
-                    
-                    html += `<div style="background: #2a2a2a; border-radius: 8px; padding: 12px; margin-bottom: 10px;">`;
-                    
-                    // Customer header
-                    html += `<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #444;">`;
-                    html += `<div>`;
-                    html += `<div style="font-weight: 600; font-size: 15px;">${group.customerName}</div>`;
-                    html += `<div style="color: #f0ad4e; font-size: 13px;">${group.invoices.length} invoice${group.invoices.length > 1 ? 's' : ''} • Total: ${totalFormatted}</div>`;
-                    html += `</div>`;
-                    html += `<div>`;
-                    if (hasEmail) {
-                        html += `<button class="action-btn" onclick="draftInvoiceReminder(${groupIndex})" style="font-size: 11px; padding: 6px 12px; background: #4a6741;">Draft Reminder</button>`;
-                    } else {
-                        html += `<button class="action-btn" style="font-size: 11px; padding: 6px 12px; background: #555; cursor: not-allowed;" disabled title="No email on file">No Email</button>`;
-                    }
-                    html += `</div>`;
-                    html += `</div>`;
-                    
-                    // Invoice list for this customer
-                    group.invoices.forEach(inv => {
-                        html += `<div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #333;">`;
-                        html += `<div style="font-size: 13px;">`;
-                        html += `<span style="color: #90EE90;">${inv.invoiceNumber}</span>`;
-                        html += `<span style="color: #888; margin-left: 10px;">${inv.date}</span>`;
-                        html += `</div>`;
-                        html += `<div style="display: flex; align-items: center; gap: 10px;">`;
-                        html += `<span style="font-size: 13px;">${inv.amount}</span>`;
-                        html += `<button class="action-btn" onclick="markInvoicePaidPrompt('${inv.invoiceNumber}')" style="font-size: 10px; padding: 4px 8px;">Paid</button>`;
-                        html += `</div>`;
-                        html += `</div>`;
-                    });
-                    
-                    html += `</div>`;
-                });
-                
-                // Store grouped data for draft reminder function
-                window.outstandingInvoicesData = data.groupedInvoices;
-                
-                // Add navigation buttons
-                html += `<div style="display: flex; gap: 8px; margin-top: 16px;">`;
-                html += `<button class="action-btn" onclick="showToDo()">← Back to To Do</button>`;
-                html += `<button class="action-btn" onclick="addFollowUpMessage()">Done</button>`;
-                html += `</div>`;
-                
-                content.innerHTML = html;
-                
-            } catch (error) {
-                console.error('Outstanding invoices error:', error);
-                addMessage('Error loading invoices: ' + error.message, false);
-            }
+        async function showOutstandingInvoices(tab = 'todo') {
+    // Clear welcome message
+    const welcomeMsg = chatContainer.querySelector('.welcome-message');
+    if (welcomeMsg) welcomeMsg.remove();
+
+    addMessage('Loading invoices...', false);
+
+    try {
+        const endpoint = tab === 'done' ? '/api/invoices/paid?limit=80' : '/api/invoices/outstanding';
+        const response = await fetch(endpoint);
+        const data = await response.json();
+
+        const messages = chatContainer.querySelectorAll('.message');
+        const lastMsg = messages[messages.length - 1];
+        const content = lastMsg?.querySelector('.message-content') || lastMsg;
+
+        const title = tab === 'done' ? 'Paid Invoices' : 'Outstanding Invoices';
+
+        let html = `<div style="margin-bottom: 6px;"><strong>${title}</strong></div>`;
+        html += `<div class="tabs">`;
+        html += `<button class="tab-btn ${tab === 'todo' ? 'active' : ''}" onclick="showOutstandingInvoices('todo')">To-Do</button>`;
+        html += `<button class="tab-btn ${tab === 'done' ? 'active' : ''}" onclick="showOutstandingInvoices('done')">Done</button>`;
+        html += `</div>`;
+
+        if (!data.groupedInvoices || data.groupedInvoices.length === 0) {
+            html += `<div style="color: #4a6741;">✅ Nothing here.</div>`;
+            content.innerHTML = html;
+            addConversationalFollowUp(tab === 'done' ? 'done' : 'invoices_clear');
+            return;
         }
-        
-        async function draftInvoiceReminder(groupIndex) {
+
+        // Display grouped by customer
+        data.groupedInvoices.forEach((group, groupIndex) => {
+            const hasEmail = group.customerEmails && group.customerEmails.length > 0;
+            const totalFormatted = `$${(group.totalAmount || 0).toFixed(2)}`;
+
+            html += `<div style="background: #2a2a2a; border-radius: 8px; padding: 12px; margin-bottom: 10px;">`;
+
+            // Customer header
+            html += `<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid #444;">`;
+            html += `<div>`;
+            html += `<div style="font-weight: 600; font-size: 15px;">${group.customerName}</div>`;
+            html += `<div style="color: #f0ad4e; font-size: 13px;">${group.invoices.length} invoice${group.invoices.length > 1 ? 's' : ''} • Total: ${totalFormatted}</div>`;
+            html += `</div>`;
+            html += `<div>`;
+            if (tab === 'todo') {
+                if (hasEmail) {
+                    html += `<button class="action-btn" onclick="draftInvoiceReminder(${groupIndex})" style="font-size: 11px; padding: 6px 12px; background: #4a6741;">Draft Reminder</button>`;
+                } else {
+                    html += `<button class="action-btn" style="font-size: 11px; padding: 6px 12px; background: #555; cursor: not-allowed;" disabled title="No email on file">No Email</button>`;
+                }
+            }
+            html += `</div>`;
+            html += `</div>`;
+
+            // Invoice list
+            group.invoices.forEach(inv => {
+                if (tab === 'todo') {
+                    const invColor = inv.overdue ? '#ff6b6b' : '#90EE90';
+                    const metaColor = inv.overdue ? '#ff6b6b' : '#888';
+                    const dueText = inv.dueDate ? ` • Due ${inv.dueDate}` : '';
+                    const overdueText = inv.overdue && inv.daysOverdue ? ` (${inv.daysOverdue}d overdue)` : (inv.overdue ? ' (Overdue)' : '');
+
+                    html += `<div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #333;">`;
+                    html += `<div style="font-size: 13px;">`;
+                    html += `<span style="color: ${invColor};">${inv.invoiceNumber}</span>`;
+                    html += `<span style="color: ${metaColor}; margin-left: 10px;">${inv.date}${dueText}${overdueText}</span>`;
+                    html += `</div>`;
+                    html += `<div style="display: flex; align-items: center; gap: 10px;">`;
+                    html += `<span style="font-size: 13px;">${inv.amount}</span>`;
+                    html += `<button class="action-btn" onclick="markInvoicePaidPrompt('${inv.invoiceNumber}')" style="font-size: 10px; padding: 4px 8px;">Paid</button>`;
+                    html += `</div>`;
+                    html += `</div>`;
+                } else {
+                    html += `<div style="display: flex; justify-content: space-between; align-items: center; padding: 6px 0; border-bottom: 1px solid #333;">`;
+                    html += `<div style="font-size: 13px;">`;
+                    html += `<span style="color: #90EE90;">${inv.invoiceNumber}</span>`;
+                    html += `<span style="color: #888; margin-left: 10px;">${inv.date || ''}${inv.paidDate ? ' • Paid ' + inv.paidDate : ''}</span>`;
+                    html += `</div>`;
+                    html += `<span style="font-size: 13px;">${inv.amount}</span>`;
+                    html += `</div>`;
+                }
+            });
+
+            html += `</div>`;
+        });
+
+        // Store grouped data for draft reminder function
+        if (tab === 'todo') window.outstandingInvoicesData = data.groupedInvoices;
+
+        // "Done" button only (tabs are persistent)
+        html += `<div style="margin-top: 16px;">`;
+        html += `<button class="action-btn" onclick="addFollowUpMessage()">Done</button>`;
+        html += `</div>`;
+
+        content.innerHTML = html;
+
+    } catch (error) {
+        console.error('Invoices error:', error);
+        addMessage('Error loading invoices: ' + error.message, false);
+    }
+}
+
+async function draftInvoiceReminder(groupIndex) {
             const group = window.outstandingInvoicesData[groupIndex];
             if (!group) {
                 addMessage('Error: Could not find customer data.', false);
@@ -3633,16 +3720,7 @@ Archives of Us Coffee`;
                 });
                 
                 const result = await response.json();
-
-                // Handle Google not connected
-                if (response.status === 401) {
-                    handleGoogleDisconnected();
-                    addMessage(`<div style="color: #dc3545;">⚠️ ${result.error || 'Google account not connected.'}</div>
-                        <div style="margin-top: 8px;">Please connect your Google account to create reminder drafts.</div>
-                        <button class="action-btn" style="margin-top: 12px;" onclick="connectGoogle('email')">Connect Google Account</button>`, false);
-                    return;
-                }
-
+                
                 // Update the last message with the result
                 const messages = chatContainer.querySelectorAll('.message');
                 const lastMsg = messages[messages.length - 1];
@@ -4714,6 +4792,17 @@ Archives of Us Coffee`;
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
 
+
+function setModePill(mode) {
+    const pill = document.getElementById('modePill');
+    const text = document.getElementById('modePillText');
+    if (!pill || !text) return;
+    const m = (mode || '').toString().trim();
+    if (!m) { pill.style.display = 'none'; return; }
+    text.textContent = m;
+    pill.style.display = 'inline-flex';
+}
+
         async function processMessage(message, conversationState) {
             try {
                 const response = await fetch('/api/process', {
@@ -4727,6 +4816,24 @@ Archives of Us Coffee`;
                 });
 
                 const data = await response.json();
+
+// Update mode pill (makes the assistant feel stateful)
+if (data && data.mode) {
+    setModePill(data.mode);
+} else {
+    const fallbackMode = {
+        check_inventory: 'Inventory',
+        order_roast: 'Roast Order',
+        view_en_route: 'En Route',
+        start_invoice: 'Invoicing',
+        manage_retail: 'Retail',
+        show_todo: 'To-Do',
+        chat: 'Chat',
+        unclear: 'Chat'
+    }[data.action] || null;
+    if (fallbackMode) setModePill(fallbackMode);
+}
+
                 
                 if (!response.ok) {
                     console.error('API error:', data);
@@ -4872,17 +4979,7 @@ Archives of Us Coffee`;
                 } else {
                     html = formatResponseHTML(data.response);
                 }
-
-                // Quick replies (optional)
-                if (data.quickReplies && Array.isArray(data.quickReplies) && data.quickReplies.length > 0) {
-                    html += '<div class="response-buttons" style="margin-top: 10px; flex-wrap: wrap;">';
-                    data.quickReplies.slice(0,3).forEach(q => {
-                        const safe = String(q).replace(/'/g, "\'");
-                        html += `<button class="action-btn" onclick="sendQuickReply('${safe}')">${q}</button>`;
-                    });
-                    html += '</div>';
-                }
-
+                
                 // Check if we should show follow-up menu
                 if (data.showFollowUp) {
                     window.currentConversationState = 'none';
@@ -5210,11 +5307,6 @@ Archives of Us Coffee`;
                 return;
             }
             alert('Sheet update feature - coming soon!');
-        }
-        function sendQuickReply(text) {
-            // Insert the suggestion into the input and send
-            userInput.value = text;
-            sendMessage();
         }
 
         function sendMessage() {

@@ -123,6 +123,9 @@ app.get('/auth/google/callback', async (req, res) => {
     oauth2Client.setCredentials(tokens);
     userTokens = tokens;
 
+    // Hydrate customer directory from the sheet immediately
+    loadCustomerDirectoryFromSheets(true).catch(e => console.log("Customer Directory load on connect:", e.message));
+
     // Get user info
     const oauth2 = google.oauth2({ version: 'v2', auth: oauth2Client });
     const userInfo = await oauth2.userinfo.get();
@@ -611,34 +614,65 @@ async function buildSheetContextForChatGPT() {
 
 // Helper: Format sheet context as string for ChatGPT prompts
 function formatSheetContextForPrompt(context) {
-  let contextStr = `
-=== CURRENT INVENTORY STATE ===
+  // IMPORTANT: keep this compact. Do NOT dump full inventory into the prompt.
+  const green = context?.inventory?.green || [];
+  const roasted = context?.inventory?.roasted || [];
+  const enRoute = context?.inventory?.enRoute || [];
 
-GREEN COFFEE (unroasted):
-${context.inventory.green.map(c => `- ${c.name}: ${c.weight}lb (Profile: ${c.roastProfile}, Drop Temp: ${c.dropTemp}°F)`).join('\n')}
-
-ROASTED COFFEE:
-${context.inventory.roasted.map(c => {
-  const recipe = c.recipe ? c.recipe.map(r => `${r.percentage}% ${r.name}`).join(' + ') : 'Private Label';
-  return `- ${c.name}: ${c.weight}lb [${c.type}] Recipe: ${recipe}`;
-}).join('\n')}
-
-EN ROUTE (ordered, not yet received):
-${context.inventory.enRoute.length > 0 
-  ? context.inventory.enRoute.map(c => `- ${c.name}: ${c.weight}lb [Tracking: ${c.trackingNumber || 'pending'}]`).join('\n')
-  : '- None'}
-
-KNOWN CUSTOMERS:
-${Object.values(context.customers).map(c => `- ${c.name} (${c.code}): ${c.emails?.join(', ') || 'no email'}`).join('\n')}
-`;
-
-  if (context.sheetData?.invoices?.length > 0) {
-    contextStr += `\nRECENT INVOICES (last 10):\n`;
-    const recentInvoices = context.sheetData.invoices.slice(-10);
-    recentInvoices.forEach(row => {
-      if (row[1]) contextStr += `- ${row.join(' | ')}\n`;
-    });
+  // Simple low-stock heuristics (same spirit as /api/todo)
+  const lowGreen = [];
+  for (const c of green) {
+    const isBrazil = (c.name || '').toLowerCase().includes('brazil');
+    const critical = isBrazil ? 100 : 65;
+    const low = isBrazil ? 200 : 100;
+    if (c.weight < critical) lowGreen.push({ ...c, status: 'critical' });
+    else if (c.weight < low) lowGreen.push({ ...c, status: 'low' });
   }
+
+  const lowRoasted = [];
+  for (const c of roasted) {
+    const nm = (c.name || '').toLowerCase();
+    const isArchives = nm.includes('archives blend');
+    const isEthiopia = nm.includes('ethiopia') || nm.includes('gera');
+    const critical = isArchives ? 75 : isEthiopia ? 20 : 20;
+    const low = isArchives ? 150 : isEthiopia ? 40 : 40;
+    if (c.weight < critical) lowRoasted.push({ ...c, status: 'critical' });
+    else if (c.weight < low) lowRoasted.push({ ...c, status: 'low' });
+  }
+
+  const needsTracking = enRoute.filter(c => !c.trackingNumber);
+  const needsDelivery = enRoute.filter(c => c.trackingNumber && !c.delivered);
+
+  const customers = Object.values(context?.customers || {});
+  const customerSummary = customers
+    .slice(0, 12)
+    .map(c => `- ${c.name} (${c.code})${c.emails?.length ? `: ${c.emails[0]}` : ': no email'}`)
+    .join('\\n');
+
+  const bullet = (arr) => arr
+    .slice(0, 12)
+    .map(c => `- ${c.name}: ${c.weight}lb (${c.status})`)
+    .join('\\n');
+
+  let contextStr = `
+=== CURRENT STATE (COMPACT) ===
+Green coffees: ${green.length} items (low/critical: ${lowGreen.length})
+Roasted coffees: ${roasted.length} items (low/critical: ${lowRoasted.length})
+En route: ${enRoute.length} shipments (needs tracking: ${needsTracking.length}, needs delivery check: ${needsDelivery.length})
+
+LOW / CRITICAL INVENTORY (only):
+GREEN:
+${lowGreen.length ? bullet(lowGreen) : '- none'}
+ROASTED:
+${lowRoasted.length ? bullet(lowRoasted) : '- none'}
+
+EN ROUTE ATTENTION:
+${needsTracking.length ? `Needs tracking: ${needsTracking.slice(0, 8).map(c => c.name).join(', ')}` : 'Needs tracking: none'}
+${needsDelivery.length ? `Check delivery: ${needsDelivery.slice(0, 8).map(c => c.name).join(', ')}` : 'Check delivery: none'}
+
+KNOWN CUSTOMERS (subset):
+${customerSummary || '- none'}
+`.trim();
 
   return contextStr;
 }
@@ -751,80 +785,186 @@ For unknown customers, respond like:
 
 Be concise, friendly, and action-oriented. Don't ask unnecessary questions - if the intent is clear, proceed with the action.`;
 
-// Customer directory with codes and emails
-let customerDirectory = {
-  'archives of us': {
-    name: 'Archives of Us',
-    code: 'AOU',
-    emails: ['nick@archivesofus.com'],
-    pricingTable: 'at-cost',
-    dateSince: '01/01/23'
-  },
-  'ced': {
-    name: 'CED',
-    code: 'CED',
-    emails: ['songs0519@hotmail.com'],
-    pricingTable: 'wholesale ced',
-    dateSince: '03/15/23'
-  },
-  'dex': {
-    name: 'Dex',
-    code: 'DEX',
-    emails: ['dexcoffeeusa@gmail.com', 'lkusacorp@gmail.com'],
-    pricingTable: 'wholesale dex',
-    dateSince: '06/01/23'
-  },
-  'junia': {
-    name: 'Junia',
-    code: 'JUN',
-    emails: ['hello@juniacafe.com'],
-    pricingTable: 'wholesale junia',
-    dateSince: '09/01/24'
-  }
-};
+// ============ Customer Directory (Sheet-backed) ============
+// Source of truth: "Customer Directory" tab in Google Sheets.
+// Expected columns (starting row 2):
+//   B=CustomerID (3 letters), C=Name, D=Emails (comma-separated), E=Terms (e.g., "Net 15"), F=Pricing Tier (e.g., "Wholesale Tier 1")
+let customerDirectory = {}; // keyed by lower-cased customer name AND lower-cased CustomerID
+let customerDirectoryList = []; // normalized list
+let customerDirectoryMeta = { loadedAt: null, source: 'memory' };
 
-// Helper to get known customers list
+function parseEmailsCell(cell) {
+  if (!cell) return [];
+  return String(cell)
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
+function parseTermsToDays(terms) {
+  const t = (terms || '').toString().trim().toLowerCase();
+  if (!t) return 14; // sensible default
+  if (t.includes('due on receipt') || t === 'due' || t.includes('immediate')) return 0;
+  const netMatch = t.match(/net\s*(\d{1,3})/i);
+  if (netMatch) return parseInt(netMatch[1], 10);
+  return 14;
+}
+
+function tryParseUSDate(value) {
+  // Supports:
+  // - Date objects
+  // - "MM/DD/YYYY" or "MM/DD/YY"
+  // - serial numbers (Sheets unformatted value)
+  if (value instanceof Date) return value;
+  if (typeof value === 'number') {
+    // Google Sheets serial date (days since 1899-12-30)
+    const epoch = new Date(Date.UTC(1899, 11, 30));
+    const d = new Date(epoch.getTime() + value * 86400000);
+    return new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
+  }
+  const s = String(value || '').trim();
+  const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+  if (m) {
+    const mm = parseInt(m[1], 10);
+    const dd = parseInt(m[2], 10);
+    let yy = parseInt(m[3], 10);
+    if (yy < 100) yy += 2000;
+    return new Date(yy, mm - 1, dd);
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+async function loadCustomerDirectoryFromSheets(force = false) {
+  if (!userTokens) return false;
+  // Cache for 60 seconds to avoid hammering Sheets
+  if (!force && customerDirectoryMeta.loadedAt && (Date.now() - customerDirectoryMeta.loadedAt) < 60_000) {
+    return true;
+  }
+
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    const resp = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Customer Directory!A:F',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+
+    const rows = resp.data.values || [];
+    const list = [];
+    const map = {};
+
+    // Find header row (we expect "CustomerID" in column B)
+    let headerRowIdx = -1;
+    for (let i = 0; i < Math.min(rows.length, 10); i++) {
+      const b = (rows[i]?.[1] || '').toString().trim().toLowerCase();
+      if (b === 'customerid') { headerRowIdx = i; break; }
+    }
+    const startIdx = headerRowIdx >= 0 ? headerRowIdx + 1 : 1;
+
+    for (let i = startIdx; i < rows.length; i++) {
+      const r = rows[i] || [];
+      const id = (r[1] || '').toString().trim();
+      const name = (r[2] || '').toString().trim();
+      const emails = parseEmailsCell(r[3]);
+      const terms = (r[4] || '').toString().trim();
+      const pricingTier = (r[5] || '').toString().trim();
+
+      if (!id && !name) continue;
+
+      const code = (id ? id : (name ? name.substring(0, 3) : '')).toUpperCase();
+      const normalized = {
+        id: code,
+        code,
+        name: name || code,
+        emails,
+        terms: terms || 'Net 15',
+        pricingTier: pricingTier || 'Wholesale Tier 1'
+      };
+
+      list.push(normalized);
+      map[normalized.name.toLowerCase()] = normalized;
+      map[normalized.code.toLowerCase()] = normalized;
+    }
+
+    customerDirectory = map;
+    customerDirectoryList = list;
+    customerDirectoryMeta = { loadedAt: Date.now(), source: 'sheets' };
+    console.log(`✅ Customer Directory loaded from Sheets (${list.length} customers)`);
+    return true;
+  } catch (e) {
+    console.log('⚠️ Failed to load Customer Directory from Sheets:', e.message);
+    return false;
+  }
+}
+
+function resolveCustomer(identifier) {
+  if (!identifier) return null;
+  const raw = identifier.toString().trim();
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+
+  if (customerDirectory[lower]) return customerDirectory[lower];
+
+  const codeCandidate = lower.replace(/[^a-z]/g, '');
+  if (codeCandidate.length === 3 && customerDirectory[codeCandidate]) return customerDirectory[codeCandidate];
+
+  for (const c of customerDirectoryList) {
+    const n = c.name.toLowerCase();
+    const code = c.code.toLowerCase();
+    if (lower === n || lower === code) return c;
+    if (lower.includes(n) || n.includes(lower)) return c;
+  }
+  return null;
+}
+
 function getKnownCustomers() {
-  return Object.values(customerDirectory).map(c => c.name);
+  return customerDirectoryList.map(c => c.name);
 }
 
-// Helper to get customer code
-function getCustomerCode(customerName) {
-  const lower = customerName.toLowerCase();
-  if (customerDirectory[lower]) {
-    return customerDirectory[lower].code;
-  }
-  // Default: first 3 letters uppercase
-  return customerName.substring(0, 3).toUpperCase();
+function getCustomerCode(customerNameOrCode) {
+  const c = resolveCustomer(customerNameOrCode);
+  if (c?.code) return c.code;
+  const s = (customerNameOrCode || '').toString().trim();
+  return s.substring(0, 3).toUpperCase();
 }
 
-// Helper to get customer emails
-function getCustomerEmails(customerName) {
-  const lower = customerName.toLowerCase();
-  if (customerDirectory[lower]) {
-    return customerDirectory[lower].emails || [];
-  }
-  return [];
+function getCustomerEmails(customerNameOrCode) {
+  const c = resolveCustomer(customerNameOrCode);
+  return c?.emails || [];
 }
 
-// Helper to add/update customer
-function addOrUpdateCustomer(name, code, emails = [], pricingTable = 'wholesale tier 1', dateSince = null) {
-  const lower = name.toLowerCase();
-  
-  // Format date if not provided
-  if (!dateSince) {
-    const today = new Date();
-    dateSince = `${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getDate()).padStart(2, '0')}/${String(today.getFullYear()).slice(-2)}`;
-  }
-  
-  customerDirectory[lower] = {
-    name: name,
-    code: code.toUpperCase(),
-    emails: emails,
-    pricingTable: pricingTable,
-    dateSince: dateSince
+function getCustomerPricingTier(customerNameOrCode) {
+  const c = resolveCustomer(customerNameOrCode);
+  return c?.pricingTier || 'Wholesale Tier 1';
+}
+
+function getCustomerTerms(customerNameOrCode) {
+  const c = resolveCustomer(customerNameOrCode);
+  return c?.terms || 'Net 15';
+}
+
+// In-memory fallback: allow manual insert when Google isn't connected
+function addOrUpdateCustomer(name, code, emails = [], pricingTier = 'Wholesale Tier 1', terms = 'Net 15') {
+  const normalized = {
+    id: (code || name.substring(0, 3)).toUpperCase(),
+    code: (code || name.substring(0, 3)).toUpperCase(),
+    name,
+    emails,
+    pricingTier,
+    terms
   };
+  customerDirectory[normalized.name.toLowerCase()] = normalized;
+  customerDirectory[normalized.code.toLowerCase()] = normalized;
+
+  const existingIdx = customerDirectoryList.findIndex(c => c.code === normalized.code);
+  if (existingIdx >= 0) customerDirectoryList[existingIdx] = normalized;
+  else customerDirectoryList.push(normalized);
 }
+
+
 
 // ============ Coffee Inventory Data ============
 
@@ -1939,8 +2079,9 @@ If no valid emails found, return: {"emails": []}`;
 // Get all wholesale customers with details
 app.get('/api/customers/wholesale', async (req, res) => {
   try {
+    await loadCustomerDirectoryFromSheets();
     // Get all existing codes
-    const existingCodes = Object.values(customerDirectory).map(c => c.code);
+    const existingCodes = customerDirectoryList.map(c => c.code);
     
     // Build customer list with last invoice dates
     const customers = [];
@@ -2018,25 +2159,27 @@ app.get('/api/customers/wholesale', async (req, res) => {
     }
     
     // Build customer list
-    for (const [key, customer] of Object.entries(customerDirectory)) {
+    for (const customer of customerDirectoryList) {
+      const key = customer.name.toLowerCase();
       const lastInvoice = lastInvoiceDates[key] || lastInvoiceDates[customer.name.toLowerCase()] || null;
       
       // Format pricing table name nicely
       let pricingTableDisplay = 'Tier 1';
-      if (customer.pricingTable) {
-        const pt = customer.pricingTable.toLowerCase();
+      if (customer.pricingTier) {
+        const pt = customer.pricingTier.toLowerCase();
         if (pt === 'at-cost') pricingTableDisplay = 'At-Cost';
         else if (pt.includes('dex')) pricingTableDisplay = 'Dex';
         else if (pt.includes('ced')) pricingTableDisplay = 'CED';
         else if (pt.includes('junia')) pricingTableDisplay = 'Junia';
         else if (pt.includes('tier 1')) pricingTableDisplay = 'Tier 1';
-        else pricingTableDisplay = customer.pricingTable;
+        else pricingTableDisplay = customer.pricingTier;
       }
       
       customers.push({
         name: customer.name,
         code: customer.code,
         emails: customer.emails || [],
+        terms: customer.terms || 'Net 15',
         pricingTable: pricingTableDisplay,
         dateSince: customer.dateSince || 'N/A',
         lastInvoice: lastInvoice || 'No invoices'
@@ -2062,6 +2205,8 @@ app.get('/api/customers/wholesale', async (req, res) => {
 // Add new wholesale customer
 app.post('/api/customers/wholesale/add', async (req, res) => {
   const { name, code, emails, pricingType, pricingTable, priceRatio } = req.body;
+
+  await loadCustomerDirectoryFromSheets();
   
   if (!name || !code) {
     return res.status(400).json({ error: 'Name and code are required' });
@@ -2072,7 +2217,7 @@ app.post('/api/customers/wholesale/add', async (req, res) => {
   }
   
   // Check for duplicate code
-  const existingCodes = Object.values(customerDirectory).map(c => c.code);
+  const existingCodes = customerDirectoryList.map(c => c.code);
   if (existingCodes.includes(code)) {
     return res.status(400).json({ error: 'Code already in use' });
   }
@@ -2156,30 +2301,136 @@ app.post('/api/customers/wholesale/add', async (req, res) => {
       console.log(`✅ Created custom pricing table "${customTableName}" with ratio ${priceRatio}×`);
     }
     
-    // Format date as MM/DD/YY
-    const today = new Date();
-    const dateSince = `${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getDate()).padStart(2, '0')}/${String(today.getFullYear()).slice(-2)}`;
-    
-    // Add to customer directory
-    customerDirectory[lower] = {
-      name: name,
-      code: code,
-      emails: emails || [],
-      pricingTable: finalPricingTable,
-      dateSince: dateSince
-    };
-    
-    console.log(`✅ Added wholesale customer: ${name} (${code}), pricing: ${finalPricingTable}`);
-    
-    res.json({ 
-      success: true, 
-      pricingCreated,
-      message: `Added ${name} (${code}) as wholesale customer`
+
+  // Store customer in Customer Directory sheet (source of truth)
+  const terms = 'Net 15';
+
+  // Normalize pricing tier label
+  const map = {
+    'tier1': 'Wholesale Tier 1',
+    'dex': 'Wholesale Dex',
+    'ced': 'Wholesale CED',
+    'junia': 'Wholesale Junia',
+    'atcost': 'At-Cost',
+    'at-cost': 'At-Cost'
+  };
+  let pricingTierLabel = finalPricingTable;
+  if (typeof pricingTable === 'string' && map[pricingTable.toLowerCase()]) {
+    pricingTierLabel = map[pricingTable.toLowerCase()];
+  }
+  // If we created a custom pricing table, keep its explicit name
+  if (pricingCreated && finalPricingTable) {
+    pricingTierLabel = finalPricingTable;
+  }
+
+  if (userTokens) {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Customer Directory!A:F',
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      requestBody: {
+        values: [[ '', code, name, (emails || []).join(', '), terms, pricingTierLabel ]]
+      }
     });
-    
-  } catch (error) {
+
+    // Refresh local cache
+    await loadCustomerDirectoryFromSheets(true);
+  } else {
+    // Fallback to memory
+    addOrUpdateCustomer(name, code, emails || [], pricingTierLabel, terms);
+  }
+
+  console.log(`✅ Added wholesale customer: ${name} (${code}), pricing: ${pricingTierLabel}`);
+
+  res.json({
+    success: true,
+    pricingCreated,
+    message: `Added ${name} (${code}) as wholesale customer`
+  });
+
+} catch (error) {
     console.error('Error adding wholesale customer:', error);
     res.status(500).json({ error: 'Failed to add customer: ' + error.message });
+  }
+});
+
+// Remove wholesale customer (deletes row from Customer Directory)
+app.post('/api/customers/wholesale/remove', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  const { code } = req.body;
+  if (!code) return res.status(400).json({ error: 'Customer code required' });
+
+  try {
+    await loadCustomerDirectoryFromSheets(true);
+
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    // Read directory to locate row
+    const resp = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Customer Directory!A:F',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    const rows = resp.data.values || [];
+
+    // Find header row and then matching code in column B
+    let headerRowIdx = -1;
+    for (let i = 0; i < Math.min(rows.length, 10); i++) {
+      const b = (rows[i]?.[1] || '').toString().trim().toLowerCase();
+      if (b === 'customerid') { headerRowIdx = i; break; }
+    }
+    const startIdx = headerRowIdx >= 0 ? headerRowIdx + 1 : 1;
+
+    const targetCode = code.toString().trim().toUpperCase();
+    let targetRowNumber = null; // 1-indexed
+    for (let i = startIdx; i < rows.length; i++) {
+      const rowCode = (rows[i]?.[1] || '').toString().trim().toUpperCase();
+      if (rowCode === targetCode) {
+        targetRowNumber = i + 1;
+        break;
+      }
+    }
+
+    if (!targetRowNumber) {
+      return res.status(404).json({ error: 'Customer not found in Customer Directory' });
+    }
+
+    // Get sheetId for batchUpdate
+    const ss = await sheets.spreadsheets.get({ spreadsheetId: SPREADSHEET_ID });
+    const sheet = (ss.data.sheets || []).find(sh => sh.properties && sh.properties.title === 'Customer Directory');
+    if (!sheet) {
+      return res.status(500).json({ error: 'Could not find Customer Directory sheet' });
+    }
+    const sheetId = sheet.properties.sheetId;
+
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: {
+        requests: [{
+          deleteDimension: {
+            range: {
+              sheetId,
+              dimension: 'ROWS',
+              startIndex: targetRowNumber - 1,
+              endIndex: targetRowNumber
+            }
+          }
+        }]
+      }
+    });
+
+    await loadCustomerDirectoryFromSheets(true);
+    res.json({ success: true, message: `Removed ${targetCode} from Customer Directory` });
+  } catch (error) {
+    console.error('Error removing wholesale customer:', error);
+    res.status(500).json({ error: 'Failed to remove customer: ' + error.message });
   }
 });
 
@@ -2226,204 +2477,232 @@ app.post('/api/invoice/generate', async (req, res) => {
   }
 
   try {
+    await loadCustomerDirectoryFromSheets();
     const { details, confirmNewCustomer, newCustomerName, newCustomerCode } = req.body;
     
     // Handle adding a new customer
-    if (confirmNewCustomer && newCustomerName) {
-      const lower = newCustomerName.toLowerCase();
-      if (!customerDirectory[lower]) {
-        const code = newCustomerCode || newCustomerName.substring(0, 3).toUpperCase();
-        addOrUpdateCustomer(newCustomerName, code, []);
-        console.log(`✅ Added new customer: ${newCustomerName} (${code})`);
-      }
-      // Continue processing with the new customer name
+    
+if (confirmNewCustomer && newCustomerName) {
+  const lower = newCustomerName.toLowerCase();
+  if (!customerDirectory[lower]) {
+    const code = (newCustomerCode || newCustomerName.substring(0, 3)).toUpperCase();
+    const terms = 'Net 15';
+    const pricingTierLabel = 'Wholesale Tier 1';
+
+    // Persist to Customer Directory sheet so invoice numbering + pricing stay consistent
+    try {
+      oauth2Client.setCredentials(userTokens);
+      const sheets2 = google.sheets({ version: 'v4', auth: oauth2Client });
+      await sheets2.spreadsheets.values.append({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Customer Directory!A:F',
+        valueInputOption: 'USER_ENTERED',
+        insertDataOption: 'INSERT_ROWS',
+        requestBody: {
+          values: [[ '', code, newCustomerName, '', terms, pricingTierLabel ]]
+        }
+      });
+      await loadCustomerDirectoryFromSheets(true);
+      console.log(`✅ Added new customer to Customer Directory: ${newCustomerName} (${code})`);
+    } catch (e) {
+      // Fallback to memory if Sheets write fails
+      addOrUpdateCustomer(newCustomerName, code, [], pricingTierLabel, terms);
+      console.log(`⚠️ Added new customer in memory only: ${newCustomerName} (${code}) - ${e.message}`);
     }
+  }
+  // Continue processing with the new customer name
+}
     
     if (!details) {
       return res.status(400).json({ error: 'Invoice details required' });
     }
-
-    // Use Gemini to parse multiple items from natural language
-    const knownProducts = ['Archives Blend', 'Ethiopia Gera Natural', 'Colombia Excelso', 'Colombia Decaf'];
-    const productAliases = {
-      'archives': 'Archives Blend', 'archive': 'Archives Blend', 'house': 'Archives Blend', 'blend': 'Archives Blend',
-      'ethiopia': 'Ethiopia Gera Natural', 'ethiopian': 'Ethiopia Gera Natural', 'ethiopia gera': 'Ethiopia Gera Natural',
-      'colombia': 'Colombia Excelso', 'colombian': 'Colombia Excelso',
-      'decaf': 'Colombia Decaf', 'decaffeinated': 'Colombia Decaf'
-    };
-    
-    const parsePrompt = `Parse this invoice request into customer and line items.
-Input: "${details}"
-
-KNOWN CUSTOMERS: ${getKnownCustomers().join(', ')}
-KNOWN PRODUCTS: Archives Blend, Ethiopia Gera Natural, Colombia Excelso, Colombia Decaf
-PRODUCT ALIASES: archives/archive/blend = "Archives Blend", ethiopia/ethiopian = "Ethiopia Gera Natural", colombia/colombian = "Colombia Excelso", decaf = "Colombia Decaf"
-
-Respond ONLY with valid JSON (no markdown):
-{
-  "customer": "customer name from known customers list",
-  "items": [
-    {"quantity": 100, "product": "exact product name from known products"},
-    {"quantity": 40, "product": "exact product name from known products"}
-  ]
-}
-
-Examples:
-- "AOU 100lb Archives blend and 40lb Ethiopia" → {"customer": "Archives of Us", "items": [{"quantity": 100, "product": "Archives Blend"}, {"quantity": 40, "product": "Ethiopia Gera Natural"}]}
-- "CED 50 lbs archives" → {"customer": "CED", "items": [{"quantity": 50, "product": "Archives Blend"}]}
-- "Dex 20lb ethiopia, 30lb decaf" → {"customer": "Dex", "items": [{"quantity": 20, "product": "Ethiopia Gera Natural"}, {"quantity": 30, "product": "Colombia Decaf"}]}`;
-
-    let customer = null;
-    let items = [];
-    
-    try {
-      const parseText = await callGeminiWithRetry(parsePrompt, { maxRetries: 2 });
-      console.log(`🤖 Gemini parse: ${parseText}`);
-      
-      const cleanJson = parseText.replace(/```json\n?|\n?```/g, '').trim();
-      const parsed = JSON.parse(cleanJson);
-      
-      customer = parsed.customer;
-      items = parsed.items || [];
-    } catch (parseError) {
-      console.error('⚠️ Gemini parsing failed:', parseError.message);
-      return res.json({ 
-        success: false,
-        error: "Sorry, I didn't get that. What can I help you with?",
-        showFollowUp: false,
-        action: 'unclear'
-      });
-    }
-    
-    if (!customer || !items || items.length === 0) {
-      return res.json({ 
-        success: false,
-        error: "Sorry, I didn't get that. What can I help you with?",
-        showFollowUp: false,
-        action: 'unclear'
-      });
-    }
-    
-    // Match customer to known list
-    const normalizedCustomer = getKnownCustomers().find(c => 
-      c.toLowerCase() === customer.toLowerCase() ||
-      customer.toLowerCase().includes(c.toLowerCase()) ||
-      c.toLowerCase().includes(customer.toLowerCase())
-    );
-    const finalCustomer = normalizedCustomer || customer;
-
-    console.log(`📝 Generating invoice for: ${finalCustomer}, ${items.length} item(s)`);
-
+    // --- Invoice parsing: read products directly from Wholesale Pricing (customer-specific tier) ---
     oauth2Client.setCredentials(userTokens);
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
 
-    // Step 1: Get pricing from Wholesale Pricing sheet (entire sheet including At-Cost)
-    const pricingResponse = await sheets.spreadsheets.values.get({
+    // Pull the Wholesale Pricing sheet once; we'll use it both for parsing and pricing
+    const pricingResponseAll = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Wholesale Pricing!A:H'  // Extended to column H for At-Cost pricing
+      range: 'Wholesale Pricing!A:H',
+      valueRenderOption: 'UNFORMATTED_VALUE'
     });
-    
-    const pricingRows = pricingResponse.data.values || [];
-    
-    // Use Gemini to find the correct pricing for each item
-    const pricingPrompt = `You are a pricing lookup assistant. Find the correct prices from this spreadsheet.
+    const pricingRowsAll = pricingResponseAll.data.values || [];
 
-SPREADSHEET DATA (Wholesale Pricing sheet):
-${pricingRows.map((row, i) => `Row ${i + 1}: ${row.map((cell, j) => `${String.fromCharCode(65 + j)}="${cell || ''}"`).join(', ')}`).join('\n')}
+    // 1) Resolve customer (prefer deterministic match from text; otherwise ask the model to pick from known customers)
+    let resolvedCustomerObj = null;
 
-PRICING RULES:
-1. For customer "Archives of Us" or "AOU": Use the "At-Cost" table and get price from column H
-2. For customer "CED": Use "Wholesale CED" table and get price from column D
-3. For customer "Dex": Use "Wholesale Dex" table and get price from column D
-4. For customer "Junia": Use "Wholesale Junia" table and get price from column D
-5. For any other customer: Use "Wholesale Tier 1" table and get price from column D
+    // Deterministic match: code like "CED" or customer name mentioned in the text
+    const detailsLower = details.toLowerCase();
+    for (const c of customerDirectoryList) {
+      const codeLower = (c.code || '').toLowerCase();
+      const nameLower = (c.name || '').toLowerCase();
+      if (codeLower && new RegExp(`\b${codeLower}\b`, 'i').test(details)) { resolvedCustomerObj = c; break; }
+      if (nameLower && detailsLower.includes(nameLower)) { resolvedCustomerObj = c; break; }
+      const firstToken = nameLower.split(/\s+/)[0];
+      if (firstToken && firstToken.length >= 3 && new RegExp(`\b${firstToken}\b`, 'i').test(details)) { resolvedCustomerObj = c; break; }
+    }
 
-LOOKUP REQUEST:
-- Customer: "${finalCustomer}"
-- Items to price: ${items.map(item => `"${item.product}"`).join(', ')}
+    if (!resolvedCustomerObj) {
+      const pickCustomerPrompt = `Pick the customer from the known list based on the user's invoice request.
+User request: "${details}"
 
-Find the per-lb price for each product from the correct table for this customer.
+KNOWN CUSTOMERS:
+${customerDirectoryList.map(c => `- ${c.name} (${c.code})`).join('\n')}
 
-Respond ONLY with valid JSON (no markdown):
-{
-  "table": "<name of table used>",
-  "prices": {
-    "<product name as given>": <price as number>,
-    "<product name as given>": <price as number>
-  }
-}`;
+Return JSON only:
+{ "customerCode": "3-letter code from the list" }`;
 
-    let pricingMap = {};
-    let pricingSource = 'unknown';
-    
-    try {
-      const pricingText = await callGeminiWithRetry(pricingPrompt, { maxRetries: 2 });
-      console.log(`🤖 Gemini pricing response: ${pricingText}`);
-      
-      const cleanJson = pricingText.replace(/```json\n?|\n?```/g, '').trim();
-      const pricingData = JSON.parse(cleanJson);
-      
-      pricingSource = pricingData.table;
-      
-      // Build pricing map from Gemini response
-      for (const [product, price] of Object.entries(pricingData.prices)) {
-        if (price && price > 0) {
-          pricingMap[product.toLowerCase()] = { name: product, price: parseFloat(price) };
-        }
-      }
-      
-      console.log(`✅ Gemini found prices from ${pricingSource}:`, pricingMap);
-    } catch (error) {
-      console.log('⚠️ Gemini pricing failed, using direct lookup:', error.message);
-      
-      // Fallback: Direct sheet parsing
-      const isArchives = finalCustomer.toLowerCase() === 'archives of us';
-      let targetTable = isArchives ? 'at-cost' : `wholesale ${finalCustomer.toLowerCase()}`;
-      let priceColumn = isArchives ? 7 : 3; // H for At-Cost, D for Wholesale
-      
-      // Find the correct table start row
-      let tableStartRow = -1;
-      for (let i = 0; i < pricingRows.length; i++) {
-        const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
-        if (cellB.includes(targetTable) || (isArchives && cellB === 'at-cost')) {
-          tableStartRow = i;
-          pricingSource = cellB;
-          break;
-        }
-      }
-      
-      // Fallback to Tier 1 if no specific table found
-      if (tableStartRow === -1 && !isArchives) {
-        for (let i = 0; i < pricingRows.length; i++) {
-          const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
-          if (cellB.includes('wholesale tier 1')) {
-            tableStartRow = i;
-            pricingSource = 'Wholesale Tier 1 (fallback)';
-            break;
+      try {
+        const pickResp = await callChatGPT(pickCustomerPrompt, details, { jsonMode: true });
+        const pick = JSON.parse(pickResp);
+        resolvedCustomerObj = resolveCustomer(pick.customerCode) || null;
+      } catch (e) {
+        try {
+          const g = await callGeminiWithRetry(pickCustomerPrompt, { maxRetries: 1 });
+          const jsonMatch = g.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const pick = JSON.parse(jsonMatch[0]);
+            resolvedCustomerObj = resolveCustomer(pick.customerCode) || null;
           }
-        }
-      }
-      
-      // Build pricing map from the table
-      if (tableStartRow !== -1) {
-        for (let i = tableStartRow + 1; i < pricingRows.length; i++) {
-          const row = pricingRows[i];
-          const productName = (row[1] || '').toString().trim();
-          const priceCell = row[priceColumn];
-          
-          // Stop if we hit another table or empty row
-          if (!productName || productName.toLowerCase().includes('wholesale') || productName.toLowerCase() === 'at-cost') break;
-          if (productName.toLowerCase() === 'coffee') continue; // Skip header
-          
-          const price = parseFloat((priceCell || '').toString().replace(/[$,]/g, ''));
-          if (price > 0) {
-            pricingMap[productName.toLowerCase()] = { name: productName, price };
-          }
-        }
+        } catch {}
       }
     }
-    
-    console.log(`📋 Final pricing map (from ${pricingSource}):`, pricingMap);
+
+    if (!resolvedCustomerObj) {
+      return res.json({ 
+        success: false,
+        error: "I couldn't tell which customer this invoice is for. Who should it be billed to?",
+        showFollowUp: false,
+        action: 'unclear'
+      });
+    }
+
+    const finalCustomer = resolvedCustomerObj.name;
+    const pricingTierLabel = (resolvedCustomerObj.pricingTier || 'Wholesale Tier 1').toString().trim();
+    const tierLower = pricingTierLabel.toLowerCase();
+    const isAtCost = tierLower === 'at-cost' || tierLower === 'atcost' || tierLower === 'at cost';
+
+    // 2) Build the product list + pricing map from the customer's tier table
+    // Price column: H for At-Cost, D for Wholesale tiers
+    const priceColumn = isAtCost ? 7 : 3;
+
+    // Find the correct table start row (table names are in column B)
+    let tableStartRow = -1;
+    for (let i = 0; i < pricingRowsAll.length; i++) {
+      const cellB = (pricingRowsAll[i]?.[1] || '').toString().trim().toLowerCase();
+      if (!cellB) continue;
+      if (cellB === tierLower || cellB.includes(tierLower)) { tableStartRow = i; break; }
+    }
+
+    // Fallback to Tier 1 if not found
+    if (tableStartRow === -1 && !isAtCost) {
+      const fallback = 'wholesale tier 1';
+      for (let i = 0; i < pricingRowsAll.length; i++) {
+        const cellB = (pricingRowsAll[i]?.[1] || '').toString().trim().toLowerCase();
+        if (cellB === fallback || cellB.includes(fallback)) { tableStartRow = i; break; }
+      }
+    }
+
+    if (tableStartRow === -1) {
+      return res.status(400).json({ error: `Could not find pricing table "${pricingTierLabel}" in Wholesale Pricing sheet.` });
+    }
+
+    const pricingMap = {};
+    const productNames = [];
+
+    for (let i = tableStartRow + 1; i < pricingRowsAll.length; i++) {
+      const row = pricingRowsAll[i] || [];
+      const nameCell = (row[1] || '').toString().trim();
+      const nameLower = nameCell.toLowerCase();
+
+      if (!nameCell) continue;
+      // Stop when next table begins
+      if (nameLower.startsWith('wholesale') || nameLower === 'at-cost' || nameLower === 'atcost') break;
+      if (nameLower === 'coffee') continue;
+
+      const rawPrice = row[priceColumn];
+      const price = typeof rawPrice === 'number' ? rawPrice : parseFloat(String(rawPrice || '').replace(/[$,]/g, ''));
+      if (price && price > 0) {
+        pricingMap[nameLower] = { name: nameCell, price: parseFloat(price) };
+        productNames.push(nameCell);
+      }
+    }
+
+    if (productNames.length === 0) {
+      return res.status(400).json({ error: `No products found in pricing table "${pricingTierLabel}".` });
+    }
+
+    // 3) Parse line items using the tier's product list (ChatGPT first, Gemini fallback)
+    const parsePrompt = `Parse this invoice request into line items.
+Customer is already resolved as: ${resolvedCustomerObj.name} (${resolvedCustomerObj.code})
+Pricing tier: ${pricingTierLabel}
+
+VALID PRODUCTS (must match exactly):
+${productNames.map(p => `- ${p}`).join('\n')}
+
+Input: "${details}"
+
+Return JSON only:
+{
+  "items": [
+    {"quantity": 100, "product": "exact product name from the valid list"},
+    {"quantity": 40, "product": "exact product name from the valid list"}
+  ]
+}
+
+Rules:
+- Quantity is always in pounds unless user explicitly says otherwise.
+- If user mentions a nickname like "archives" and the valid list contains a close match like "Archives Blend", map to that exact valid product name.
+- If the user lists multiple items with commas/and, return multiple items.
+- If quantity is missing for one item, set it to null and include it anyway.
+`;
+
+    let items = [];
+    try {
+      const parseText = await callChatGPT(parsePrompt, details, { jsonMode: true });
+      const parsed = JSON.parse(parseText);
+      items = parsed.items || [];
+    } catch (e) {
+      try {
+        const g = await callGeminiWithRetry(parsePrompt, { maxRetries: 2 });
+        const jsonMatch = g.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          items = parsed.items || [];
+        }
+      } catch {}
+    }
+
+    // Clean + validate items against pricingMap
+    items = (items || [])
+      .filter(it => it && it.product)
+      .map(it => ({
+        product: it.product.toString().trim(),
+        quantity: it.quantity === null || it.quantity === undefined || it.quantity === '' ? null : parseInt(it.quantity, 10)
+      }));
+
+    if (!items || items.length === 0) {
+      return res.json({ 
+        success: false,
+        error: "I couldn't parse the line items. Try something like: 'CED 50lb Archives Blend and 20lb Ethiopia Gera Natural'.",
+        showFollowUp: false,
+        action: 'unclear'
+      });
+    }
+
+    const missingQty = items.find(it => it.quantity === null || isNaN(it.quantity));
+    if (missingQty) {
+      return res.json({
+        success: false,
+        action: 'invoice_needs_quantity',
+        showFollowUp: false,
+        customer: finalCustomer,
+        pricingTier: pricingTierLabel,
+        items
+      });
+    }
+
+    console.log(`📝 Generating invoice for: ${finalCustomer}, ${items.length} item(s), tier: ${pricingTierLabel}`);
     
     // Process each item and get pricing
     const processedItems = [];
@@ -2479,7 +2758,9 @@ Respond ONLY with valid JSON (no markdown):
     const today = new Date();
     const dateStr = today.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
     const dueDateObj = new Date(today);
-    dueDateObj.setDate(dueDateObj.getDate() + 14); // Due in 2 weeks
+    const termsStr = getCustomerTerms(finalCustomer);
+    const termDays = parseTermsToDays(termsStr);
+    dueDateObj.setDate(dueDateObj.getDate() + termDays); // Due based on payment terms
     const dueDateStr = dueDateObj.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
 
     // Step 4: Generate PDF with all items
@@ -2971,6 +3252,7 @@ app.get('/api/invoices/outstanding', async (req, res) => {
   }
   
   try {
+    await loadCustomerDirectoryFromSheets();
     oauth2Client.setCredentials(userTokens);
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
     
@@ -3006,41 +3288,57 @@ app.get('/api/invoices/outstanding', async (req, res) => {
         const codeMatch = invoiceNumber.match(/C-([A-Z]{3})-/);
         const customerCode = codeMatch ? codeMatch[1] : null;
         
-        // Find customer by code
-        let customerName = null;
-        let customerEmails = [];
-        if (customerCode) {
-          for (const [name, data] of Object.entries(customerDirectory)) {
-            if (data.code === customerCode) {
-              customerName = data.name;
-              customerEmails = data.emails || [];
-              break;
-            }
-          }
-        }
         
-        const customerKey = customerName || customerCode || 'Unknown';
-        
-        if (!invoicesByCustomer[customerKey]) {
-          invoicesByCustomer[customerKey] = {
-            customerName: customerName || customerKey,
-            customerCode,
-            customerEmails,
-            invoices: [],
-            totalAmount: 0
-          };
-        }
-        
-        // Format amount for display
-        const amountDisplay = `$${amountNum.toFixed(2)}`;
-        
-        invoicesByCustomer[customerKey].invoices.push({
-          rowIndex: i + 1,
-          date: row[1],
-          invoiceNumber,
-          amount: amountDisplay,
-          amountNum
-        });
+// Resolve customer from directory (for name, emails, and terms)
+const customer = customerCode ? resolveCustomer(customerCode) : null;
+const customerName = customer?.name || customerCode || 'Unknown';
+const customerEmails = customer?.emails || [];
+
+// Compute due date + overdue status from customer terms
+const invoiceDateObj = tryParseUSDate(row[1]);
+const termDays = parseTermsToDays(customer?.terms);
+let dueDateObj = null;
+let overdue = false;
+let daysOverdue = 0;
+
+if (invoiceDateObj) {
+  dueDateObj = new Date(invoiceDateObj);
+  dueDateObj.setDate(dueDateObj.getDate() + termDays);
+  const today = new Date();
+  // Compare dates (ignore time)
+  const todayMid = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const dueMid = new Date(dueDateObj.getFullYear(), dueDateObj.getMonth(), dueDateObj.getDate());
+  overdue = todayMid > dueMid;
+  if (overdue) {
+    daysOverdue = Math.floor((todayMid - dueMid) / 86400000);
+  }
+}
+
+const customerKey = customerName;
+
+if (!invoicesByCustomer[customerKey]) {
+  invoicesByCustomer[customerKey] = {
+    customerName,
+    customerCode,
+    customerEmails,
+    invoices: [],
+    totalAmount: 0
+  };
+}
+
+// Format amount for display
+const amountDisplay = `$${amountNum.toFixed(2)}`;
+
+invoicesByCustomer[customerKey].invoices.push({
+  rowIndex: i + 1,
+  date: row[1],
+  invoiceNumber,
+  amount: amountDisplay,
+  amountNum,
+  dueDate: dueDateObj ? dueDateObj.toLocaleDateString('en-US') : null,
+  overdue,
+  daysOverdue
+});
         
         invoicesByCustomer[customerKey].totalAmount += amountNum;
       }
@@ -3055,6 +3353,80 @@ app.get('/api/invoices/outstanding', async (req, res) => {
   } catch (error) {
     console.error('Outstanding invoices error:', error);
     res.status(500).json({ error: 'Failed to get invoices: ' + error.message });
+  }
+});
+
+
+// List paid invoices (for "Done" tab) - returns recent paid invoices grouped by customer
+app.get('/api/invoices/paid', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+
+  const limit = Math.min(parseInt(req.query.limit || '50', 10) || 50, 200);
+
+  try {
+    await loadCustomerDirectoryFromSheets();
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Invoices!A:F',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+
+    const rows = response.data.values || [];
+    const paid = [];
+
+    for (let i = 2; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || !row[2]) continue;
+      const invoiceNumber = row[2];
+      const paidDate = row[4];
+
+      const isPaid = paidDate !== undefined && paidDate !== null && paidDate !== '' && String(paidDate).trim() !== '';
+      if (!isPaid) continue;
+
+      let amountNum = 0;
+      if (row[3] !== undefined && row[3] !== null) {
+        if (typeof row[3] === 'number') amountNum = row[3];
+        else amountNum = parseFloat(String(row[3]).replace(/[$,]/g, '')) || 0;
+      }
+
+      const codeMatch = invoiceNumber.match(/C-([A-Z]{3})-/);
+      const customerCode = codeMatch ? codeMatch[1] : null;
+      const customer = customerCode ? resolveCustomer(customerCode) : null;
+
+      paid.push({
+        rowIndex: i + 1,
+        date: row[1],
+        invoiceNumber,
+        amount: `$${amountNum.toFixed(2)}`,
+        amountNum,
+        paidDate: typeof paidDate === 'number' ? paidDate : String(paidDate),
+        customerName: customer?.name || customerCode || 'Unknown',
+        customerEmails: customer?.emails || []
+      });
+    }
+
+    // Most recent first (by row order)
+    paid.sort((a, b) => (b.rowIndex - a.rowIndex));
+
+    // Limit + group
+    const limited = paid.slice(0, limit);
+    const byCustomer = {};
+    for (const inv of limited) {
+      if (!byCustomer[inv.customerName]) byCustomer[inv.customerName] = { customerName: inv.customerName, invoices: [], totalAmount: 0 };
+      byCustomer[inv.customerName].invoices.push(inv);
+      byCustomer[inv.customerName].totalAmount += inv.amountNum;
+    }
+
+    const groupedInvoices = Object.values(byCustomer).sort((a, b) => a.customerName.toLowerCase().localeCompare(b.customerName.toLowerCase()));
+    res.json({ success: true, groupedInvoices });
+  } catch (error) {
+    console.error('Paid invoices error:', error);
+    res.status(500).json({ error: 'Failed to get paid invoices: ' + error.message });
   }
 });
 
@@ -3548,375 +3920,120 @@ async function generateInvoicePDF(data, outputPath) {
 
 // ============ AI Processing ============
 
-app.post('/api/process', async (req, res) => {
-  try {
-    // Always fetch fresh inventory from Google Sheets before processing
-    await ensureFreshInventory();
-    
-    const { text, context, conversationState } = req.body;
-    
-    if (!text) {
-      return res.status(400).json({ error: 'Text is required' });
-    }
-    
-    const textLower = text.toLowerCase().trim();
-    
-    // Quick handlers for simple commands (no AI needed)
-    
-    // Handle inventory check commands - more natural language patterns
-    if (textLower === 'inventory' || 
-        textLower === 'check inventory' || 
-        textLower === 'stock' || 
-        textLower === 'check stock' ||
-        textLower.includes('check') && textLower.includes('inventory') ||
-        textLower.includes('current inventory') ||
-        textLower.includes('what do we have') ||
-        textLower.includes('how much') && (textLower.includes('coffee') || textLower.includes('stock')) ||
-        textLower.includes('inventory levels') ||
-        textLower.includes('stock levels')) {
-      return res.json({
-        response: null,  // Frontend will handle display
-        action: 'check_inventory',
-        showFollowUp: true
-      });
-    }
-    
-    // Handle roast order commands
-    if (textLower === 'order roast' ||
-        textLower === 'roast order' ||
-        textLower.includes('order') && textLower.includes('roast') ||
-        textLower.includes('place') && textLower.includes('order') ||
-        textLower.includes('need to order') && textLower.includes('roast')) {
-      return res.json({
-        response: null,
-        action: 'order_roast',
-        showFollowUp: false
-      });
-    }
-    
-    // Handle en route commands
-    if (textLower === 'en route' ||
-        textLower === 'enroute' ||
-        textLower.includes('en route') ||
-        textLower.includes('shipment') ||
-        textLower.includes('tracking') ||
-        textLower.includes('shipped')) {
-      return res.json({
-        response: null,
-        action: 'view_en_route',
-        showFollowUp: false
-      });
-    }
-    
-    // Handle invoice commands
-    if (textLower === 'invoice' ||
-        textLower === 'generate invoice' ||
-        textLower === 'create invoice' ||
-        textLower.includes('invoice for') ||
-        textLower.includes('bill for')) {
-      return res.json({
-        response: null,
-        action: 'start_invoice',
-        showFollowUp: false
-      });
-    }
-    
-    // Handle retail commands
-    if (textLower === 'retail' ||
-        textLower === 'manage retail' ||
-        textLower.includes('retail sales') ||
-        textLower.includes('retail management')) {
-      return res.json({
-        response: null,
-        action: 'manage_retail',
-        showFollowUp: false
-      });
-    }
-    
-    // Handle to do commands
-    if (textLower === 'todo' ||
-        textLower === 'to do' ||
-        textLower === 'to-do' ||
-        textLower.includes('to do list') ||
-        textLower.includes('pending tasks') ||
-        textLower.includes('what needs') ||
-        textLower.includes('what do i need')) {
-      return res.json({
-        response: null,
-        action: 'show_todo',
-        showFollowUp: false
-      });
-    }
-    
-    // Handle forecast commands
-    if (textLower === 'forecast' ||
-        textLower === 'analytics' ||
-        textLower.includes('forecast') ||
-        textLower.includes('analytics') ||
-        textLower.includes('predictions') ||
-        textLower.includes('sales report') ||
-        textLower.includes('business report') ||
-        textLower.includes('how are sales') ||
-        textLower.includes('sales trends')) {
-      return res.json({
-        response: null,
-        action: 'show_forecast',
-        showFollowUp: false
-      });
-    }
-    
-    // Only handle simple yes/no/thanks without AI (for speed)
-    if (textLower === 'yes' || textLower === 'yeah' || textLower === 'yep') {
-      if (conversationState === 'waiting_for_new_customer_confirmation') {
-        return res.json({
-          response: "Great! Adding them now...",
-          action: 'confirm_add_customer',
-          showFollowUp: false
-        });
-      }
-    }
-    
-    if (textLower === 'thanks' || textLower === 'thank you' || textLower === "that's all") {
-      return res.json({
-        response: "You're welcome!",
-        action: 'completed',
-        showFollowUp: true
-      });
-    }
-    
-    
-    // Build concise context for the LLM (inventory + customers)
-    const customerDetails = Object.entries(customerDirectory).map(([key, data]) =>
-      `${data.name} (${data.code}): ${(data.emails && data.emails.length) ? data.emails.join(', ') : 'no email'} | pricing: ${data.pricingTable || 'unknown'}`
-    ).join('
-');
+// Unified "assistant brain": one planner used by both /api/process and /api/chat/process
+async function planAssistantAction(userText, conversationState = 'idle') {
+  const sheetContext = await buildSheetContextForChatGPT();
+  const contextStr = formatSheetContextForPrompt(sheetContext);
 
-    const roastedSummary = roastedCoffeeInventory.length > 0
-      ? roastedCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb`).join('
-')
-      : '- None in stock';
+  const plannerPrompt = `You are Mise Flow, an ops assistant for a coffee roaster.
+Your job: decide the user's intent and return a structured plan.
 
-    const greenSummary = greenCoffeeInventory.length > 0
-      ? greenCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb`).join('
-')
-      : '- None in stock';
+Current conversation state: ${conversationState}
 
-    const enRouteSummary = enRouteCoffeeInventory.length > 0
-      ? enRouteCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb (tracking: ${c.trackingNumber || 'none'})`).join('
-')
-      : '- Nothing en route';
+Context:
+${contextStr}
 
-    // LLM intent + response (ChatGPT first, Gemini fallback)
-    let intentData = null;
-
-    const systemPrompt = `You are Mise Flow, an inventory + invoicing copilot for a coffee roaster.
-Be natural, helpful, and brief. You can reference the provided data, but do NOT invent items or numbers.
-
-You must decide the user's intent and (when appropriate) propose the next action the UI should take.
-
-Return JSON ONLY with this schema:
+Return JSON only in this schema:
 {
-  "intent": "check_inventory|create_invoice|order_roast|view_en_route|manage_retail|show_todo|show_forecast|general|decline",
-  "response": "string (what to say to the user, 1-4 sentences)",
-  "uiAction": "check_inventory|start_invoice|order_roast|view_en_route|manage_retail|show_todo|show_forecast|none",
-  "customer": "string|null",
-  "items": [{"quantity": number, "product": "string"}],
-  "isKnownCustomer": true|false|null,
-  "needsFollowUp": true|false,
-  "quickReplies": ["string", "string", "string"]
+  "action": "check_inventory|order_roast|view_en_route|start_invoice|manage_retail|show_todo|chat|unclear",
+  "mode": "Inventory|Roast Order|Invoicing|En Route|Retail|To-Do|Chat",
+  "parameters": {},
+  "chatResponse": "only if action is chat/unclear"
 }
 
 Rules:
-- If the user asks about inventory, respond with the actual inventory from the data below.
-- If user wants an invoice but customer/product/quantity is missing, ask a single clarifying question and set needsFollowUp=true, uiAction="none".
-- If user is cancelling, set intent="decline".
-- quickReplies should be 0-3 short suggestions relevant to the user's intent.`;
-
-    const userPrompt = `=== CURRENT DATA ===
-ROASTED COFFEE INVENTORY:
-${roastedSummary}
-
-GREEN COFFEE INVENTORY:
-${greenSummary}
-
-EN ROUTE:
-${enRouteSummary}
-
-CUSTOMERS:
-${customerDetails}
-
-CONVERSATION STATE: ${conversationState || 'none'}
-
-=== USER MESSAGE ===
-"${text}"
+- If user asks about inventory/stock/what do we have → check_inventory, mode Inventory
+- If user asks to invoice/bill/create invoice → start_invoice, mode Invoicing
+- If user asks about tracking/shipment/en route → view_en_route, mode En Route
+- If user asks to order roast / roast order → order_roast, mode Roast Order
+- If user asks to manage retail → manage_retail, mode Retail
+- If user asks for todo / what's pending / outstanding invoices → show_todo, mode To-Do
+- Otherwise, action chat with a brief helpful response.
 `;
 
+  // ChatGPT first, Gemini fallback
+  try {
+    const resp = await callChatGPT(plannerPrompt, userText, { jsonMode: true });
+    return JSON.parse(resp);
+  } catch (e) {
     try {
-      const intentText = await callChatGPT(systemPrompt, userPrompt, { temperature: 0.2, maxTokens: 800, jsonMode: true });
-      intentData = JSON.parse(intentText);
-    } catch (error) {
-      console.error('ChatGPT intent error:', error.message || error);
+      const g = await callGeminiWithRetry(plannerPrompt + `\nUser said: "${userText}"`, { maxRetries: 2 });
+      const jsonMatch = g.match(/\{[\s\S]*\}/);
+      if (jsonMatch) return JSON.parse(jsonMatch[0]);
+    } catch {}
+  }
+  return { action: 'unclear', mode: 'Chat', parameters: {}, chatResponse: "Sorry — I didn't catch that. What should we do?" };
+}
 
-      try {
-        const fallbackPrompt = systemPrompt + "
 
-" + userPrompt;
-        const intentText = await callGeminiWithRetry(fallbackPrompt, { temperature: 0.2, maxRetries: 2 });
-        const cleanJson = intentText.replace(/```json
-?|
-?```/g, '').trim();
-        intentData = JSON.parse(cleanJson);
-      } catch (e) {
-        if (String(e.message || '').includes('RATE_LIMITED')) {
-          return res.json({
-            response: "I'm a bit busy right now. Please try again in a moment.",
-            action: 'rate_limited',
-            showFollowUp: true
-          });
-        }
-        console.error('Gemini fallback error:', e);
-        return res.json({
-          response: "I'm having trouble understanding. Could you try rephrasing?",
-          action: 'unclear',
-          showFollowUp: true
-        });
-      }
+app.post('/api/process', async (req, res) => {
+  try {
+    await ensureFreshInventory();
+    const { text, conversationState } = req.body || {};
+    const raw = (text || '').toString();
+    const textLower = raw.trim().toLowerCase();
+
+    if (!raw || !raw.trim()) {
+      return res.json({ response: "Say what you want to do — e.g., 'To Do', 'Check inventory', or 'Generate invoice for CED'.", action: 'chat', showFollowUp: true, mode: 'Chat' });
     }
 
-    if (!intentData || !intentData.intent) {
-      return res.json({
-        response: "I'm not sure I caught that. What would you like to do?",
-        action: 'unclear',
-        showFollowUp: true
-      });
+    // Lightweight fast-path commands (UI buttons + common phrases)
+    if (textLower === 'inventory' || textLower.includes('check inventory') || textLower.includes("what's our inventory") || textLower.includes('current inventory') || textLower === 'check current inventory') {
+      return res.json({ response: null, action: 'check_inventory', showFollowUp: false, mode: 'Inventory' });
     }
 
-    const intent = intentData.intent;
-    const llmResponse = intentData.response || "Okay.";
-    const needsFollowUp = !!intentData.needsFollowUp;
-    const uiAction = intentData.uiAction || 'none';
-    const quickReplies = Array.isArray(intentData.quickReplies) ? intentData.quickReplies.slice(0, 3) : [];
+    if (textLower === 'roast order' || textLower.includes('create roast') || textLower.includes('new roast order') || textLower.includes('roast plan')) {
+      return res.json({ response: null, action: 'order_roast', showFollowUp: false, mode: 'Roast Order' });
+    }
 
-    // Helper to map to existing frontend actions
-    const uiActionMap = {
+    if (textLower === 'en route' || textLower.includes('tracking') || textLower.includes('shipment') || textLower.includes('enroute')) {
+      return res.json({ response: null, action: 'view_en_route', showFollowUp: false, mode: 'En Route' });
+    }
+
+    if (textLower === 'generate invoice' || textLower.includes('invoice') || textLower.includes('bill ') || textLower.includes('billing')) {
+      return res.json({ response: null, action: 'start_invoice', showFollowUp: false, mode: 'Invoicing', parameters: { invoiceDetails: raw } });
+    }
+
+    if (textLower === 'manage' || textLower.includes('retail') || textLower.includes('pos') || textLower.includes('sales management')) {
+      return res.json({ response: null, action: 'manage_retail', showFollowUp: false, mode: 'Retail' });
+    }
+
+    if (textLower === 'to do' || textLower === 'todo' || textLower.includes('to-do') || textLower.includes('outstanding invoices') || textLower.includes('what do i need')) {
+      return res.json({ response: null, action: 'show_todo', showFollowUp: false, mode: 'To-Do' });
+    }
+
+    if (textLower === 'thanks' || textLower === 'thank you' || textLower === "that's all") {
+      return res.json({ response: "You're welcome!", action: 'completed', showFollowUp: true, mode: 'Chat' });
+    }
+
+    // Unified planner fallback
+    const plan = await planAssistantAction(raw, conversationState || 'idle');
+    const mapped = {
       check_inventory: 'check_inventory',
-      start_invoice: 'start_invoice',
       order_roast: 'order_roast',
       view_en_route: 'view_en_route',
+      start_invoice: 'start_invoice',
       manage_retail: 'manage_retail',
-      show_todo: 'show_todo',
-      show_forecast: 'show_forecast',
-      none: 'none'
-    };
+      show_todo: 'show_todo'
+    }[plan.action] || null;
 
-    // Attach quick replies if the frontend wants to render them
-    const responsePayload = {
-      response: llmResponse,
-      action: uiActionMap[uiAction] || 'none',
-      showFollowUp: !needsFollowUp,
-      quickReplies
-    };
-
-    const intent = intentData.intent;
-    const geminiResponse = intentData.response;
-    const needsFollowUp = intentData.needsFollowUp;
-    
-    
-    // Decide which existing UI action to trigger
-    if (intent === 'check_inventory') {
-      return res.json({
-        response: null,
-        action: 'check_inventory',
-        showFollowUp: !needsFollowUp,
-        quickReplies
-      });
+    if (mapped) {
+      return res.json({ response: null, action: mapped, showFollowUp: false, mode: plan.mode || null, parameters: plan.parameters || {} });
     }
 
-    if (intent === 'create_invoice') {
-      // If missing key details, just chat back; otherwise open the invoice flow
-      const hasCustomer = !!intentData.customer;
-      const hasItems = Array.isArray(intentData.items) && intentData.items.length > 0 && intentData.items.every(i => i.quantity && i.product);
-      if (!hasCustomer || !hasItems) {
-        return res.json({
-          response: llmResponse,
-          action: 'none',
-          showFollowUp: false,
-          quickReplies
-        });
-      }
-      return res.json({
-        response: null,
-        action: 'start_invoice',
-        showFollowUp: false,
-        quickReplies,
-        invoiceHint: { customer: intentData.customer, items: intentData.items }
-      });
+    if (plan.action === 'chat') {
+      return res.json({ response: plan.chatResponse || '', action: 'chat', showFollowUp: true, mode: plan.mode || 'Chat', parameters: plan.parameters || {} });
     }
 
-    if (intent === 'order_roast') {
-      return res.json({
-        response: null,
-        action: 'order_roast',
-        showFollowUp: false,
-        quickReplies
-      });
-    }
-
-    if (intent === 'view_en_route') {
-      return res.json({
-        response: null,
-        action: 'view_en_route',
-        showFollowUp: false,
-        quickReplies
-      });
-    }
-
-    if (intent === 'manage_retail') {
-      return res.json({
-        response: null,
-        action: 'manage_retail',
-        showFollowUp: false,
-        quickReplies
-      });
-    }
-
-    if (intent === 'show_todo') {
-      return res.json({
-        response: null,
-        action: 'show_todo',
-        showFollowUp: false,
-        quickReplies
-      });
-    }
-
-    if (intent === 'show_forecast') {
-      return res.json({
-        response: null,
-        action: 'show_forecast',
-        showFollowUp: false,
-        quickReplies
-      });
-    }
-
-    if (intent === 'decline') {
-      return res.json({
-        response: llmResponse || "No problem.",
-        action: 'declined',
-        showFollowUp: true,
-        quickReplies
-      });
-    }
-
-    // Default: conversational reply
-    return res.json({
-      response: llmResponse,
-      action: 'none',
-      showFollowUp: !needsFollowUp,
-      quickReplies
-    });
-
+    return res.json({ response: plan.chatResponse || "Sorry, I didn't get that. What can I help you with?", action: 'unclear', showFollowUp: true, mode: plan.mode || 'Chat' });
+  } catch (error) {
+    console.error('AI processing error:', error);
+    res.status(500).json({ error: 'Failed to process', details: error.message });
+  }
+});
 
 // ============ WebSocket for Transcription ============
+
 
 wss.on('connection', async (clientWs) => {
   console.log('Client connected for transcription');
@@ -6551,81 +6668,26 @@ Generate a brief, natural follow-up message. If a task was just completed, ackno
 
 // Process general chat input using ChatGPT (with sheet visibility)
 app.post('/api/chat/process', async (req, res) => {
-  // Always fetch fresh inventory from Google Sheets before processing
   await ensureFreshInventory();
-  
   const { userInput, currentState } = req.body;
-  
-  // Build sheet context so ChatGPT can see current inventory
-  const sheetContext = await buildSheetContextForChatGPT();
-  const contextStr = formatSheetContextForPrompt(sheetContext);
-  
-  const systemPrompt = `You are Mise, parsing user input for Archives of Us Coffee inventory management.
-You have full visibility into the current inventory and can validate orders against actual stock.
 
-Available actions:
-- "inventory" or "check inventory" → Show current inventory
-- "order roast" or mentions roasted coffee names → Start roast order
-- "invoice" or "bill" → Generate invoice
-- "en route" or "shipped" or "tracking" → View en route coffee
-- "manage" or "edit inventory" → Open inventory manager
-
-Current state: ${currentState || 'idle'}
-
-${contextStr}
-
-Determine what the user wants. Respond with JSON only:
-{
-  "action": "inventory|roast_order|invoice|en_route|manage|chat|unclear",
-  "parameters": {},
-  "chatResponse": "brief response if action is 'chat' or 'unclear'"
-}`;
-
-  try {
-    const response = await callChatGPT(systemPrompt, userInput, { jsonMode: true });
-    const parsed = JSON.parse(response);
-    res.json(parsed);
-  } catch (error) {
-    console.error('Chat process error:', error);
-    // Fallback to Gemini if ChatGPT fails
-    try {
-      const roastedCoffeeNames = roastedCoffeeInventory.map(c => c.name);
-      const greenCoffeeNames = greenCoffeeInventory.map(c => c.name);
-      const fallbackPrompt = `You are Mise, parsing user input for Archives of Us Coffee inventory management.
-
-Available actions:
-- "inventory" or "check inventory" → Show current inventory
-- "order roast" or mentions roasted coffee names → Start roast order
-- "invoice" or "bill" → Generate invoice
-- "en route" or "shipped" or "tracking" → View en route coffee
-- "manage" or "edit inventory" → Open inventory manager
-
-Roasted coffees: ${JSON.stringify(roastedCoffeeNames)}
-Green coffees: ${JSON.stringify(greenCoffeeNames)}
-
-User said: "${userInput}"
-Current state: ${currentState || 'idle'}
-
-Determine what the user wants. Respond with JSON:
-{
-  "action": "inventory|roast_order|invoice|en_route|manage|chat|unclear",
-  "parameters": {},
-  "chatResponse": "brief response if action is 'chat' or 'unclear'"
-}`;
-      const fallbackResponse = await callGeminiWithRetry(fallbackPrompt);
-      const jsonMatch = fallbackResponse.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        res.json(JSON.parse(jsonMatch[0]));
-      } else {
-        res.json({ action: 'chat', chatResponse: "Sorry, I didn't get that. What can I help you with?" });
-      }
-    } catch (e) {
-      res.json({ action: 'chat', chatResponse: "I'm having trouble understanding. Could you try rephrasing?" });
-    }
-  }
+  const plan = await planAssistantAction(userInput || '', currentState || 'idle');
+  res.json({
+    action: (plan.action === 'order_roast') ? 'roast_order'
+          : (plan.action === 'check_inventory') ? 'inventory'
+          : (plan.action === 'start_invoice') ? 'invoice'
+          : (plan.action === 'view_en_route') ? 'en_route'
+          : (plan.action === 'manage_retail') ? 'manage'
+          : (plan.action === 'show_todo') ? 'todo'
+          : (plan.action === 'chat') ? 'chat'
+          : 'unclear',
+    parameters: plan.parameters || {},
+    chatResponse: plan.chatResponse || ''
+  });
 });
 
 // ============ Roast Order API Endpoints ============
+
 
 // Parse roast order request using ChatGPT (with Gemini fallback)
 app.post('/api/roast-order/parse', async (req, res) => {

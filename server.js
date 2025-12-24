@@ -2861,7 +2861,9 @@ Respond ONLY with valid JSON (no markdown):
     // Direct search in column C for invoice numbers
     for (const row of invoiceRows) {
       if (row[2] && row[2].startsWith(`C-${customerPrefix}-`)) {
-        const num = parseInt(row[2].split('-')[2]);
+        // Extract just the first 4 digits after the prefix (handles corrupted data)
+        const afterPrefix = row[2].split('-')[2];
+        const num = parseInt(afterPrefix.substring(0, 4));
         if (!isNaN(num) && num > lastNumber) {
           lastNumber = num;
         }
@@ -7213,7 +7215,11 @@ async function generateAOUInvoiceForWeek(rowIndex) {
     const invoiceNumbers = (lastInvoiceResponse.data.values || [])
       .flat()
       .filter(n => n && n.toString().startsWith('C-AOU-'))
-      .map(n => parseInt(n.replace('C-AOU-', '')) || 0);
+      .map(n => {
+        // Extract just the first 4 digits after prefix (handles corrupted data)
+        const afterPrefix = n.toString().replace('C-AOU-', '');
+        return parseInt(afterPrefix.substring(0, 4)) || 0;
+      });
     
     const nextNumber = invoiceNumbers.length > 0 ? Math.max(...invoiceNumbers) + 1 : 1000;
     const invoiceNumber = `C-AOU-${nextNumber}`;

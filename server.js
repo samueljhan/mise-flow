@@ -1365,6 +1365,53 @@ async function applyCurrencyFormat(sheets, sheetName, columns, startRow = 3) {
   }
 }
 
+// Clear currency format from columns (set to plain number)
+async function clearCurrencyFormat(sheets, sheetName, columns, startRow = 3) {
+  try {
+    const spreadsheet = await sheets.spreadsheets.get({
+      spreadsheetId: SPREADSHEET_ID
+    });
+    const sheet = spreadsheet.data.sheets.find(s => s.properties.title === sheetName);
+    
+    if (!sheet) {
+      console.log(`Sheet "${sheetName}" not found for format clearing`);
+      return;
+    }
+    
+    const sheetId = sheet.properties.sheetId;
+    
+    // Build format requests to clear number format (use NUMBER type)
+    const requests = columns.map(colIndex => ({
+      repeatCell: {
+        range: {
+          sheetId: sheetId,
+          startRowIndex: startRow - 1,
+          startColumnIndex: colIndex,
+          endColumnIndex: colIndex + 1
+        },
+        cell: {
+          userEnteredFormat: {
+            numberFormat: {
+              type: 'NUMBER',
+              pattern: '#,##0.##'
+            }
+          }
+        },
+        fields: 'userEnteredFormat.numberFormat'
+      }
+    }));
+    
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: { requests }
+    });
+    
+    console.log(`🔢 Cleared currency format from ${sheetName} columns: ${columns.join(', ')}`);
+  } catch (error) {
+    console.error(`Clear format error for ${sheetName}:`, error.message);
+  }
+}
+
 // Apply Calibri 11 font to entire sheet
 async function applyStandardFont(sheets, sheetName) {
   try {
@@ -1433,7 +1480,9 @@ async function formatAllSheetsCurrency() {
     // Bank Transactions: Column E (Debit, index 4) and Column F (Credit, index 5)
     await applyCurrencyFormat(sheets, 'Bank Transactions', [4, 5], 3);
     
-    // Invoices: Column G (Adjustments, index 6) and Column H (Price, index 7)
+    // Invoices: Clear currency from weight columns (D, E, F = indices 3, 4, 5)
+    // Apply currency to Adjustments (G, index 6) and Price (H, index 7)
+    await clearCurrencyFormat(sheets, 'Invoices', [3, 4, 5], 3);
     await applyCurrencyFormat(sheets, 'Invoices', [6, 7], 3);
     
     // Retail Sales: Need to find columns dynamically based on header
@@ -3031,7 +3080,8 @@ app.post('/api/invoice/confirm', async (req, res) => {
       }
     });
 
-    // Apply currency format to Adjustments (G, index 6) and Price (H, index 7)
+    // Clear currency format from weight columns, apply to Adjustments and Price
+    await clearCurrencyFormat(sheets, 'Invoices', [3, 4, 5], 3);
     await applyCurrencyFormat(sheets, 'Invoices', [6, 7], 3);
 
     console.log(`✅ Invoice ${invoiceNumber} confirmed and recorded in spreadsheet`);
@@ -4926,22 +4976,10 @@ app.get('/api/todo', async (req, res) => {
       }
     });
     
-    // Check en route items needing attention
-    const needsTracking = enRouteCoffeeInventory.filter(c => !c.trackingNumber);
-    const needsDelivery = enRouteCoffeeInventory.filter(c => c.trackingNumber && !c.delivered);
-    
-    needsTracking.forEach(c => {
-      inventoryItems.push({ name: c.name, weight: c.weight, type: 'enroute', status: 'tracking', id: c.id });
-    });
-    
-    needsDelivery.forEach(c => {
-      inventoryItems.push({ name: c.name, weight: c.weight, type: 'enroute', status: 'delivery', id: c.id, tracking: c.trackingNumber });
-    });
-    
-    // Sort inventory items: critical vs low -> green vs roasted vs enroute -> alphabetical
+    // Sort inventory items: critical vs low -> green vs roasted -> alphabetical
     inventoryItems.sort((a, b) => {
-      const statusOrder = { critical: 0, low: 1, tracking: 2, delivery: 3 };
-      const typeOrder = { green: 0, roasted: 1, enroute: 2 };
+      const statusOrder = { critical: 0, low: 1 };
+      const typeOrder = { green: 0, roasted: 1 };
       
       // First sort by status
       if (statusOrder[a.status] !== statusOrder[b.status]) {
@@ -4955,31 +4993,25 @@ app.get('/api/todo', async (req, res) => {
       return a.name.localeCompare(b.name);
     });
     
-    // Add inventory overview if there are items
+    // Add inventory overview if there are items needing attention
     if (inventoryItems.length > 0) {
       const criticalCount = inventoryItems.filter(i => i.status === 'critical').length;
       const lowCount = inventoryItems.filter(i => i.status === 'low').length;
-      const trackingCount = inventoryItems.filter(i => i.status === 'tracking').length;
-      const deliveryCount = inventoryItems.filter(i => i.status === 'delivery').length;
       
       todoItems.push({
         type: 'inventory_overview',
         priority: criticalCount > 0 ? 'high' : 'medium',
-        title: 'Inventory Overview',
+        title: 'Inventory',
         description: inventoryItems.map(i => {
-          const typeLabel = i.type === 'green' ? 'green' : i.type === 'roasted' ? 'roasted' : 'en route';
+          const typeLabel = i.type === 'green' ? 'green' : 'roasted';
           if (i.status === 'critical') return `critical|${i.name} (${i.weight}lb ${typeLabel}) - Very Low`;
           if (i.status === 'low') return `low|${i.name} (${i.weight}lb ${typeLabel}) - Low`;
-          if (i.status === 'tracking') return `tracking|${i.name} (${i.weight}lb en route) - Needs tracking`;
-          if (i.status === 'delivery') return `delivery|${i.name} (${i.weight}lb en route) - Check delivery`;
           return `ok|${i.name} (${i.weight}lb ${typeLabel})`;
         }).join('\n'),
         items: inventoryItems,
         action: 'checkInventory',
         criticalCount,
-        lowCount,
-        trackingCount,
-        deliveryCount
+        lowCount
       });
     }
     
@@ -5154,18 +5186,17 @@ app.get('/api/todo', async (req, res) => {
       // Get last 3 weeks with data for summary
       const lastWeeksWithData = recentWeeksWithData.slice(-3).reverse();
       
-      if (recentWeeksWithoutData.length > 0 || lastWeeksWithData.length > 0) {
+      // Only show retail section if there are weeks needing data
+      if (recentWeeksWithoutData.length > 0) {
         let detailedDesc = '';
         
         // Add weeks needing data
-        if (recentWeeksWithoutData.length > 0) {
-          detailedDesc += `header|Needs Sales Data\n`;
-          recentWeeksWithoutData.forEach(week => {
-            detailedDesc += `missing|${week}\n`;
-          });
-        }
+        detailedDesc += `header|Needs Sales Data\n`;
+        recentWeeksWithoutData.forEach(week => {
+          detailedDesc += `missing|${week}\n`;
+        });
         
-        // Add recent weeks summary
+        // Add recent weeks summary for context
         if (lastWeeksWithData.length > 0) {
           detailedDesc += `header|Recent Weeks\n`;
           lastWeeksWithData.forEach(week => {
@@ -5176,12 +5207,10 @@ app.get('/api/todo', async (req, res) => {
         
         todoItems.push({
           type: 'retail_overview',
-          priority: recentWeeksWithoutData.length > 0 ? 'medium' : 'low',
-          title: 'Retail Overview',
+          priority: 'medium',
+          title: 'Retail Sales',
           description: detailedDesc.trim(),
-          summary: recentWeeksWithoutData.length > 0 
-            ? `${recentWeeksWithoutData.length} week(s) need sales data`
-            : `${lastWeeksWithData.length} recent week(s) recorded`,
+          summary: `${recentWeeksWithoutData.length} week(s) need sales data`,
           items: recentWeeksWithoutData,
           recentWeeks: lastWeeksWithData,
           action: 'manageRetail'
@@ -5189,6 +5218,116 @@ app.get('/api/todo', async (req, res) => {
       }
     } catch (e) {
       console.log('Could not check retail sales:', e.message);
+    }
+    
+    // 4. Check Roast Log for en route orders needing attention
+    try {
+      const roastLogResponse = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Roast Log!A:H',
+        valueRenderOption: 'UNFORMATTED_VALUE'
+      });
+      
+      const roastLogRows = roastLogResponse.data.values || [];
+      // Structure: B=Date Ordered(1), C=Tracking#(2), D=Archives(3), E=Ethiopia(4), F=Decaf(5), G=Arrival Date(6), H=Confirmation(7)
+      
+      const needsTracking = [];
+      const awaitingDelivery = [];
+      const needsConfirmation = [];
+      
+      for (let i = 2; i < roastLogRows.length; i++) {
+        const row = roastLogRows[i];
+        if (!row || !row[1]) continue; // Skip if no date ordered
+        
+        const dateOrdered = row[1];
+        const trackingNumber = row[2];
+        const archivesWeight = row[3] || 0;
+        const ethiopiaWeight = row[4] || 0;
+        const decafWeight = row[5] || 0;
+        const arrivalDate = row[6];
+        const confirmation = row[7];
+        
+        // Calculate total weight
+        const totalWeight = (parseFloat(archivesWeight) || 0) + (parseFloat(ethiopiaWeight) || 0) + (parseFloat(decafWeight) || 0);
+        if (totalWeight === 0) continue;
+        
+        // Build description of what's in this order
+        const products = [];
+        if (archivesWeight > 0) products.push(`${archivesWeight}lb Archives`);
+        if (ethiopiaWeight > 0) products.push(`${ethiopiaWeight}lb Ethiopia`);
+        if (decafWeight > 0) products.push(`${decafWeight}lb Decaf`);
+        const productDesc = products.join(', ');
+        
+        // Format date
+        let dateStr = '';
+        if (typeof dateOrdered === 'number') {
+          const excelEpoch = new Date(1899, 11, 30);
+          const date = new Date(excelEpoch.getTime() + dateOrdered * 24 * 60 * 60 * 1000);
+          dateStr = date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+        } else {
+          dateStr = String(dateOrdered);
+        }
+        
+        // Check status
+        if (!trackingNumber || String(trackingNumber).trim() === '') {
+          needsTracking.push({ dateOrdered: dateStr, products: productDesc, totalWeight, rowIndex: i + 1 });
+        } else if (!arrivalDate || String(arrivalDate).trim() === '') {
+          awaitingDelivery.push({ dateOrdered: dateStr, tracking: trackingNumber, products: productDesc, totalWeight, rowIndex: i + 1 });
+        } else if (!confirmation || String(confirmation).trim() === '') {
+          // Format arrival date
+          let arrivalStr = '';
+          if (typeof arrivalDate === 'number') {
+            const excelEpoch = new Date(1899, 11, 30);
+            const date = new Date(excelEpoch.getTime() + arrivalDate * 24 * 60 * 60 * 1000);
+            arrivalStr = date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+          } else {
+            arrivalStr = String(arrivalDate);
+          }
+          needsConfirmation.push({ dateOrdered: dateStr, arrivalDate: arrivalStr, products: productDesc, totalWeight, rowIndex: i + 1 });
+        }
+      }
+      
+      // Add en route section if there are any pending items
+      if (needsTracking.length > 0 || awaitingDelivery.length > 0 || needsConfirmation.length > 0) {
+        let detailedDesc = '';
+        
+        if (needsTracking.length > 0) {
+          detailedDesc += `header|Needs Tracking Number\n`;
+          needsTracking.forEach(item => {
+            detailedDesc += `tracking|Order ${item.dateOrdered}: ${item.products}\n`;
+          });
+        }
+        
+        if (awaitingDelivery.length > 0) {
+          detailedDesc += `header|Awaiting Delivery\n`;
+          awaitingDelivery.forEach(item => {
+            detailedDesc += `delivery|Order ${item.dateOrdered}: ${item.products}\n`;
+          });
+        }
+        
+        if (needsConfirmation.length > 0) {
+          detailedDesc += `header|Needs Confirmation\n`;
+          needsConfirmation.forEach(item => {
+            detailedDesc += `confirm|Arrived ${item.arrivalDate}: ${item.products}\n`;
+          });
+        }
+        
+        const totalPending = needsTracking.length + awaitingDelivery.length + needsConfirmation.length;
+        
+        todoItems.push({
+          type: 'en_route_overview',
+          priority: needsTracking.length > 0 ? 'high' : 'medium',
+          title: 'En Route Coffee',
+          description: detailedDesc.trim(),
+          summary: `${totalPending} order(s) need attention`,
+          needsTracking,
+          awaitingDelivery,
+          needsConfirmation,
+          action: 'viewEnRoute'
+        });
+      }
+    } catch (e) {
+      console.log('Could not check roast log:', e.message);
     }
     
     // Sort by priority: high, medium, low
@@ -7648,6 +7787,153 @@ app.get('/api/aou/invoices', async (req, res) => {
   }
 });
 
+// ============ FIX INVOICE SHEET FORMATTING ============
+// Endpoint to fix column formatting - weight columns should be plain numbers, not currency
+app.post('/api/invoices/fix-formatting', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Get sheet ID for Invoices
+    const spreadsheet = await sheets.spreadsheets.get({
+      spreadsheetId: SPREADSHEET_ID
+    });
+    const sheet = spreadsheet.data.sheets.find(s => s.properties.title === 'Invoices');
+    
+    if (!sheet) {
+      return res.status(404).json({ error: 'Invoices sheet not found' });
+    }
+    
+    const sheetId = sheet.properties.sheetId;
+    
+    // Build requests to:
+    // 1. Clear currency format from D, E, F (columns 3, 4, 5) - these are weight columns (lb)
+    // 2. Apply currency format to G, H (columns 6, 7) - Adjustments and Price
+    const requests = [
+      // Clear D (Archives Blend lb) - column index 3
+      {
+        repeatCell: {
+          range: {
+            sheetId: sheetId,
+            startRowIndex: 2, // Start from row 3 (0-indexed)
+            startColumnIndex: 3,
+            endColumnIndex: 4
+          },
+          cell: {
+            userEnteredFormat: {
+              numberFormat: {
+                type: 'NUMBER',
+                pattern: '#,##0.##'
+              }
+            }
+          },
+          fields: 'userEnteredFormat.numberFormat'
+        }
+      },
+      // Clear E (Ethiopia Gera lb) - column index 4
+      {
+        repeatCell: {
+          range: {
+            sheetId: sheetId,
+            startRowIndex: 2,
+            startColumnIndex: 4,
+            endColumnIndex: 5
+          },
+          cell: {
+            userEnteredFormat: {
+              numberFormat: {
+                type: 'NUMBER',
+                pattern: '#,##0.##'
+              }
+            }
+          },
+          fields: 'userEnteredFormat.numberFormat'
+        }
+      },
+      // Clear F (Colombia Decaf lb) - column index 5
+      {
+        repeatCell: {
+          range: {
+            sheetId: sheetId,
+            startRowIndex: 2,
+            startColumnIndex: 5,
+            endColumnIndex: 6
+          },
+          cell: {
+            userEnteredFormat: {
+              numberFormat: {
+                type: 'NUMBER',
+                pattern: '#,##0.##'
+              }
+            }
+          },
+          fields: 'userEnteredFormat.numberFormat'
+        }
+      },
+      // Apply currency to G (Adjustments) - column index 6
+      {
+        repeatCell: {
+          range: {
+            sheetId: sheetId,
+            startRowIndex: 2,
+            startColumnIndex: 6,
+            endColumnIndex: 7
+          },
+          cell: {
+            userEnteredFormat: {
+              numberFormat: {
+                type: 'CURRENCY',
+                pattern: '"$"#,##0.00'
+              }
+            }
+          },
+          fields: 'userEnteredFormat.numberFormat'
+        }
+      },
+      // Apply currency to H (Price) - column index 7
+      {
+        repeatCell: {
+          range: {
+            sheetId: sheetId,
+            startRowIndex: 2,
+            startColumnIndex: 7,
+            endColumnIndex: 8
+          },
+          cell: {
+            userEnteredFormat: {
+              numberFormat: {
+                type: 'CURRENCY',
+                pattern: '"$"#,##0.00'
+              }
+            }
+          },
+          fields: 'userEnteredFormat.numberFormat'
+        }
+      }
+    ];
+    
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: { requests }
+    });
+    
+    console.log('✅ Fixed Invoices sheet formatting: D,E,F = numbers (lb), G,H = currency ($)');
+    
+    res.json({ 
+      success: true, 
+      message: 'Fixed invoice formatting: weight columns (D,E,F) are now plain numbers, currency columns (G,H) are dollars'
+    });
+    
+  } catch (error) {
+    console.error('Fix formatting error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ============ ONE-TIME INVOICE RECONCILIATION ============
 // This endpoint populates the Invoices sheet and generates/uploads all PDFs to Google Drive
 
@@ -7910,7 +8196,9 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
       }
     });
     
-    // Apply currency format to Adjustments (G, index 6) and Price (H, index 7) columns
+    // Clear currency format from weight columns (D, E, F = indices 3, 4, 5)
+    // Apply currency format to Adjustments (G, index 6) and Price (H, index 7)
+    await clearCurrencyFormat(sheets, 'Invoices', [3, 4, 5], 3);
     await applyCurrencyFormat(sheets, 'Invoices', [6, 7], 3);
     
     console.log(`✅ Updated ${invoiceRows.length} invoices in sheet`);

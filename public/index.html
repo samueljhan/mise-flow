@@ -672,6 +672,10 @@
                         <strong>🔄 Reconcile Invoices</strong>
                         <span>One-time: Rebuild sheet & PDFs</span>
                     </div>
+                    <div class="example-prompt" onclick="fixInvoiceFormatting()" style="background: #2a3a4a; border: 1px solid #5bc0de;">
+                        <strong>🔧 Fix Invoice Formatting</strong>
+                        <span>Fix column D/E/F to pounds</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -3353,25 +3357,14 @@
                         // Group items by type
                         const greenItems = [];
                         const roastedItems = [];
-                        const enRouteItems = [];
                         
                         lines.forEach(line => {
                             if (line.includes('lb green)')) {
                                 greenItems.push(line);
                             } else if (line.includes('lb roasted)')) {
                                 roastedItems.push(line);
-                            } else if (line.includes('en route)') || line.includes('Needs tracking') || line.includes('Check delivery')) {
-                                enRouteItems.push(line);
                             }
                         });
-                        
-                        // Helper to clean up display text (remove type label since we have section headers)
-                        const cleanText = (text) => {
-                            return text
-                                .replace(/\s*\(\d+lb green\)/, '')
-                                .replace(/\s*\(\d+lb roasted\)/, '')
-                                .replace(/\s*\(\d+lb en route\)/, '');
-                        };
                         
                         // Extract weight for cleaner display
                         const formatItem = (text) => {
@@ -3379,9 +3372,7 @@
                             const weight = weightMatch ? weightMatch[1] : '0';
                             const nameMatch = text.match(/^(.+?)\s*\(/);
                             const name = nameMatch ? nameMatch[1] : text.split(' - ')[0];
-                            const status = text.includes('Very Low') ? 'Very Low, order soon' : text.includes('Low') ? 'Low' : 
-                                          text.includes('Needs tracking') ? 'Needs tracking' : 
-                                          text.includes('Check delivery') ? 'Check delivery' : '';
+                            const status = text.includes('Very Low') ? 'Very Low, order soon' : text.includes('Low') ? 'Low' : '';
                             return `${name} — ${weight}lb ${status ? '— ' + status : ''}`;
                         };
                         
@@ -3404,16 +3395,6 @@
                                 const text = textParts.join('|');
                                 const textColor = status === 'critical' ? '#ff6b6b' : '#999';
                                 html += `<div style="margin: 2px 0 2px 8px; color: ${textColor};">${formatItem(text)}</div>`;
-                            });
-                        }
-                        
-                        // Display en route section
-                        if (enRouteItems.length > 0) {
-                            html += `<div style="color: #ccc; font-weight: 600; margin: 10px 0 4px 0; font-size: 11px; text-transform: uppercase;">En Route</div>`;
-                            enRouteItems.forEach(line => {
-                                const [status, ...textParts] = line.split('|');
-                                const text = textParts.join('|');
-                                html += `<div style="margin: 2px 0 2px 8px; color: #999;">${formatItem(text)}</div>`;
                             });
                         }
                         
@@ -3450,6 +3431,27 @@
                                 html += `<div style="margin: 2px 0 2px 8px; color: #999;">${text}</div>`;
                             } else if (type === 'completed') {
                                 html += `<div style="margin: 2px 0 2px 8px; color: #999;">${text}</div>`;
+                            }
+                        });
+                        
+                        html += `</div>`;
+                    } else if (item.type === 'en_route_overview') {
+                        // Display en route orders with sections
+                        const lines = item.description.split('\n');
+                        html += `<div style="font-size: 13px;">`;
+                        
+                        lines.forEach(line => {
+                            const [type, ...textParts] = line.split('|');
+                            const text = textParts.join('|');
+                            
+                            if (type === 'header') {
+                                html += `<div style="color: #ccc; font-weight: 600; margin: 8px 0 4px 0; font-size: 11px; text-transform: uppercase;">${text}</div>`;
+                            } else if (type === 'tracking') {
+                                html += `<div style="margin: 2px 0 2px 8px; color: #f0ad4e;">📦 ${text}</div>`;
+                            } else if (type === 'delivery') {
+                                html += `<div style="margin: 2px 0 2px 8px; color: #5bc0de;">🚚 ${text}</div>`;
+                            } else if (type === 'confirm') {
+                                html += `<div style="margin: 2px 0 2px 8px; color: #5cb85c;">✓ ${text}</div>`;
                             }
                         });
                         
@@ -3501,6 +3503,8 @@
                     return 'showOutstandingInvoices()';
                 case 'retail_overview':
                     return 'manageRetail()';
+                case 'en_route_overview':
+                    return 'viewEnRoute()';
                 default:
                     return '';
             }
@@ -3514,6 +3518,8 @@
                     return 'Send Reminders';
                 case 'retail_overview':
                     return 'Manage Retail';
+                case 'en_route_overview':
+                    return 'View En Route';
                 default:
                     return 'Go →';
             }
@@ -3915,7 +3921,12 @@ Archives of Us Coffee`;
                     return;
                 }
                 
-                content.innerHTML = `✅ Drive connected (folder: ${testData.folder.name})<br>🔄 Running invoice reconciliation...`;
+                content.innerHTML = `✅ Drive connected (folder: ${testData.folder.name})<br>🔄 Fixing column formatting...`;
+                
+                // Fix formatting first
+                await fetch('/api/invoices/fix-formatting', { method: 'POST' });
+                
+                content.innerHTML = `✅ Drive connected<br>✅ Column formatting fixed<br>🔄 Running invoice reconciliation...`;
                 
                 // Now run reconciliation
                 const response = await fetch('/api/invoices/reconcile-all', { method: 'POST' });
@@ -3945,6 +3956,38 @@ Archives of Us Coffee`;
                 }
             } catch (error) {
                 console.error('Reconciliation error:', error);
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML = `<div style="color: #ff6b6b;">Error: ${error.message}</div>`;
+                }
+            }
+        }
+        
+        // Fix invoice sheet formatting only
+        async function fixInvoiceFormatting() {
+            const welcomeMsg = chatContainer.querySelector('.welcome-message');
+            if (welcomeMsg) welcomeMsg.remove();
+            
+            addMessage('Fix invoice column formatting', true);
+            addMessage('🔄 Fixing column formatting...', false);
+            
+            try {
+                const response = await fetch('/api/invoices/fix-formatting', { method: 'POST' });
+                const data = await response.json();
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                if (data.success) {
+                    content.innerHTML = `<div style="color: #90EE90;">✅ ${data.message}</div>`;
+                } else {
+                    content.innerHTML = `<div style="color: #ff6b6b;">Error: ${data.error}</div>`;
+                }
+            } catch (error) {
+                console.error('Fix formatting error:', error);
                 const messages = chatContainer.querySelectorAll('.message');
                 const lastMsg = messages[messages.length - 1];
                 if (lastMsg) {

@@ -928,15 +928,24 @@
         </div>
     </div>
 
-    <!-- Invoice Reminder Email Preview Modal -->
+    <!-- Invoice Reminder Modal -->
     <div class="modal-overlay" id="invoiceReminderModal">
         <div class="modal" style="max-width: 600px;">
-            <h3>📧 Invoice Reminder Email Preview</h3>
-            <input type="email" id="reminderEmailTo" placeholder="Recipient email">
-            <input type="text" id="reminderEmailSubject" placeholder="Subject">
-            <textarea id="reminderEmailBody" style="min-height: 250px;"></textarea>
-            <div style="color: #888; font-size: 12px; margin-top: 8px; padding: 8px; background: #2a2a2a; border-radius: 4px;">
-                📎 Invoice PDFs will be attached automatically
+            <h3>Invoice Reminder Email</h3>
+            <div style="margin-bottom: 12px;">
+                <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">To</label>
+                <input type="email" id="reminderEmailTo" placeholder="Recipient email" style="width: 100%;">
+            </div>
+            <div style="margin-bottom: 12px;">
+                <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Subject</label>
+                <input type="text" id="reminderEmailSubject" placeholder="Subject" style="width: 100%;">
+            </div>
+            <div style="margin-bottom: 12px;">
+                <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Message</label>
+                <textarea id="reminderEmailBody" style="min-height: 250px; width: 100%;"></textarea>
+            </div>
+            <div style="color: #90EE90; font-size: 12px; margin-bottom: 12px; padding: 8px; background: #2a3a2a; border-radius: 4px;">
+                Invoice PDFs will be attached automatically
             </div>
             <div class="modal-buttons">
                 <button class="modal-btn cancel" onclick="closeInvoiceReminderModal()">Cancel</button>
@@ -3307,7 +3316,7 @@
                             const weight = weightMatch ? weightMatch[1] : '0';
                             const nameMatch = text.match(/^(.+?)\s*\(/);
                             const name = nameMatch ? nameMatch[1] : text.split(' - ')[0];
-                            const status = text.includes('Very Low') ? 'Very Low' : text.includes('Low') ? 'Low' : 
+                            const status = text.includes('Very Low') ? 'Very Low, order soon' : text.includes('Low') ? 'Low' : 
                                           text.includes('Needs tracking') ? 'Needs tracking' : 
                                           text.includes('Check delivery') ? 'Check delivery' : '';
                             return `${name} — ${weight}lb ${status ? '— ' + status : ''}`;
@@ -3315,7 +3324,7 @@
                         
                         // Display green coffee section
                         if (greenItems.length > 0) {
-                            html += `<div style="color: #90EE90; font-weight: 600; margin: 8px 0 4px 0; font-size: 11px; text-transform: uppercase;">Green Coffee</div>`;
+                            html += `<div style="color: #ccc; font-weight: 600; margin: 8px 0 4px 0; font-size: 11px; text-transform: uppercase;">Green Coffee</div>`;
                             greenItems.forEach(line => {
                                 const [status, ...textParts] = line.split('|');
                                 const text = textParts.join('|');
@@ -3326,7 +3335,7 @@
                         
                         // Display roasted coffee section
                         if (roastedItems.length > 0) {
-                            html += `<div style="color: #DEB887; font-weight: 600; margin: 10px 0 4px 0; font-size: 11px; text-transform: uppercase;">Roasted Coffee</div>`;
+                            html += `<div style="color: #ccc; font-weight: 600; margin: 10px 0 4px 0; font-size: 11px; text-transform: uppercase;">Roasted Coffee</div>`;
                             roastedItems.forEach(line => {
                                 const [status, ...textParts] = line.split('|');
                                 const text = textParts.join('|');
@@ -3337,12 +3346,11 @@
                         
                         // Display en route section
                         if (enRouteItems.length > 0) {
-                            html += `<div style="color: #87CEEB; font-weight: 600; margin: 10px 0 4px 0; font-size: 11px; text-transform: uppercase;">En Route</div>`;
+                            html += `<div style="color: #ccc; font-weight: 600; margin: 10px 0 4px 0; font-size: 11px; text-transform: uppercase;">En Route</div>`;
                             enRouteItems.forEach(line => {
                                 const [status, ...textParts] = line.split('|');
                                 const text = textParts.join('|');
-                                const textColor = status === 'tracking' ? '#f0ad4e' : status === 'delivery' ? '#87CEEB' : '#999';
-                                html += `<div style="margin: 2px 0 2px 8px; color: ${textColor};">${formatItem(text)}</div>`;
+                                html += `<div style="margin: 2px 0 2px 8px; color: #999;">${formatItem(text)}</div>`;
                             });
                         }
                         
@@ -3357,7 +3365,7 @@
                             const text = textParts.join('|');
                             
                             if (type === 'customer') {
-                                html += `<div style="color: #f0ad4e; font-weight: 600; margin: 8px 0 4px 0; font-size: 12px;">${text}</div>`;
+                                html += `<div style="color: #ccc; font-weight: 600; margin: 8px 0 4px 0; font-size: 12px;">${text}</div>`;
                             } else if (type === 'invoice') {
                                 html += `<div style="margin: 2px 0 2px 12px; color: #999;">${text}</div>`;
                             }
@@ -3374,10 +3382,9 @@
                             const text = textParts.join('|');
                             
                             if (type === 'header') {
-                                const headerColor = text.includes('Needs') ? '#f0ad4e' : '#90EE90';
-                                html += `<div style="color: ${headerColor}; font-weight: 600; margin: 8px 0 4px 0; font-size: 11px; text-transform: uppercase;">${text}</div>`;
+                                html += `<div style="color: #ccc; font-weight: 600; margin: 8px 0 4px 0; font-size: 11px; text-transform: uppercase;">${text}</div>`;
                             } else if (type === 'missing') {
-                                html += `<div style="margin: 2px 0 2px 8px; color: #f0ad4e;">${text}</div>`;
+                                html += `<div style="margin: 2px 0 2px 8px; color: #999;">${text}</div>`;
                             } else if (type === 'completed') {
                                 html += `<div style="margin: 2px 0 2px 8px; color: #999;">${text}</div>`;
                             }
@@ -3470,7 +3477,7 @@
                     return;
                 }
                 
-                let html = `<div style="margin-bottom: 12px;"><strong>💰 Outstanding Invoices</strong></div>`;
+                let html = `<div style="margin-bottom: 12px;"><strong>Outstanding Invoices</strong></div>`;
                 
                 // Display grouped by customer
                 data.groupedInvoices.forEach((group, groupIndex) => {
@@ -3487,9 +3494,9 @@
                     html += `</div>`;
                     html += `<div>`;
                     if (hasEmail) {
-                        html += `<button class="action-btn" onclick="draftInvoiceReminder(${groupIndex})" style="font-size: 11px; padding: 6px 12px; background: #4a6741;">📧 Draft Reminder</button>`;
+                        html += `<button class="action-btn" onclick="draftInvoiceReminder(${groupIndex})" style="font-size: 11px; padding: 6px 12px; background: #4a6741;">Draft Reminder</button>`;
                     } else {
-                        html += `<button class="action-btn" style="font-size: 11px; padding: 6px 12px; background: #555; cursor: not-allowed;" disabled title="No email on file">📧 No Email</button>`;
+                        html += `<button class="action-btn" style="font-size: 11px; padding: 6px 12px; background: #555; cursor: not-allowed;" disabled title="No email on file">No Email</button>`;
                     }
                     html += `</div>`;
                     html += `</div>`;
@@ -3545,7 +3552,10 @@
             
             const invoiceCount = group.invoices.length;
             const totalFormatted = `$${group.totalAmount.toFixed(2)}`;
-            const invoiceList = group.invoices.map(inv => `${inv.invoiceNumber} - ${inv.date} - $${inv.amount.toFixed(2)}`).join('\n');
+            const invoiceList = group.invoices.map(inv => {
+                const amt = inv.amountNum || parseFloat(String(inv.amount).replace(/[$,]/g, '')) || 0;
+                return `${inv.invoiceNumber} - ${inv.date} - $${amt.toFixed(2)}`;
+            }).join('\n');
             
             // Populate modal
             document.getElementById('reminderEmailTo').value = group.customerEmails[0];
@@ -3556,6 +3566,8 @@
 This is a friendly reminder that you have ${invoiceCount} outstanding invoice${invoiceCount > 1 ? 's' : ''} totaling ${totalFormatted}:
 
 ${invoiceList}
+
+The invoice${invoiceCount > 1 ? 's are' : ' is'} attached to this email for your reference. If you've already sent payment, please disregard this message.
 
 Please let us know if you have any questions.
 
@@ -3586,7 +3598,7 @@ Archives of Us Coffee`;
             closeInvoiceReminderModal();
             
             try {
-                addMessage(`📝 Creating draft reminder for ${group.customerName}...`, false);
+                addMessage(`Creating draft reminder for ${group.customerName}...`, false);
                 
                 const response = await fetch('/api/invoices/draft-reminder', {
                     method: 'POST',

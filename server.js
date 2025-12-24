@@ -104,7 +104,7 @@ app.get('/auth/google', (req, res) => {
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/userinfo.email',
     'https://www.googleapis.com/auth/userinfo.profile',
-    'https://www.googleapis.com/auth/drive.file'
+    'https://www.googleapis.com/auth/drive'
   ];
 
   const url = oauth2Client.generateAuthUrl({
@@ -4069,6 +4069,14 @@ async function uploadInvoiceToDrive(pdfPath, invoiceNumber) {
     oauth2Client.setCredentials(userTokens);
     const drive = google.drive({ version: 'v3', auth: oauth2Client });
     
+    // Check if file exists
+    if (!fs.existsSync(pdfPath)) {
+      console.error(`❌ PDF file not found: ${pdfPath}`);
+      return null;
+    }
+    
+    console.log(`📤 Attempting to upload ${invoiceNumber} to folder ${INVOICE_DRIVE_FOLDER_ID}...`);
+    
     const fileMetadata = {
       name: `Invoice-${invoiceNumber}.pdf`,
       parents: [INVOICE_DRIVE_FOLDER_ID]
@@ -4085,15 +4093,24 @@ async function uploadInvoiceToDrive(pdfPath, invoiceNumber) {
       fields: 'id, webViewLink'
     });
     
-    console.log(`📤 Uploaded Invoice-${invoiceNumber}.pdf to Google Drive: ${response.data.id}`);
+    console.log(`✅ Uploaded Invoice-${invoiceNumber}.pdf to Google Drive: ${response.data.id}`);
     
     return {
       fileId: response.data.id,
       webViewLink: response.data.webViewLink
     };
   } catch (error) {
-    console.error('Drive upload error:', error.message);
-    return null;
+    console.error(`❌ Drive upload error for ${invoiceNumber}:`, error.message);
+    if (error.response) {
+      console.error('Drive API response:', error.response.data);
+    }
+    if (error.code === 403) {
+      console.error('⚠️ Permission denied - user may need to re-authenticate with Drive scope');
+    }
+    if (error.code === 404) {
+      console.error('⚠️ Folder not found or not accessible');
+    }
+    return { error: error.message };
   }
 }
 
@@ -4685,15 +4702,17 @@ app.get('/api/inventory', async (req, res) => {
 // Helper to get week date range string (MM/DD/YY-MM/DD/YY format, Thu-Wed) for a given date
 function getWeekRangeStringForRetail(date) {
   const d = new Date(date);
-  // Find the Thursday of the week (day 4)
+  // Find the Friday of the week (day 5)
+  // Week runs Friday to Thursday
   const day = d.getDay();
-  const diffToThursday = (day >= 4) ? (day - 4) : (day + 3);
-  const thursday = new Date(d);
-  thursday.setDate(d.getDate() - diffToThursday);
+  // Calculate days back to Friday (if today is Fri=5, diff=0; if Sat=6, diff=1; if Sun=0, diff=2; etc)
+  const diffToFriday = (day >= 5) ? (day - 5) : (day + 2);
+  const friday = new Date(d);
+  friday.setDate(d.getDate() - diffToFriday);
   
-  // Wednesday is 6 days after Thursday
-  const wednesday = new Date(thursday);
-  wednesday.setDate(thursday.getDate() + 6);
+  // Thursday is 6 days after Friday
+  const thursday = new Date(friday);
+  thursday.setDate(friday.getDate() + 6);
   
   const formatDate = (dt) => {
     const m = (dt.getMonth() + 1).toString().padStart(2, '0');
@@ -4702,10 +4721,10 @@ function getWeekRangeStringForRetail(date) {
     return `${m}/${dd}/${yy}`;
   };
   
-  return `${formatDate(thursday)}-${formatDate(wednesday)}`;
+  return `${formatDate(friday)}-${formatDate(thursday)}`;
 }
 
-// Helper to parse week range string to get start date (Thursday)
+// Helper to parse week range string to get start date (Friday)
 function parseWeekStartDateForRetail(weekStr) {
   if (!weekStr) return null;
   const parts = String(weekStr).split('-');
@@ -7638,7 +7657,15 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
       'Colombia Decaf': 12.54
     };
     
-    // Define all historical invoices
+    // Helper function to calculate due date (Net 15 = invoice date + 15 days)
+    const calculateDueDate = (invoiceDate, netDays = 15) => {
+      const parts = invoiceDate.split('/');
+      const date = new Date(parts[2], parts[0] - 1, parts[1]);
+      date.setDate(date.getDate() + netDays);
+      return date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: 'numeric' });
+    };
+    
+    // Define all historical invoices (dueDate will be calculated)
     const allInvoices = [
       // ===== AOU INVOICES =====
       // C-AOU-1000 and C-AOU-1001: Initial wholesale setup
@@ -7648,7 +7675,6 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
         customer: 'AOU Cafe (11/07/25-11/20/25)',
         customerCode: 'AOU',
         date: '11/17/2025',
-        dueDate: '12/01/2025',
         items: [
           { description: 'Archives Blend (wholesale setup)', quantity: 155, unitPrice: AT_COST['Archives Blend'], total: 155 * AT_COST['Archives Blend'] },
           { description: 'Ethiopia Gera Natural (wholesale setup)', quantity: 52.5, unitPrice: AT_COST['Ethiopia Gera Natural'], total: 52.5 * AT_COST['Ethiopia Gera Natural'] },
@@ -7665,7 +7691,6 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
         customer: 'AOU Cafe (11/21/25-11/27/25)',
         customerCode: 'AOU',
         date: '11/25/2025',
-        dueDate: '12/09/2025',
         items: [
           { description: 'Archives Blend (wholesale setup)', quantity: 155, unitPrice: AT_COST['Archives Blend'], total: 155 * AT_COST['Archives Blend'] },
           { description: 'Ethiopia Gera Natural (wholesale setup)', quantity: 52.5, unitPrice: AT_COST['Ethiopia Gera Natural'], total: 52.5 * AT_COST['Ethiopia Gera Natural'] },
@@ -7683,7 +7708,6 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
         customer: 'AOU Cafe (11/28/25-12/04/25)',
         customerCode: 'AOU',
         date: '12/24/2025',
-        dueDate: '01/07/2026',
         weekRange: '11/28/25-12/04/25',
         items: [
           { description: 'Archives Blend (wholesale) - Week 11/28-12/04', quantity: 130, unitPrice: AT_COST['Archives Blend'], total: 130 * AT_COST['Archives Blend'] },
@@ -7705,7 +7729,6 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
         customer: 'Ced Coffee & Donut',
         customerCode: 'CED',
         date: '11/30/2025',
-        dueDate: '11/30/2025',
         items: [
           { description: 'Archives Blend Coffee (units in lbs)', quantity: 50, unitPrice: 11.50, total: 575.00 },
           { description: 'Decaf Coffee (units in lbs)', quantity: 10, unitPrice: 13.00, total: 130.00 },
@@ -7722,7 +7745,6 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
         customer: 'Ced Coffee & Donut',
         customerCode: 'CED',
         date: '12/02/2025',
-        dueDate: '12/03/2025',
         items: [
           { description: 'Archives Blend Coffee (units in lbs)', quantity: 50, unitPrice: 11.50, total: 575.00 }
         ],
@@ -7737,7 +7759,6 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
         customer: 'Ced Coffee & Donut',
         customerCode: 'CED',
         date: '12/12/2025',
-        dueDate: '12/14/2025',
         items: [
           { description: 'Archives Blend Coffee (units in lbs)', quantity: 100, unitPrice: 11.50, total: 1150.00 }
         ],
@@ -7754,7 +7775,6 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
         customer: 'Dex Coffee',
         customerCode: 'DEX',
         date: '12/04/2025',
-        dueDate: '12/05/2025',
         items: [
           { description: 'Archives Blend (units in lbs)', quantity: 40, unitPrice: 12.00, total: 480.00 },
           { description: 'Decaf Coffee (units in lbs)', quantity: 10, unitPrice: 13.00, total: 130.00 },
@@ -7771,7 +7791,6 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
         customer: 'Dex Coffee',
         customerCode: 'DEX',
         date: '12/11/2025',
-        dueDate: '12/13/2025',
         items: [
           { description: 'Archives Blend (units in lbs)', quantity: 20, unitPrice: 12.00, total: 240.00 }
         ],
@@ -7786,7 +7805,6 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
         customer: 'Dex Coffee',
         customerCode: 'DEX',
         date: '12/24/2025',
-        dueDate: '01/07/2026',
         items: [
           { description: 'Archives Blend (units in lbs)', quantity: 20, unitPrice: 12.00, total: 240.00 }
         ],
@@ -7801,7 +7819,6 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
         customer: 'Dex Coffee',
         customerCode: 'DEX',
         date: '12/24/2025',
-        dueDate: '01/07/2026',
         items: [
           { description: 'Archives Blend (units in lbs)', quantity: 15, unitPrice: 12.00, total: 180.00 },
           { description: 'Ethiopia Gera Natural (units in lbs)', quantity: 5, unitPrice: 12.60, total: 63.00 }
@@ -7819,7 +7836,6 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
         customer: 'Junia Cafe',
         customerCode: 'JUN',
         date: '12/01/2025',
-        dueDate: '12/15/2025',
         items: [
           { description: 'Coffee (units in lbs)', quantity: 11, unitPrice: 14.00, total: 154.00 }
         ],
@@ -7830,6 +7846,11 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
         paid: 'x'
       }
     ];
+    
+    // Calculate due dates for all invoices (Net 15)
+    allInvoices.forEach(inv => {
+      inv.dueDate = calculateDueDate(inv.date, 15);
+    });
     
     const results = {
       generated: [],
@@ -7897,13 +7918,15 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
         
         // Upload to Google Drive
         const driveResult = await uploadInvoiceToDrive(pdfPath, inv.invoiceNumber);
-        if (driveResult) {
+        if (driveResult && driveResult.fileId) {
           results.uploaded.push({
             invoiceNumber: inv.invoiceNumber,
             fileId: driveResult.fileId,
             link: driveResult.webViewLink
           });
           console.log(`📤 Uploaded to Drive: ${inv.invoiceNumber}`);
+        } else if (driveResult && driveResult.error) {
+          results.errors.push({ invoiceNumber: inv.invoiceNumber, error: `Drive upload: ${driveResult.error}` });
         }
         
       } catch (err) {
@@ -7921,6 +7944,42 @@ app.post('/api/invoices/reconcile-all', async (req, res) => {
   } catch (error) {
     console.error('Reconciliation error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Test Google Drive connection
+app.get('/api/drive/test', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+    
+    // Try to get info about the invoices folder
+    const folderResponse = await drive.files.get({
+      fileId: INVOICE_DRIVE_FOLDER_ID,
+      fields: 'id, name, mimeType, capabilities'
+    });
+    
+    res.json({
+      success: true,
+      folder: folderResponse.data,
+      message: 'Drive connection working! Folder accessible.',
+      folderId: INVOICE_DRIVE_FOLDER_ID
+    });
+    
+  } catch (error) {
+    console.error('Drive test error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message,
+      code: error.code,
+      hint: error.code === 403 ? 'Please disconnect and reconnect Google account to grant Drive permissions' : 
+            error.code === 404 ? 'Folder not found or not shared with your account' : 
+            'Unknown error'
+    });
   }
 });
 

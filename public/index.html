@@ -3897,22 +3897,46 @@ Archives of Us Coffee`;
             if (welcomeMsg) welcomeMsg.remove();
             
             addMessage('Reconcile all invoices', true);
-            addMessage('🔄 Running invoice reconciliation... This will rebuild the Invoices sheet and upload all PDFs to Google Drive.', false);
+            addMessage('🔄 Testing Google Drive connection...', false);
             
             try {
+                // First test Drive connection
+                const testResponse = await fetch('/api/drive/test');
+                const testData = await testResponse.json();
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                let lastMsg = messages[messages.length - 1];
+                let content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                if (!testData.success) {
+                    content.innerHTML = `<div style="color: #ff6b6b;">❌ Drive connection failed: ${testData.error}</div>
+                        <div style="margin-top: 8px; color: #f0ad4e;">${testData.hint || ''}</div>
+                        <div style="margin-top: 12px;">Please disconnect and reconnect your Google account to grant Drive permissions.</div>`;
+                    return;
+                }
+                
+                content.innerHTML = `✅ Drive connected (folder: ${testData.folder.name})<br>🔄 Running invoice reconciliation...`;
+                
+                // Now run reconciliation
                 const response = await fetch('/api/invoices/reconcile-all', { method: 'POST' });
                 const data = await response.json();
                 
-                const messages = chatContainer.querySelectorAll('.message');
-                const lastMsg = messages[messages.length - 1];
-                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                // Refresh messages reference
+                const msgs = chatContainer.querySelectorAll('.message');
+                lastMsg = msgs[msgs.length - 1];
+                content = lastMsg?.querySelector('.message-content') || lastMsg;
                 
                 if (data.success) {
                     let html = '<div style="color: #90EE90; margin-bottom: 12px;">✅ Reconciliation Complete!</div>';
                     html += `<div style="margin-bottom: 8px;">Generated ${data.results.generated.length} PDFs</div>`;
                     html += `<div style="margin-bottom: 8px;">Uploaded ${data.results.uploaded.length} to Google Drive</div>`;
                     if (data.results.errors.length > 0) {
-                        html += `<div style="color: #ff6b6b;">Errors: ${data.results.errors.length}</div>`;
+                        html += `<div style="color: #ff6b6b; margin-top: 8px;">Errors (${data.results.errors.length}):</div>`;
+                        html += '<ul style="margin: 4px 0; padding-left: 20px; font-size: 12px;">';
+                        data.results.errors.forEach(err => {
+                            html += `<li style="color: #ff6b6b;">${err.invoiceNumber}: ${err.error}</li>`;
+                        });
+                        html += '</ul>';
                     }
                     html += '<div style="margin-top: 12px; font-size: 12px; color: #888;">You can now remove this button from the code.</div>';
                     content.innerHTML = html;

@@ -1184,6 +1184,9 @@
             const welcomeMsg = chatContainer.querySelector('.welcome-message');
             if (welcomeMsg) welcomeMsg.remove();
 
+            // Show user's request first
+            addMessage('Create a wholesale invoice', true);
+
             // Check if Google is connected first
             if (!googleConnected) {
                 addMessage(`<div style="color: #dc3545;">⚠️ Google account not connected</div>
@@ -1254,6 +1257,8 @@
             const welcomeMsg = chatContainer.querySelector('.welcome-message');
             if (welcomeMsg) welcomeMsg.remove();
 
+            // Show user's request first
+            addMessage('View all coffee stock levels', true);
             addMessage('Checking current coffee inventory...', false);
             
             try {
@@ -1335,6 +1340,8 @@
             // Clear any previous clarification context
             window.pendingClarification = null;
 
+            // Show user's request first
+            addMessage('Draft a new roast order', true);
             addMessage('Which coffee roasts do you want to order?<br><br><em style="color:#707070;">Example: "Archives Blend" or "Ethiopia Gera"</em>', false);
             
             waitingForRoastOrder = true;
@@ -2573,6 +2580,13 @@
         let tier1Prices = {};
         
         async function openManageCustomers() {
+            // Clear welcome message
+            const welcomeMsg = chatContainer.querySelector('.welcome-message');
+            if (welcomeMsg) welcomeMsg.remove();
+            
+            // Show user's request first
+            addMessage('View and add customers', true);
+            
             document.getElementById('manageCustomersModal').style.display = 'flex';
             await loadCustomersList();
         }
@@ -2779,6 +2793,13 @@
         // ============ Manage Inventory Modal ============
 
         function openManageInventory() {
+            // Clear welcome message
+            const welcomeMsg = chatContainer.querySelector('.welcome-message');
+            if (welcomeMsg) welcomeMsg.remove();
+            
+            // Show user's request first
+            addMessage('Edit green and roasted coffee', true);
+            
             loadInventory().then(() => {
                 renderInventoryModal();
                 document.getElementById('inventoryModal').style.display = 'flex';
@@ -3277,6 +3298,8 @@
             const welcomeMsg = chatContainer.querySelector('.welcome-message');
             if (welcomeMsg) welcomeMsg.remove();
             
+            // Show user's request first
+            addMessage('View pending tasks and alerts', true);
             addMessage('Checking pending tasks...', false);
             
             try {
@@ -3485,6 +3508,8 @@
             const welcomeMsg = chatContainer.querySelector('.welcome-message');
             if (welcomeMsg) welcomeMsg.remove();
             
+            // Show user's request first
+            addMessage('Send payment reminders', true);
             addMessage('Loading outstanding invoices...', false);
             
             try {
@@ -3737,6 +3762,8 @@ Archives of Us Coffee`;
             const welcomeMsg = chatContainer.querySelector('.welcome-message');
             if (welcomeMsg) welcomeMsg.remove();
             
+            // Show user's request first
+            addMessage('Sales and inventory analytics', true);
             addMessage('Generating forecast and analytics...', false);
             
             try {
@@ -3855,6 +3882,9 @@ Archives of Us Coffee`;
             // Clear welcome message
             const welcomeMsg = chatContainer.querySelector('.welcome-message');
             if (welcomeMsg) welcomeMsg.remove();
+            
+            // Show user's request first
+            addMessage('View and manage shipments', true);
             
             await loadInventory();
             
@@ -5773,41 +5803,62 @@ Archives of Us Coffee`;
                 return;
             }
             
-            try {
-                const response = await fetch('/api/chat/respond', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        completedAction: context,
-                        inventory: {
-                            green: greenCoffeeInventory,
-                            roasted: roastedCoffeeInventory,
-                            enRoute: enRouteCoffeeInventory
-                        }
-                    })
-                });
-                
-                const data = await response.json();
-                
-                // Add the conversational message with simple button options
-                let html = `<div style="margin-bottom: 12px;">${data.message || 'What else can I help with?'}</div>`;
-                html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
+            // Map context to casual message and button to exclude
+            const contextMap = {
+                'en_route_empty': { message: 'No shipments to track right now. What else can I help with?', exclude: 'en_route' },
+                'en_route_viewed': { message: 'What else can I help with?', exclude: 'en_route' },
+                'inventory_checked': { message: 'What else can I help with?', exclude: 'check_inventory' },
+                'inventory_updated': { message: 'Inventory saved. What else can I help with?', exclude: 'manage_inventory' },
+                'roast_order_confirmed': { message: 'Order confirmed! What else can I help with?', exclude: 'order_roast' },
+                'order_cancelled': { message: 'No problem! What else can I help with?', exclude: 'order_roast' },
+                'invoice_generated': { message: 'What else can I help with?', exclude: 'generate_invoice' },
+                'invoice_confirmed': { message: 'What else can I help with?', exclude: 'generate_invoice' },
+                'invoice_paid': { message: 'What else can I help with?', exclude: 'outstanding_invoices' },
+                'invoices_clear': { message: 'All invoices are paid! What else can I help with?', exclude: 'outstanding_invoices' },
+                'draft_reminder_created': { message: 'Draft created in Gmail. What else can I help with?', exclude: 'outstanding_invoices' },
+                'reminder_sent': { message: 'Reminder sent! What else can I help with?', exclude: 'outstanding_invoices' },
+                'tracking_updated': { message: 'Tracking updated. What else can I help with?', exclude: 'en_route' },
+                'delivery_confirmed': { message: 'Delivery confirmed and inventory updated. What else can I help with?', exclude: 'en_route' },
+                'delivery_cancelled': { message: 'No problem. What else can I help with?', exclude: 'en_route' },
+                'todo_empty': { message: 'All caught up! What else can I help with?', exclude: 'todo' },
+                'cancelled': { message: 'No problem! What else can I help with?', exclude: null },
+                'completed': { message: 'Done! What else can I help with?', exclude: null }
+            };
+            
+            const config = contextMap[context] || { message: 'What else can I help with?', exclude: null };
+            
+            // Build buttons, excluding the one that was just used
+            let html = `<div style="margin-bottom: 12px;">${config.message}</div>`;
+            html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
+            
+            if (config.exclude !== 'todo') {
                 html += '<button class="action-btn" onclick="showToDo()">📋 To Do</button>';
-                html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
-                html += '<button class="action-btn" onclick="openManageInventory()">Manage Inventory</button>';
-                html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
-                html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
-                html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
-                html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
-                html += '<button class="action-btn" onclick="openManageCustomers()">Manage Customers</button>';
-                html += '</div>';
-                
-                addMessage(html, false);
-                
-            } catch (error) {
-                console.error('Error getting follow-up:', error);
-                addFollowUpMessage();
             }
+            if (config.exclude !== 'check_inventory') {
+                html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
+            }
+            if (config.exclude !== 'manage_inventory') {
+                html += '<button class="action-btn" onclick="openManageInventory()">Manage Inventory</button>';
+            }
+            if (config.exclude !== 'order_roast') {
+                html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
+            }
+            if (config.exclude !== 'en_route') {
+                html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
+            }
+            if (config.exclude !== 'generate_invoice') {
+                html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
+            }
+            if (config.exclude !== 'manage_retail') {
+                html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
+            }
+            if (config.exclude !== 'manage_customers') {
+                html += '<button class="action-btn" onclick="openManageCustomers()">Manage Customers</button>';
+            }
+            html += '</div>';
+            
+            addMessage(html, false);
+        }
         }
         
         function addFollowUpButtons() {
@@ -5850,6 +5901,12 @@ Archives of Us Coffee`;
         let retailIncompleteWeeks = [];
         
         async function manageRetail() {
+            // Clear welcome message
+            const welcomeMsg = chatContainer.querySelector('.welcome-message');
+            if (welcomeMsg) welcomeMsg.remove();
+            
+            // Show user's request first
+            addMessage('Update retail bag sales', true);
             addMessage('Loading retail sales data...', false);
             
             try {

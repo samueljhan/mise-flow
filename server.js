@@ -4299,7 +4299,8 @@ app.get('/api/todo', async (req, res) => {
     try {
       const invoicesResponse = await sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: 'Invoices!A:F'
+        range: 'Invoices!A:F',
+        valueRenderOption: 'UNFORMATTED_VALUE'
       });
       
       const invoiceRows = invoicesResponse.data.values || [];
@@ -4310,11 +4311,20 @@ app.get('/api/todo', async (req, res) => {
         if (!row || !row[2]) continue; // Skip empty rows
         
         const invoiceNumber = row[2];
-        const amount = row[3];
+        // Parse amount - handle both numbers and formatted strings like "$1,150.00"
+        let amount = 0;
+        if (row[3] !== undefined && row[3] !== null) {
+          if (typeof row[3] === 'number') {
+            amount = row[3];
+          } else {
+            amount = parseFloat(String(row[3]).replace(/[$,]/g, '')) || 0;
+          }
+        }
         const paidDate = row[4];
         
-        // If no paid date, it's outstanding
-        if (!paidDate || paidDate.trim() === '') {
+        // If no paid date, it's outstanding (handle both string and number types)
+        const isPaid = paidDate !== undefined && paidDate !== null && paidDate !== '' && String(paidDate).trim() !== '';
+        if (!isPaid) {
           // Extract customer code from invoice number (e.g., C-ABC-1000 -> ABC)
           const codeMatch = invoiceNumber.match(/C-([A-Z]{3})-/);
           const customerCode = codeMatch ? codeMatch[1] : 'Unknown';
@@ -4349,15 +4359,11 @@ app.get('/api/todo', async (req, res) => {
         
         sortedCustomers.forEach(([name, invoices]) => {
           // Calculate total for this customer
-          const customerTotal = invoices.reduce((sum, inv) => {
-            const amt = parseFloat(inv.amount) || 0;
-            return sum + amt;
-          }, 0);
+          const customerTotal = invoices.reduce((sum, inv) => sum + inv.amount, 0);
           
           detailedDesc += `customer|${name} — $${customerTotal.toFixed(2)} total\n`;
           invoices.forEach(inv => {
-            const amt = parseFloat(inv.amount) || 0;
-            detailedDesc += `invoice|${inv.invoiceNumber} — $${amt.toFixed(2)} (${inv.date})\n`;
+            detailedDesc += `invoice|${inv.invoiceNumber} — $${inv.amount.toFixed(2)} (${inv.date})\n`;
           });
         });
         

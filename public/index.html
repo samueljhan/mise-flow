@@ -3389,9 +3389,18 @@
                     }
                     
                     html += `</div>`;
-                    html += `<button class="action-btn" onclick="${getToDoAction(item)}" style="margin-left: 10px; font-size: 11px; padding: 5px 10px;">`;
-                    html += `${getToDoButtonText(item.type)}`;
-                    html += `</button>`;
+                    
+                    // Different buttons for inventory_overview
+                    if (item.type === 'inventory_overview') {
+                        html += `<div style="display: flex; flex-direction: column; gap: 6px; margin-left: 10px;">`;
+                        html += `<button class="action-btn" onclick="startRoastOrder()" style="font-size: 11px; padding: 5px 10px;">Order Roast</button>`;
+                        html += `<button class="action-btn" onclick="openManageInventory()" style="font-size: 11px; padding: 5px 10px;">Manage</button>`;
+                        html += `</div>`;
+                    } else {
+                        html += `<button class="action-btn" onclick="${getToDoAction(item)}" style="margin-left: 10px; font-size: 11px; padding: 5px 10px;">`;
+                        html += `${getToDoButtonText(item.type)}`;
+                        html += `</button>`;
+                    }
                     html += `</div>`;
                     html += `</div>`;
                 });

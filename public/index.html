@@ -2611,10 +2611,17 @@
             
             try {
                 const response = await fetch('/api/customers/wholesale');
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    listDiv.innerHTML = '<div style="color: #ff6b6b;">Error loading customers: ' + (response.status === 401 ? 'Google not connected' : errorText) + '</div>';
+                    return;
+                }
+                
                 const data = await response.json();
                 
                 if (!data.success) {
-                    listDiv.innerHTML = '<div style="color: #ff6b6b;">Error loading customers</div>';
+                    listDiv.innerHTML = '<div style="color: #ff6b6b;">Error loading customers: ' + (data.error || 'Unknown error') + '</div>';
                     return;
                 }
                 
@@ -5845,7 +5852,7 @@ Archives of Us Coffee`;
             html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
             
             if (config.exclude !== 'todo') {
-                html += '<button class="action-btn" onclick="showToDo()">📋 To Do</button>';
+                html += '<button class="action-btn" onclick="showToDo()">To Do</button>';
             }
             if (config.exclude !== 'check_inventory') {
                 html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
@@ -5876,7 +5883,7 @@ Archives of Us Coffee`;
         function addFollowUpButtons() {
             // Just buttons, no message
             let html = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
-            html += '<button class="action-btn" onclick="showToDo()">📋 To Do</button>';
+            html += '<button class="action-btn" onclick="showToDo()">To Do</button>';
             html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
             html += '<button class="action-btn" onclick="openManageInventory()">Manage Inventory</button>';
             html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
@@ -5892,7 +5899,7 @@ Archives of Us Coffee`;
         function addFollowUpMessage() {
             let html = '<div style="margin-bottom: 12px;">What else can I help with?</div>';
             html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
-            html += '<button class="action-btn" onclick="showToDo()">📋 To Do</button>';
+            html += '<button class="action-btn" onclick="showToDo()">To Do</button>';
             html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
             html += '<button class="action-btn" onclick="openManageInventory()">Manage Inventory</button>';
             html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
@@ -6012,6 +6019,7 @@ Archives of Us Coffee`;
             
             // Action buttons
             html += '<div class="response-buttons" style="margin-top: 12px;">';
+            html += '<button class="action-btn" onclick="checkUninvoicedRetailWeeks()">Send Invoices</button>';
             html += '<button class="action-btn" onclick="showRetailProductsManager()">Manage Products</button>';
             html += '<button class="action-btn" onclick="showRecentRetailWeeks()">Recent Sales Weeks</button>';
             html += '<button class="action-btn" onclick="cancelRetailMode()">Done</button>';
@@ -6311,6 +6319,250 @@ Archives of Us Coffee`;
                 console.error('Error renaming product:', error);
                 addMessage(`Error: ${error.message}`, false);
             });
+        }
+        
+        // Check for uninvoiced retail weeks and show send invoice UI
+        async function checkUninvoicedRetailWeeks() {
+            const welcomeMsg = chatContainer.querySelector('.welcome-message');
+            if (welcomeMsg) welcomeMsg.remove();
+            
+            addMessage('Check AOU invoices to send', true);
+            addMessage('Checking for uninvoiced retail weeks...', false);
+            
+            try {
+                const response = await fetch('/api/retail/uninvoiced-weeks');
+                const data = await response.json();
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                if (!data.success) {
+                    content.innerHTML = `<div style="color: #ff6b6b;">Error: ${data.error}</div>`;
+                    return;
+                }
+                
+                const uninvoicedWeeks = data.uninvoicedWeeks || [];
+                
+                if (uninvoicedWeeks.length === 0) {
+                    let html = `<div style="color: #4a6741; margin-bottom: 12px;">✅ All invoices have been sent!</div>`;
+                    html += `<div style="color: #888;">You're up to date on retail sales payouts.</div>`;
+                    html += `<div class="response-buttons" style="margin-top: 12px;">`;
+                    html += `<button class="action-btn" onclick="manageRetail()">← Back to Retail</button>`;
+                    html += `<button class="action-btn" onclick="addFollowUpMessage()">Done</button>`;
+                    html += `</div>`;
+                    content.innerHTML = html;
+                    return;
+                }
+                
+                let html = `<strong>AOU Invoices to Send</strong><br><br>`;
+                html += `<div style="margin-bottom: 12px;">${uninvoicedWeeks.length} week(s) need invoicing:</div>`;
+                
+                uninvoicedWeeks.forEach((week, index) => {
+                    html += `<div style="background: #2a2a2a; padding: 12px; border-radius: 8px; margin-bottom: 8px;">`;
+                    html += `<div style="display: flex; justify-content: space-between; align-items: center;">`;
+                    html += `<div>`;
+                    html += `<div style="font-weight: 600;">${week.dateRange}</div>`;
+                    html += `<div style="color: #888; font-size: 12px;">Total: $${week.totalSales.toFixed(2)} | Net Payout: $${week.netPayout.toFixed(2)}</div>`;
+                    html += `</div>`;
+                    html += `<button class="action-btn" onclick="sendAOUInvoice(${week.rowIndex}, '${week.dateRange}')" style="font-size: 11px; padding: 6px 12px;">Generate Invoice</button>`;
+                    html += `</div>`;
+                    html += `</div>`;
+                });
+                
+                html += `<div class="response-buttons" style="margin-top: 12px;">`;
+                if (uninvoicedWeeks.length > 1) {
+                    html += `<button class="action-btn" onclick="sendAllAOUInvoices()">Send All (${uninvoicedWeeks.length})</button>`;
+                }
+                html += `<button class="action-btn" onclick="manageRetail()">← Back to Retail</button>`;
+                html += `</div>`;
+                
+                content.innerHTML = html;
+                
+                // Store for batch sending
+                window.uninvoicedWeeks = uninvoicedWeeks;
+                
+            } catch (error) {
+                console.error('Error checking uninvoiced weeks:', error);
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML = `<div style="color: #ff6b6b;">Error: ${error.message}</div>`;
+                }
+            }
+        }
+        
+        // Send a single AOU invoice
+        async function sendAOUInvoice(rowIndex, weekRange) {
+            addMessage(`Generate invoice for ${weekRange}`, true);
+            addMessage('Generating invoice...', false);
+            
+            try {
+                const response = await fetch('/api/retail/send-aou-invoice', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rowIndex, weekRange })
+                });
+                
+                const data = await response.json();
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                if (!data.success) {
+                    content.innerHTML = `<div style="color: #ff6b6b;">Error: ${data.error}</div>`;
+                    return;
+                }
+                
+                const invoice = data.invoice;
+                
+                let html = `<div style="color: #4a6741; margin-bottom: 12px;">✅ Invoice Generated!</div>`;
+                html += `<div style="background: #2a2a2a; padding: 12px; border-radius: 8px; margin-bottom: 12px;">`;
+                html += `<div><strong>${invoice.invoiceNumber}</strong></div>`;
+                html += `<div style="color: #888; font-size: 12px;">Week: ${weekRange}</div>`;
+                html += `<div style="color: #888; font-size: 12px;">Total: $${invoice.total.toFixed(2)}</div>`;
+                if (data.driveLink) {
+                    html += `<div style="margin-top: 8px;"><a href="${data.driveLink}" target="_blank" style="color: #5bc0de;">View in Google Drive →</a></div>`;
+                }
+                html += `</div>`;
+                
+                // Email option
+                if (data.emails && data.emails.length > 0) {
+                    html += `<div style="margin-bottom: 12px;">`;
+                    html += `<div style="color: #888; font-size: 12px; margin-bottom: 4px;">Send to: ${data.emails.join(', ')}</div>`;
+                    html += `</div>`;
+                    html += `<div class="response-buttons">`;
+                    html += `<button class="action-btn" onclick="emailAOUInvoice('${invoice.invoiceNumber}', '${weekRange}', ${invoice.total}, ${JSON.stringify(data.emails).replace(/"/g, '&quot;')})">Create Email Draft</button>`;
+                    html += `<button class="action-btn" onclick="checkUninvoicedRetailWeeks()">Next Invoice</button>`;
+                    html += `<button class="action-btn" onclick="addFollowUpMessage()">Done</button>`;
+                    html += `</div>`;
+                } else {
+                    html += `<div class="response-buttons">`;
+                    html += `<button class="action-btn" onclick="checkUninvoicedRetailWeeks()">Next Invoice</button>`;
+                    html += `<button class="action-btn" onclick="addFollowUpMessage()">Done</button>`;
+                    html += `</div>`;
+                }
+                
+                content.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Error sending AOU invoice:', error);
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML = `<div style="color: #ff6b6b;">Error: ${error.message}</div>`;
+                }
+            }
+        }
+        
+        // Send all uninvoiced AOU invoices
+        async function sendAllAOUInvoices() {
+            const weeks = window.uninvoicedWeeks || [];
+            if (weeks.length === 0) {
+                addMessage('No invoices to send.', false);
+                return;
+            }
+            
+            addMessage(`Generate all ${weeks.length} invoices`, true);
+            addMessage(`Generating ${weeks.length} invoices...`, false);
+            
+            const results = [];
+            const errors = [];
+            
+            for (const week of weeks) {
+                try {
+                    const response = await fetch('/api/retail/send-aou-invoice', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ rowIndex: week.rowIndex, weekRange: week.dateRange })
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (data.success) {
+                        results.push({ week: week.dateRange, invoice: data.invoice });
+                    } else {
+                        errors.push({ week: week.dateRange, error: data.error });
+                    }
+                } catch (err) {
+                    errors.push({ week: week.dateRange, error: err.message });
+                }
+            }
+            
+            const messages = chatContainer.querySelectorAll('.message');
+            const lastMsg = messages[messages.length - 1];
+            const content = lastMsg?.querySelector('.message-content') || lastMsg;
+            
+            let html = '';
+            
+            if (results.length > 0) {
+                html += `<div style="color: #4a6741; margin-bottom: 12px;">✅ Generated ${results.length} invoice(s)!</div>`;
+                html += `<div style="font-size: 12px; margin-bottom: 12px;">`;
+                results.forEach(r => {
+                    html += `<div style="margin: 4px 0;">${r.invoice.invoiceNumber} — ${r.week} — $${r.invoice.total.toFixed(2)}</div>`;
+                });
+                html += `</div>`;
+            }
+            
+            if (errors.length > 0) {
+                html += `<div style="color: #ff6b6b; margin-bottom: 12px;">${errors.length} error(s):</div>`;
+                html += `<div style="font-size: 12px; margin-bottom: 12px;">`;
+                errors.forEach(e => {
+                    html += `<div style="margin: 4px 0; color: #ff6b6b;">${e.week}: ${e.error}</div>`;
+                });
+                html += `</div>`;
+            }
+            
+            html += `<div class="response-buttons">`;
+            html += `<button class="action-btn" onclick="manageRetail()">← Back to Retail</button>`;
+            html += `<button class="action-btn" onclick="addFollowUpMessage()">Done</button>`;
+            html += `</div>`;
+            
+            content.innerHTML = html;
+        }
+        
+        // Create email draft for AOU invoice
+        async function emailAOUInvoice(invoiceNumber, weekRange, total, emails) {
+            addMessage(`Create email draft for ${invoiceNumber}`, true);
+            addMessage('Creating email draft...', false);
+            
+            try {
+                const response = await fetch('/api/retail/email-aou-invoice', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ invoiceNumber, weekRange, total, emails })
+                });
+                
+                const data = await response.json();
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                if (data.success) {
+                    let html = `<div style="color: #4a6741; margin-bottom: 12px;">✅ Email draft created in Gmail!</div>`;
+                    html += `<div style="color: #888; font-size: 12px; margin-bottom: 12px;">To: ${emails.join(', ')}</div>`;
+                    html += `<div class="response-buttons">`;
+                    html += `<button class="action-btn" onclick="checkUninvoicedRetailWeeks()">Check More Invoices</button>`;
+                    html += `<button class="action-btn" onclick="addFollowUpMessage()">Done</button>`;
+                    html += `</div>`;
+                    content.innerHTML = html;
+                } else {
+                    content.innerHTML = `<div style="color: #ff6b6b;">Error: ${data.error}</div>`;
+                }
+                
+            } catch (error) {
+                console.error('Error creating email draft:', error);
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML = `<div style="color: #ff6b6b;">Error: ${error.message}</div>`;
+                }
+            }
         }
         
         function cancelRetailMode() {

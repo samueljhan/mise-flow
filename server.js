@@ -2367,6 +2367,12 @@ If no valid emails found, return: {"emails": []}`;
 // Get all wholesale customers with details
 app.get('/api/customers/wholesale', async (req, res) => {
   try {
+    // If customerDirectory is empty, try to load it first
+    if (Object.keys(customerDirectory).length === 0 && userTokens) {
+      console.log('📋 Customer directory empty, reloading...');
+      await loadCustomerDirectoryFromSheets();
+    }
+    
     // Get all existing codes
     const existingCodes = Object.values(customerDirectory).map(c => c.code);
     
@@ -6753,10 +6759,12 @@ app.get('/api/retail/data', async (req, res) => {
         const totalVal = row[totalColIndex];
         const feeVal = row[totalColIndex + 1];
         const netVal = row[totalColIndex + 2];
+        const invoiceSentVal = row[totalColIndex + 3]; // Column J = Invoice Sent (3 columns after Total)
         
         weekData.totalSales = (totalVal !== undefined && totalVal !== null && totalVal !== '') ? parseFloat(totalVal) : 0;
         weekData.transactionFee = (feeVal !== undefined && feeVal !== null && feeVal !== '') ? parseFloat(feeVal) : 0;
         weekData.netPayout = (netVal !== undefined && netVal !== null && netVal !== '') ? parseFloat(netVal) : 0;
+        weekData.invoiceSent = invoiceSentVal && String(invoiceSentVal).trim().toLowerCase() === 'x';
       }
       
       weeks.push(weekData);
@@ -7654,6 +7662,247 @@ app.post('/api/aou/reconciliation', async (req, res) => {
     
   } catch (error) {
     console.error('AOU reconciliation error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get retail weeks that have sales data but haven't been invoiced
+app.get('/api/retail/uninvoiced-weeks', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Read Retail Sales sheet
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Retail Sales!A1:K100',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const rows = response.data.values || [];
+    
+    // Find sales header row
+    let salesHeaderRow = -1;
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i]?.[1] && String(rows[i][1]).toLowerCase().includes('retail sales') && !String(rows[i][1]).toLowerCase().includes('total')) {
+        salesHeaderRow = i + 1; // Header is next row
+        break;
+      }
+    }
+    
+    if (salesHeaderRow === -1) {
+      return res.json({ success: true, uninvoicedWeeks: [] });
+    }
+    
+    const headerRow = rows[salesHeaderRow] || [];
+    
+    // Find column indices
+    let totalColIndex = -1;
+    for (let i = 0; i < headerRow.length; i++) {
+      if (headerRow[i] === 'Total Retail Sales') {
+        totalColIndex = i;
+        break;
+      }
+    }
+    
+    // Invoice Sent is column J (index 9)
+    const invoiceSentColIndex = 9;
+    
+    // Get current week (can't invoice current week)
+    const currentWeekRange = getWeekRangeStringForRetail(new Date());
+    
+    // Find weeks with sales data that haven't been invoiced
+    const uninvoicedWeeks = [];
+    
+    for (let i = salesHeaderRow + 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || !row[1]) continue;
+      
+      const dateRange = row[1];
+      const totalSales = parseFloat(row[totalColIndex]) || 0;
+      const netPayout = parseFloat(row[totalColIndex + 2]) || 0;
+      const invoiceSent = row[invoiceSentColIndex] && String(row[invoiceSentColIndex]).trim().toLowerCase() === 'x';
+      
+      // Skip current week, weeks without sales, and already invoiced weeks
+      if (dateRange === currentWeekRange) continue;
+      if (totalSales <= 0) continue;
+      if (invoiceSent) continue;
+      
+      uninvoicedWeeks.push({
+        rowIndex: i + 1, // 1-indexed for Google Sheets
+        dateRange,
+        totalSales,
+        netPayout
+      });
+    }
+    
+    res.json({ success: true, uninvoicedWeeks });
+    
+  } catch (error) {
+    console.error('Error getting uninvoiced weeks:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Generate and confirm AOU invoice for a retail week
+app.post('/api/retail/send-aou-invoice', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { rowIndex, weekRange } = req.body;
+  
+  if (!rowIndex || !weekRange) {
+    return res.status(400).json({ error: 'Row index and week range required' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    const drive = google.drive({ version: 'v3', auth: oauth2Client });
+    
+    // Generate the invoice
+    const invoiceData = await generateAOUInvoiceForWeek(rowIndex);
+    
+    if (!invoiceData) {
+      return res.status(400).json({ error: 'Could not generate invoice - check if retail sales data exists' });
+    }
+    
+    // Generate PDF
+    const pdfFilename = `Invoice-${invoiceData.invoiceNumber}.pdf`;
+    const pdfPath = path.join(invoicesDir, pdfFilename);
+    
+    // Calculate due date
+    const invoiceDate = new Date();
+    const dueDate = new Date(invoiceDate);
+    dueDate.setDate(dueDate.getDate() + 15);
+    
+    await generateInvoicePDF(pdfPath, {
+      ...invoiceData,
+      dueDate: dueDate.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' })
+    });
+    
+    // Upload to Google Drive
+    let driveLink = null;
+    try {
+      const uploadResult = await uploadInvoiceToDrive(pdfPath, invoiceData.invoiceNumber);
+      if (uploadResult && uploadResult.webViewLink) {
+        driveLink = uploadResult.webViewLink;
+      }
+    } catch (driveError) {
+      console.log('Drive upload failed:', driveError.message);
+    }
+    
+    // Mark the retail week as invoiced (column J)
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Retail Sales!J${rowIndex}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [['x']]
+      }
+    });
+    
+    // Get AOU email from customer directory
+    const aouCustomer = customerDirectory['archives of us'] || customerDirectory['aou'];
+    const emails = aouCustomer?.emails || [];
+    
+    res.json({
+      success: true,
+      invoice: invoiceData,
+      pdfPath,
+      driveLink,
+      emails,
+      weekRange
+    });
+    
+  } catch (error) {
+    console.error('Error sending AOU invoice:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create email draft for AOU invoice
+app.post('/api/retail/email-aou-invoice', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { invoiceNumber, weekRange, total, emails } = req.body;
+  
+  if (!invoiceNumber || !emails || emails.length === 0) {
+    return res.status(400).json({ error: 'Invoice number and emails required' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+    
+    const pdfPath = path.join(invoicesDir, `Invoice-${invoiceNumber}.pdf`);
+    
+    if (!fs.existsSync(pdfPath)) {
+      return res.status(404).json({ error: 'Invoice PDF not found' });
+    }
+    
+    const pdfContent = fs.readFileSync(pdfPath);
+    const pdfBase64 = pdfContent.toString('base64');
+    
+    const subject = `Archives of Us Coffee Invoice ${invoiceNumber} (${weekRange})`;
+    const body = `Hi,
+
+Please find attached your invoice ${invoiceNumber} for the retail period ${weekRange}.
+
+Invoice Total: $${parseFloat(total).toFixed(2)}
+
+Thank you for your business!
+
+Best regards,
+Archives of Us Coffee`;
+
+    const boundary = 'boundary_' + Date.now();
+    const emailContent = [
+      `To: ${emails.join(', ')}`,
+      `Subject: ${subject}`,
+      'MIME-Version: 1.0',
+      `Content-Type: multipart/mixed; boundary="${boundary}"`,
+      '',
+      `--${boundary}`,
+      'Content-Type: text/plain; charset="UTF-8"',
+      '',
+      body,
+      '',
+      `--${boundary}`,
+      `Content-Type: application/pdf; name="Invoice-${invoiceNumber}.pdf"`,
+      'Content-Transfer-Encoding: base64',
+      `Content-Disposition: attachment; filename="Invoice-${invoiceNumber}.pdf"`,
+      '',
+      pdfBase64,
+      `--${boundary}--`
+    ].join('\r\n');
+
+    const encodedMessage = Buffer.from(emailContent)
+      .toString('base64')
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+
+    await gmail.users.drafts.create({
+      userId: 'me',
+      requestBody: {
+        message: {
+          raw: encodedMessage
+        }
+      }
+    });
+
+    res.json({ success: true, message: 'Draft created in Gmail' });
+    
+  } catch (error) {
+    console.error('Error creating email draft:', error);
     res.status(500).json({ error: error.message });
   }
 });

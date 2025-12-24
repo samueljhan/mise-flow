@@ -2981,26 +2981,6 @@ app.get('/api/invoices/outstanding', async (req, res) => {
     });
     
     const rows = response.data.values || [];
-
-    // Google Sheets often returns dates as serial numbers when using UNFORMATTED_VALUE.
-    // Convert those to a human-readable MM/DD/YYYY for display.
-    const formatSheetDateForDisplay = (value) => {
-      if (value === undefined || value === null || value === '') return '';
-
-      // Serial number (days since 1899-12-30)
-      if (typeof value === 'number' && Number.isFinite(value)) {
-        const base = Date.UTC(1899, 11, 30);
-        const ms = base + Math.round(value) * 24 * 60 * 60 * 1000;
-        const d = new Date(ms);
-        const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
-        const dd = String(d.getUTCDate()).padStart(2, '0');
-        const yyyy = d.getUTCFullYear();
-        return `${mm}/${dd}/${yyyy}`;
-      }
-
-      // Already formatted string
-      return String(value);
-    };
     const invoicesByCustomer = {};
     
     for (let i = 2; i < rows.length; i++) {
@@ -3056,7 +3036,7 @@ app.get('/api/invoices/outstanding', async (req, res) => {
         
         invoicesByCustomer[customerKey].invoices.push({
           rowIndex: i + 1,
-          date: formatSheetDateForDisplay(row[1]),
+          date: row[1],
           invoiceNumber,
           amount: amountDisplay,
           amountNum

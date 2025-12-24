@@ -3633,7 +3633,16 @@ Archives of Us Coffee`;
                 });
                 
                 const result = await response.json();
-                
+
+                // Handle Google not connected
+                if (response.status === 401) {
+                    handleGoogleDisconnected();
+                    addMessage(`<div style="color: #dc3545;">⚠️ ${result.error || 'Google account not connected.'}</div>
+                        <div style="margin-top: 8px;">Please connect your Google account to create reminder drafts.</div>
+                        <button class="action-btn" style="margin-top: 12px;" onclick="connectGoogle('email')">Connect Google Account</button>`, false);
+                    return;
+                }
+
                 // Update the last message with the result
                 const messages = chatContainer.querySelectorAll('.message');
                 const lastMsg = messages[messages.length - 1];
@@ -4863,7 +4872,17 @@ Archives of Us Coffee`;
                 } else {
                     html = formatResponseHTML(data.response);
                 }
-                
+
+                // Quick replies (optional)
+                if (data.quickReplies && Array.isArray(data.quickReplies) && data.quickReplies.length > 0) {
+                    html += '<div class="response-buttons" style="margin-top: 10px; flex-wrap: wrap;">';
+                    data.quickReplies.slice(0,3).forEach(q => {
+                        const safe = String(q).replace(/'/g, "\'");
+                        html += `<button class="action-btn" onclick="sendQuickReply('${safe}')">${q}</button>`;
+                    });
+                    html += '</div>';
+                }
+
                 // Check if we should show follow-up menu
                 if (data.showFollowUp) {
                     window.currentConversationState = 'none';
@@ -5191,6 +5210,11 @@ Archives of Us Coffee`;
                 return;
             }
             alert('Sheet update feature - coming soon!');
+        }
+        function sendQuickReply(text) {
+            // Insert the suggestion into the input and send
+            userInput.value = text;
+            sendMessage();
         }
 
         function sendMessage() {

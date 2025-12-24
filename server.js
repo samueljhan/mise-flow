@@ -3684,37 +3684,62 @@ app.post('/api/process', async (req, res) => {
       });
     }
     
-    // Build comprehensive context for Gemini - let it handle everything else
-    const customerDetails = Object.entries(customers).map(([name, data]) => 
-      `${name} (${data.code}): ${data.email || 'no email'}`
-    ).join('\n');
     
-    const roastedSummary = roastedCoffeeInventory.length > 0 
-      ? roastedCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb`).join('\n')
+    // Build concise context for the LLM (inventory + customers)
+    const customerDetails = Object.entries(customerDirectory).map(([key, data]) =>
+      `${data.name} (${data.code}): ${(data.emails && data.emails.length) ? data.emails.join(', ') : 'no email'} | pricing: ${data.pricingTable || 'unknown'}`
+    ).join('
+');
+
+    const roastedSummary = roastedCoffeeInventory.length > 0
+      ? roastedCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb`).join('
+')
       : '- None in stock';
-      
+
     const greenSummary = greenCoffeeInventory.length > 0
-      ? greenCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb`).join('\n')
+      ? greenCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb`).join('
+')
       : '- None in stock';
-      
+
     const enRouteSummary = enRouteCoffeeInventory.length > 0
-      ? enRouteCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb (tracking: ${c.trackingNumber || 'none'})`).join('\n')
+      ? enRouteCoffeeInventory.map(c => `- ${c.name}: ${c.weight} lb (tracking: ${c.trackingNumber || 'none'})`).join('
+')
       : '- Nothing en route';
-    
-    // Gemini-first approach - let it handle everything with full context
+
+    // LLM intent + response (ChatGPT first, Gemini fallback)
     let intentData = null;
-    try {
-      const intentPrompt = `You are Mise, an AI assistant for Archives of Us Coffee inventory and invoicing.
 
-=== CURRENT DATA ===
+    const systemPrompt = `You are Mise Flow, an inventory + invoicing copilot for a coffee roaster.
+Be natural, helpful, and brief. You can reference the provided data, but do NOT invent items or numbers.
 
+You must decide the user's intent and (when appropriate) propose the next action the UI should take.
+
+Return JSON ONLY with this schema:
+{
+  "intent": "check_inventory|create_invoice|order_roast|view_en_route|manage_retail|show_todo|show_forecast|general|decline",
+  "response": "string (what to say to the user, 1-4 sentences)",
+  "uiAction": "check_inventory|start_invoice|order_roast|view_en_route|manage_retail|show_todo|show_forecast|none",
+  "customer": "string|null",
+  "items": [{"quantity": number, "product": "string"}],
+  "isKnownCustomer": true|false|null,
+  "needsFollowUp": true|false,
+  "quickReplies": ["string", "string", "string"]
+}
+
+Rules:
+- If the user asks about inventory, respond with the actual inventory from the data below.
+- If user wants an invoice but customer/product/quantity is missing, ask a single clarifying question and set needsFollowUp=true, uiAction="none".
+- If user is cancelling, set intent="decline".
+- quickReplies should be 0-3 short suggestions relevant to the user's intent.`;
+
+    const userPrompt = `=== CURRENT DATA ===
 ROASTED COFFEE INVENTORY:
 ${roastedSummary}
 
-GREEN COFFEE INVENTORY (unroasted beans):
+GREEN COFFEE INVENTORY:
 ${greenSummary}
 
-EN ROUTE (shipped, not yet delivered):
+EN ROUTE:
 ${enRouteSummary}
 
 CUSTOMERS:
@@ -3724,195 +3749,172 @@ CONVERSATION STATE: ${conversationState || 'none'}
 
 === USER MESSAGE ===
 "${text}"
+`;
 
-=== YOUR TASK ===
-Understand what the user wants and respond helpfully.
-
-AVAILABLE ACTIONS:
-- "check_inventory": User asking about stock levels, inventory, how much of something
-- "create_invoice": User wants to invoice a customer (needs customer + quantity + product)
-- "order_roast": User wants to place a roast order
-- "view_en_route": User asking about shipments or tracking
-- "decline": User canceling, saying never mind, changing topics, or saying no/cancel/nope
-- "general": Conversation, questions, or unclear requests
-
-GUIDELINES:
-1. If user asks about inventory, provide the ACTUAL DATA from above
-2. If user asks about "green coffee" or "unroasted", show GREEN COFFEE data
-3. If unclear, ask a clarifying question - don't say you don't understand
-4. If you ask a question, set needsFollowUp to true
-
-Respond with JSON only:
-{
-  "intent": "<action>",
-  "response": "<your helpful response with actual data>",
-  "customer": "<customer name or null>",
-  "items": [{"quantity": <number>, "product": "<product>"}],
-  "isKnownCustomer": <true/false>,
-  "needsFollowUp": <true if you asked a question>
-}`;
-
-      const intentText = await callGeminiWithRetry(intentPrompt, { temperature: 0.2, maxRetries: 2 });
-      console.log('🤖 Gemini response:', intentText);
-      
-      const cleanJson = intentText.replace(/```json\n?|\n?```/g, '').trim();
-      intentData = JSON.parse(cleanJson);
-      
+    try {
+      const intentText = await callChatGPT(systemPrompt, userPrompt, { temperature: 0.2, maxTokens: 800, jsonMode: true });
+      intentData = JSON.parse(intentText);
     } catch (error) {
-      if (error.message === 'RATE_LIMITED') {
-        console.log('⚠️ Rate limited');
+      console.error('ChatGPT intent error:', error.message || error);
+
+      try {
+        const fallbackPrompt = systemPrompt + "
+
+" + userPrompt;
+        const intentText = await callGeminiWithRetry(fallbackPrompt, { temperature: 0.2, maxRetries: 2 });
+        const cleanJson = intentText.replace(/```json
+?|
+?```/g, '').trim();
+        intentData = JSON.parse(cleanJson);
+      } catch (e) {
+        if (String(e.message || '').includes('RATE_LIMITED')) {
+          return res.json({
+            response: "I'm a bit busy right now. Please try again in a moment.",
+            action: 'rate_limited',
+            showFollowUp: true
+          });
+        }
+        console.error('Gemini fallback error:', e);
         return res.json({
-          response: "I'm a bit busy right now. Please try again in a moment.",
-          action: 'rate_limited',
-          showFollowUp: true
-        });
-      } else {
-        console.error('Gemini error:', error);
-        return res.json({
-          response: "Sorry, I didn't get that. What can I help you with?",
+          response: "I'm having trouble understanding. Could you try rephrasing?",
           action: 'unclear',
-          showFollowUp: false
+          showFollowUp: true
         });
       }
     }
-    
-    if (!intentData) {
-      return res.json({ 
-        response: "Sorry, I didn't get that. What can I help you with?",
+
+    if (!intentData || !intentData.intent) {
+      return res.json({
+        response: "I'm not sure I caught that. What would you like to do?",
         action: 'unclear',
-        showFollowUp: false
+        showFollowUp: true
       });
     }
-    
-    // Use Gemini's response directly - it has all the data
+
+    const intent = intentData.intent;
+    const llmResponse = intentData.response || "Okay.";
+    const needsFollowUp = !!intentData.needsFollowUp;
+    const uiAction = intentData.uiAction || 'none';
+    const quickReplies = Array.isArray(intentData.quickReplies) ? intentData.quickReplies.slice(0, 3) : [];
+
+    // Helper to map to existing frontend actions
+    const uiActionMap = {
+      check_inventory: 'check_inventory',
+      start_invoice: 'start_invoice',
+      order_roast: 'order_roast',
+      view_en_route: 'view_en_route',
+      manage_retail: 'manage_retail',
+      show_todo: 'show_todo',
+      show_forecast: 'show_forecast',
+      none: 'none'
+    };
+
+    // Attach quick replies if the frontend wants to render them
+    const responsePayload = {
+      response: llmResponse,
+      action: uiActionMap[uiAction] || 'none',
+      showFollowUp: !needsFollowUp,
+      quickReplies
+    };
+
     const intent = intentData.intent;
     const geminiResponse = intentData.response;
     const needsFollowUp = intentData.needsFollowUp;
     
-    // Handle check_inventory - use Gemini's response
+    
+    // Decide which existing UI action to trigger
     if (intent === 'check_inventory') {
       return res.json({
-        response: geminiResponse,
+        response: null,
         action: 'check_inventory',
-        showFollowUp: !needsFollowUp
+        showFollowUp: !needsFollowUp,
+        quickReplies
       });
     }
-    
-    // Handle decline
-    if (intent === 'decline') {
-      return res.json({
-        response: geminiResponse || "No problem!",
-        action: 'declined',
-        showFollowUp: true
-      });
-    }
-    
-    // Handle general questions
-    if (intent === 'general') {
-      return res.json({
-        response: geminiResponse,
-        action: 'general',
-        showFollowUp: !needsFollowUp
-      });
-    }
-    
-    // Handle order_roast intent
-    if (intent === 'order_roast') {
-      return res.json({
-        response: geminiResponse || "I can help you order roasts. Use the 'Order Roast' button to get started, or tell me which coffee you'd like to order.",
-        action: 'order_roast',
-        showFollowUp: !needsFollowUp
-      });
-    }
-    
-    // Handle view_en_route intent
-    if (intent === 'view_en_route') {
-      return res.json({
-        response: geminiResponse || "Use the 'En Route' button to view your shipped orders and tracking information.",
-        action: 'view_en_route',
-        showFollowUp: !needsFollowUp
-      });
-    }
-    
-    // Handle confirm (when user types "yes" to add new customer)
-    if (intent === 'confirm' && conversationState === 'waiting_for_new_customer_confirmation') {
-      return res.json({
-        response: "Great! Adding them now...",
-        action: 'confirm_add_customer',
-        showFollowUp: false
-      });
-    }
-    
-    // Handle different intents
-    if (intentData.intent === 'create_invoice') {
-      // Check if we have customer and at least one item
-      const hasItems = intentData.items && intentData.items.length > 0;
-      const hasLegacyFormat = intentData.quantity && intentData.product;
-      
-      if (intentData.customer && (hasItems || hasLegacyFormat)) {
-        // Do our own customer matching (don't rely on Gemini's isKnownCustomer)
-        const customerLower = intentData.customer.toLowerCase();
-        const matchedKnownCustomer = getKnownCustomers().find(c => 
-          c.toLowerCase() === customerLower ||
-          customerLower.includes(c.toLowerCase()) ||
-          c.toLowerCase().includes(customerLower)
-        );
-        
-        const isActuallyKnown = !!matchedKnownCustomer;
-        const customerToUse = matchedKnownCustomer || intentData.customer;
-        
-        console.log(`📋 Customer check: "${intentData.customer}" → matched: "${matchedKnownCustomer}", isKnown: ${isActuallyKnown}`);
-        
-        // Build items description for response
-        let itemsDesc = '';
-        if (hasItems) {
-          itemsDesc = intentData.items.map(item => `${item.quantity} lbs ${item.product}`).join(', ');
-        } else {
-          itemsDesc = `${intentData.quantity} ${intentData.unit || 'lbs'} of ${intentData.product}`;
-        }
-        
-        if (!isActuallyKnown) {
-          // Unknown customer - ask to add
-          return res.json({
-            response: `I don't recognize "${intentData.customer}" as a current wholesale client. Would you like me to add them as a new customer?`,
-            action: 'confirm_new_customer',
-            pendingInvoice: {
-              customer: intentData.customer,
-              originalText: text
-            },
-            showFollowUp: false
-          });
-        } else {
-          // Known customer - proceed with invoice, pass original text for accurate parsing
-          return res.json({
-            response: `Got it! Creating an invoice for ${customerToUse}: ${itemsDesc}. Processing now...`,
-            action: 'create_invoice',
-            invoiceDetails: text,  // Pass original text for multi-item parsing
-            showFollowUp: false
-          });
-        }
-      } else {
-        // Missing info for invoice
+
+    if (intent === 'create_invoice') {
+      // If missing key details, just chat back; otherwise open the invoice flow
+      const hasCustomer = !!intentData.customer;
+      const hasItems = Array.isArray(intentData.items) && intentData.items.length > 0 && intentData.items.every(i => i.quantity && i.product);
+      if (!hasCustomer || !hasItems) {
         return res.json({
-          response: geminiResponse || "I'd be happy to create an invoice! Could you provide the customer name, quantity, and product?",
-          action: 'need_more_info',
-          showFollowUp: false
+          response: llmResponse,
+          action: 'none',
+          showFollowUp: false,
+          quickReplies
         });
       }
+      return res.json({
+        response: null,
+        action: 'start_invoice',
+        showFollowUp: false,
+        quickReplies,
+        invoiceHint: { customer: intentData.customer, items: intentData.items }
+      });
     }
-    
-    // For other intents, return Gemini's response
-    res.json({ 
-      response: geminiResponse || "How can I help you today?",
-      action: intent,
-      data: intentData,
-      showFollowUp: !needsFollowUp
+
+    if (intent === 'order_roast') {
+      return res.json({
+        response: null,
+        action: 'order_roast',
+        showFollowUp: false,
+        quickReplies
+      });
+    }
+
+    if (intent === 'view_en_route') {
+      return res.json({
+        response: null,
+        action: 'view_en_route',
+        showFollowUp: false,
+        quickReplies
+      });
+    }
+
+    if (intent === 'manage_retail') {
+      return res.json({
+        response: null,
+        action: 'manage_retail',
+        showFollowUp: false,
+        quickReplies
+      });
+    }
+
+    if (intent === 'show_todo') {
+      return res.json({
+        response: null,
+        action: 'show_todo',
+        showFollowUp: false,
+        quickReplies
+      });
+    }
+
+    if (intent === 'show_forecast') {
+      return res.json({
+        response: null,
+        action: 'show_forecast',
+        showFollowUp: false,
+        quickReplies
+      });
+    }
+
+    if (intent === 'decline') {
+      return res.json({
+        response: llmResponse || "No problem.",
+        action: 'declined',
+        showFollowUp: true,
+        quickReplies
+      });
+    }
+
+    // Default: conversational reply
+    return res.json({
+      response: llmResponse,
+      action: 'none',
+      showFollowUp: !needsFollowUp,
+      quickReplies
     });
-  } catch (error) {
-    console.error('AI processing error:', error);
-    res.status(500).json({ error: 'Failed to process', details: error.message });
-  }
-});
+
 
 // ============ WebSocket for Transcription ============
 

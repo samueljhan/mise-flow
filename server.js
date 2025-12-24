@@ -756,22 +756,30 @@ let customerDirectory = {
   'archives of us': {
     name: 'Archives of Us',
     code: 'AOU',
-    emails: ['nick@archivesofus.com']
+    emails: ['nick@archivesofus.com'],
+    pricingTable: 'at-cost',
+    dateSince: '01/01/23'
   },
   'ced': {
     name: 'CED',
     code: 'CED',
-    emails: ['songs0519@hotmail.com']
+    emails: ['songs0519@hotmail.com'],
+    pricingTable: 'wholesale ced',
+    dateSince: '03/15/23'
   },
   'dex': {
     name: 'Dex',
     code: 'DEX',
-    emails: ['dexcoffeeusa@gmail.com', 'lkusacorp@gmail.com']
+    emails: ['dexcoffeeusa@gmail.com', 'lkusacorp@gmail.com'],
+    pricingTable: 'wholesale dex',
+    dateSince: '06/01/23'
   },
   'junia': {
     name: 'Junia',
     code: 'JUN',
-    emails: ['hello@juniacafe.com']
+    emails: ['hello@juniacafe.com'],
+    pricingTable: 'wholesale junia',
+    dateSince: '09/01/24'
   }
 };
 
@@ -800,12 +808,21 @@ function getCustomerEmails(customerName) {
 }
 
 // Helper to add/update customer
-function addOrUpdateCustomer(name, code, emails = []) {
+function addOrUpdateCustomer(name, code, emails = [], pricingTable = 'wholesale tier 1', dateSince = null) {
   const lower = name.toLowerCase();
+  
+  // Format date if not provided
+  if (!dateSince) {
+    const today = new Date();
+    dateSince = `${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getDate()).padStart(2, '0')}/${String(today.getFullYear()).slice(-2)}`;
+  }
+  
   customerDirectory[lower] = {
     name: name,
     code: code.toUpperCase(),
-    emails: emails
+    emails: emails,
+    pricingTable: pricingTable,
+    dateSince: dateSince
   };
 }
 
@@ -1914,6 +1931,255 @@ If no valid emails found, return: {"emails": []}`;
     } else {
       return res.status(404).json({ error: 'Customer not found' });
     }
+  }
+});
+
+// ============ Wholesale Customer Management ============
+
+// Get all wholesale customers with details
+app.get('/api/customers/wholesale', async (req, res) => {
+  try {
+    // Get all existing codes
+    const existingCodes = Object.values(customerDirectory).map(c => c.code);
+    
+    // Build customer list with last invoice dates
+    const customers = [];
+    let lastInvoiceDates = {};
+    
+    // Try to get last invoice dates from Google Sheets
+    if (userTokens) {
+      try {
+        oauth2Client.setCredentials(userTokens);
+        const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+        
+        const invoicesResponse = await sheets.spreadsheets.values.get({
+          spreadsheetId: SPREADSHEET_ID,
+          range: 'Invoices!A:F'
+        });
+        
+        const invoiceRows = invoicesResponse.data.values || [];
+        
+        // Find last invoice date for each customer (column C = customer, column D = date)
+        for (let i = 1; i < invoiceRows.length; i++) {
+          const row = invoiceRows[i];
+          const customer = (row[2] || '').toString().toLowerCase();
+          const date = row[3] || '';
+          
+          if (customer && date) {
+            // Keep track of the most recent date for each customer
+            if (!lastInvoiceDates[customer] || date > lastInvoiceDates[customer]) {
+              lastInvoiceDates[customer] = date;
+            }
+          }
+        }
+      } catch (err) {
+        console.log('Could not fetch invoice dates:', err.message);
+      }
+    }
+    
+    // Get Tier 1 prices for custom pricing preview
+    let tier1Prices = {};
+    if (userTokens) {
+      try {
+        oauth2Client.setCredentials(userTokens);
+        const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+        
+        const pricingResponse = await sheets.spreadsheets.values.get({
+          spreadsheetId: SPREADSHEET_ID,
+          range: 'Wholesale Pricing!A:D'
+        });
+        
+        const pricingRows = pricingResponse.data.values || [];
+        let inTier1Section = false;
+        
+        for (let i = 0; i < pricingRows.length; i++) {
+          const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
+          
+          if (cellB === 'wholesale tier 1') {
+            inTier1Section = true;
+            continue;
+          }
+          
+          if (inTier1Section && cellB.startsWith('wholesale')) {
+            break; // End of Tier 1 section
+          }
+          
+          if (inTier1Section && pricingRows[i][1] && pricingRows[i][3]) {
+            const coffeeName = pricingRows[i][1].toString();
+            const price = parseFloat(pricingRows[i][3]) || 0;
+            if (coffeeName && price > 0 && !coffeeName.toLowerCase().includes('decaf')) {
+              tier1Prices[coffeeName] = price;
+            }
+          }
+        }
+      } catch (err) {
+        console.log('Could not fetch Tier 1 prices:', err.message);
+      }
+    }
+    
+    // Build customer list
+    for (const [key, customer] of Object.entries(customerDirectory)) {
+      const lastInvoice = lastInvoiceDates[key] || lastInvoiceDates[customer.name.toLowerCase()] || null;
+      
+      // Format pricing table name nicely
+      let pricingTableDisplay = 'Tier 1';
+      if (customer.pricingTable) {
+        const pt = customer.pricingTable.toLowerCase();
+        if (pt === 'at-cost') pricingTableDisplay = 'At-Cost';
+        else if (pt.includes('dex')) pricingTableDisplay = 'Dex';
+        else if (pt.includes('ced')) pricingTableDisplay = 'CED';
+        else if (pt.includes('junia')) pricingTableDisplay = 'Junia';
+        else if (pt.includes('tier 1')) pricingTableDisplay = 'Tier 1';
+        else pricingTableDisplay = customer.pricingTable;
+      }
+      
+      customers.push({
+        name: customer.name,
+        code: customer.code,
+        emails: customer.emails || [],
+        pricingTable: pricingTableDisplay,
+        dateSince: customer.dateSince || 'N/A',
+        lastInvoice: lastInvoice || 'No invoices'
+      });
+    }
+    
+    // Sort by name
+    customers.sort((a, b) => a.name.localeCompare(b.name));
+    
+    res.json({ 
+      success: true, 
+      customers, 
+      existingCodes,
+      tier1Prices
+    });
+    
+  } catch (error) {
+    console.error('Error fetching wholesale customers:', error);
+    res.status(500).json({ error: 'Failed to fetch customers: ' + error.message });
+  }
+});
+
+// Add new wholesale customer
+app.post('/api/customers/wholesale/add', async (req, res) => {
+  const { name, code, emails, pricingType, pricingTable, priceRatio } = req.body;
+  
+  if (!name || !code) {
+    return res.status(400).json({ error: 'Name and code are required' });
+  }
+  
+  if (code.length !== 3 || !/^[A-Z]{3}$/.test(code)) {
+    return res.status(400).json({ error: 'Code must be exactly 3 uppercase letters' });
+  }
+  
+  // Check for duplicate code
+  const existingCodes = Object.values(customerDirectory).map(c => c.code);
+  if (existingCodes.includes(code)) {
+    return res.status(400).json({ error: 'Code already in use' });
+  }
+  
+  // Check for duplicate name
+  const lower = name.toLowerCase();
+  if (customerDirectory[lower]) {
+    return res.status(400).json({ error: 'Customer already exists' });
+  }
+  
+  try {
+    let finalPricingTable = pricingTable || 'wholesale tier 1';
+    let pricingCreated = false;
+    
+    // If custom pricing, create a new pricing table in Google Sheets
+    if (pricingType === 'custom' && priceRatio && userTokens) {
+      oauth2Client.setCredentials(userTokens);
+      const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+      
+      // Read Tier 1 prices to calculate custom prices
+      const pricingResponse = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Wholesale Pricing!A:D'
+      });
+      
+      const pricingRows = pricingResponse.data.values || [];
+      
+      // Find end of existing pricing tables and Colombia Decaf position
+      let lastTableEndRow = pricingRows.length;
+      let tier1Coffees = [];
+      let inTier1Section = false;
+      
+      for (let i = 0; i < pricingRows.length; i++) {
+        const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
+        
+        if (cellB === 'wholesale tier 1') {
+          inTier1Section = true;
+          continue;
+        }
+        
+        if (inTier1Section && cellB.startsWith('wholesale')) {
+          inTier1Section = false;
+          continue;
+        }
+        
+        if (inTier1Section && pricingRows[i][1] && pricingRows[i][3]) {
+          const coffeeName = pricingRows[i][1].toString();
+          const price = parseFloat(pricingRows[i][3]) || 0;
+          if (coffeeName && price > 0) {
+            tier1Coffees.push({ name: coffeeName, price: price });
+          }
+        }
+      }
+      
+      // Create new pricing table data
+      const customTableName = `Wholesale ${name}`;
+      const newTableData = [
+        ['', '', '', ''],
+        ['', customTableName, '', ''],
+        ['', 'Coffee', '', 'Price']
+      ];
+      
+      tier1Coffees.forEach(coffee => {
+        const customPrice = Math.round(coffee.price * priceRatio * 100) / 100;
+        newTableData.push(['', coffee.name, '', customPrice]);
+      });
+      
+      // Append the new table to the end of the sheet
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Wholesale Pricing!A:D',
+        valueInputOption: 'USER_ENTERED',
+        requestBody: {
+          values: newTableData
+        }
+      });
+      
+      finalPricingTable = customTableName.toLowerCase();
+      pricingCreated = true;
+      
+      console.log(`✅ Created custom pricing table "${customTableName}" with ratio ${priceRatio}×`);
+    }
+    
+    // Format date as MM/DD/YY
+    const today = new Date();
+    const dateSince = `${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getDate()).padStart(2, '0')}/${String(today.getFullYear()).slice(-2)}`;
+    
+    // Add to customer directory
+    customerDirectory[lower] = {
+      name: name,
+      code: code,
+      emails: emails || [],
+      pricingTable: finalPricingTable,
+      dateSince: dateSince
+    };
+    
+    console.log(`✅ Added wholesale customer: ${name} (${code}), pricing: ${finalPricingTable}`);
+    
+    res.json({ 
+      success: true, 
+      pricingCreated,
+      message: `Added ${name} (${code}) as wholesale customer`
+    });
+    
+  } catch (error) {
+    console.error('Error adding wholesale customer:', error);
+    res.status(500).json({ error: 'Failed to add customer: ' + error.message });
   }
 });
 

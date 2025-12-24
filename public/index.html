@@ -652,6 +652,10 @@
                         <strong>🛒 Manage Retail</strong>
                         <span>Update retail coffee bag sales</span>
                     </div>
+                    <div class="example-prompt" onclick="openManageCustomers()">
+                        <strong>👥 Manage Customers</strong>
+                        <span>View and add wholesale customers</span>
+                    </div>
                     <div class="example-prompt" onclick="showForecast()">
                         <strong>📊 Forecast</strong>
                         <span>Sales analytics and inventory predictions</span>
@@ -820,6 +824,83 @@
             <div class="modal-buttons">
                 <button class="modal-btn cancel" onclick="closeAddRoastedCoffeeModal()">Cancel</button>
                 <button class="modal-btn send" onclick="confirmAddRoastedCoffee()">Add Coffee</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Manage Wholesale Customers Modal -->
+    <div class="modal-overlay" id="manageCustomersModal">
+        <div class="modal" style="max-width: 750px; max-height: 90vh; overflow-y: auto;">
+            <h3>👥 Wholesale Customers</h3>
+            <p style="color: #888; margin-bottom: 15px; font-size: 12px;">Manage wholesale customers and their pricing tables.</p>
+            
+            <div id="customersList" style="margin-bottom: 20px;">
+                <div style="color: #888;">Loading customers...</div>
+            </div>
+            
+            <div class="modal-buttons">
+                <button class="modal-btn send" onclick="openAddCustomerModal()" style="margin-right: auto;">+ Add Customer</button>
+                <button class="modal-btn cancel" onclick="closeManageCustomersModal()">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add New Customer Modal -->
+    <div class="modal-overlay" id="addCustomerModal">
+        <div class="modal" style="max-width: 550px; max-height: 90vh; overflow-y: auto;">
+            <h3>Add New Wholesale Customer</h3>
+            <p style="color: #888; margin-bottom: 15px; font-size: 12px;">Create a new wholesale customer with unique invoice code and pricing.</p>
+            
+            <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+                <div style="flex: 2;">
+                    <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Customer Name</label>
+                    <input type="text" id="newCustomerName" placeholder="e.g., New Coffee Shop" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;">
+                </div>
+                <div style="flex: 1;">
+                    <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Invoice Code (3 letters)</label>
+                    <input type="text" id="newCustomerCode" placeholder="ABC" maxlength="3" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px; text-transform: uppercase;" oninput="validateCustomerCode()">
+                    <div id="codeValidation" style="font-size: 11px; margin-top: 4px; color: #888;"></div>
+                </div>
+            </div>
+            
+            <div style="margin-bottom: 12px;">
+                <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Email Address(es)</label>
+                <input type="text" id="newCustomerEmails" placeholder="email@example.com, email2@example.com" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;">
+                <div style="font-size: 10px; color: #666; margin-top: 4px;">Separate multiple emails with commas</div>
+            </div>
+            
+            <div style="margin-bottom: 12px;">
+                <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Pricing</label>
+                <select id="newCustomerPricingType" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px; margin-bottom: 8px;" onchange="updatePricingTypeUI()">
+                    <option value="existing">Link to Existing Pricing Table</option>
+                    <option value="custom">Create Custom Pricing</option>
+                </select>
+            </div>
+            
+            <div id="existingPricingSection">
+                <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Select Pricing Table</label>
+                <select id="newCustomerPricingTable" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;">
+                    <option value="tier1">Wholesale Tier 1</option>
+                    <option value="dex">Wholesale Dex</option>
+                    <option value="ced">Wholesale CED</option>
+                    <option value="junia">Wholesale Junia</option>
+                </select>
+            </div>
+            
+            <div id="customPricingSection" style="display: none;">
+                <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Price Ratio vs Tier 1</label>
+                <div style="display: flex; gap: 8px; align-items: center; margin-bottom: 8px;">
+                    <input type="number" id="newCustomerPriceRatio" placeholder="0.95" step="0.01" min="0.5" max="1.5" value="1.00" style="width: 100px; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;" oninput="updateCustomPricingPreview()">
+                    <span style="color: #888; font-size: 12px;">× Tier 1 prices</span>
+                </div>
+                <div id="customPricingPreview" style="background: #2a2a2a; padding: 10px; border-radius: 4px; font-size: 12px; color: #888;">
+                    Enter a ratio to see price examples
+                </div>
+            </div>
+            
+            <div class="modal-buttons" style="margin-top: 20px;">
+                <button class="modal-btn cancel" onclick="closeAddCustomerModal()">Cancel</button>
+                <button class="modal-btn send" onclick="confirmAddCustomer()">Add Customer</button>
             </div>
         </div>
     </div>
@@ -2441,6 +2522,216 @@
             } catch (error) {
                 console.error('Error confirming order:', error);
                 addMessage('Error: ' + error.message, false);
+            }
+        }
+
+        // ============ Manage Wholesale Customers ============
+        
+        let wholesaleCustomers = [];
+        let existingCodes = [];
+        let tier1Prices = {};
+        
+        async function openManageCustomers() {
+            document.getElementById('manageCustomersModal').style.display = 'flex';
+            await loadCustomersList();
+        }
+        
+        function closeManageCustomersModal() {
+            document.getElementById('manageCustomersModal').style.display = 'none';
+        }
+        
+        async function loadCustomersList() {
+            const listDiv = document.getElementById('customersList');
+            listDiv.innerHTML = '<div style="color: #888;">Loading customers...</div>';
+            
+            try {
+                const response = await fetch('/api/customers/wholesale');
+                const data = await response.json();
+                
+                if (!data.success) {
+                    listDiv.innerHTML = '<div style="color: #ff6b6b;">Error loading customers</div>';
+                    return;
+                }
+                
+                wholesaleCustomers = data.customers || [];
+                existingCodes = data.existingCodes || [];
+                tier1Prices = data.tier1Prices || {};
+                
+                if (wholesaleCustomers.length === 0) {
+                    listDiv.innerHTML = '<div style="color: #888;">No wholesale customers found</div>';
+                    return;
+                }
+                
+                let html = '<div style="display: grid; grid-template-columns: 2fr 1fr 1.5fr 1.5fr 1.5fr; gap: 8px; padding: 8px 12px; background: #2a2a2a; border-radius: 4px; margin-bottom: 8px; font-size: 11px; color: #888;">';
+                html += '<div>Customer</div>';
+                html += '<div>Code</div>';
+                html += '<div>Pricing Table</div>';
+                html += '<div>Customer Since</div>';
+                html += '<div>Last Invoice</div>';
+                html += '</div>';
+                
+                wholesaleCustomers.forEach(customer => {
+                    html += `<div style="display: grid; grid-template-columns: 2fr 1fr 1.5fr 1.5fr 1.5fr; gap: 8px; padding: 12px; background: #1a1a1a; border-radius: 8px; margin-bottom: 8px; align-items: center;">`;
+                    html += `<div style="font-weight: 500;">${customer.name}</div>`;
+                    html += `<div style="color: #90EE90; font-family: monospace;">${customer.code}</div>`;
+                    html += `<div style="color: #888; font-size: 12px;">${customer.pricingTable || 'Tier 1'}</div>`;
+                    html += `<div style="color: #888; font-size: 12px;">${customer.dateSince || 'N/A'}</div>`;
+                    html += `<div style="color: #888; font-size: 12px;">${customer.lastInvoice || 'No invoices'}</div>`;
+                    html += `</div>`;
+                });
+                
+                listDiv.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Error loading customers:', error);
+                listDiv.innerHTML = '<div style="color: #ff6b6b;">Error loading customers: ' + error.message + '</div>';
+            }
+        }
+        
+        function openAddCustomerModal() {
+            // Clear fields
+            document.getElementById('newCustomerName').value = '';
+            document.getElementById('newCustomerCode').value = '';
+            document.getElementById('newCustomerEmails').value = '';
+            document.getElementById('newCustomerPricingType').value = 'existing';
+            document.getElementById('newCustomerPricingTable').value = 'tier1';
+            document.getElementById('newCustomerPriceRatio').value = '1.00';
+            document.getElementById('codeValidation').textContent = '';
+            document.getElementById('codeValidation').style.color = '#888';
+            
+            updatePricingTypeUI();
+            document.getElementById('addCustomerModal').style.display = 'flex';
+        }
+        
+        function closeAddCustomerModal() {
+            document.getElementById('addCustomerModal').style.display = 'none';
+        }
+        
+        function validateCustomerCode() {
+            const codeInput = document.getElementById('newCustomerCode');
+            const validation = document.getElementById('codeValidation');
+            const code = codeInput.value.toUpperCase();
+            
+            codeInput.value = code;
+            
+            if (code.length < 3) {
+                validation.textContent = 'Enter 3 letters';
+                validation.style.color = '#888';
+                return false;
+            }
+            
+            if (!/^[A-Z]{3}$/.test(code)) {
+                validation.textContent = 'Letters only';
+                validation.style.color = '#ff6b6b';
+                return false;
+            }
+            
+            if (existingCodes.includes(code)) {
+                validation.textContent = '❌ Code already in use';
+                validation.style.color = '#ff6b6b';
+                return false;
+            }
+            
+            validation.textContent = '✓ Available';
+            validation.style.color = '#90EE90';
+            return true;
+        }
+        
+        function updatePricingTypeUI() {
+            const pricingType = document.getElementById('newCustomerPricingType').value;
+            document.getElementById('existingPricingSection').style.display = pricingType === 'existing' ? 'block' : 'none';
+            document.getElementById('customPricingSection').style.display = pricingType === 'custom' ? 'block' : 'none';
+            
+            if (pricingType === 'custom') {
+                updateCustomPricingPreview();
+            }
+        }
+        
+        function updateCustomPricingPreview() {
+            const ratio = parseFloat(document.getElementById('newCustomerPriceRatio').value) || 1.0;
+            const preview = document.getElementById('customPricingPreview');
+            
+            if (Object.keys(tier1Prices).length === 0) {
+                preview.innerHTML = '<span style="color: #888;">No pricing data available</span>';
+                return;
+            }
+            
+            let html = '<div style="color: #90EE90; margin-bottom: 8px;">Price Examples (ratio: ' + ratio.toFixed(2) + '):</div>';
+            
+            let count = 0;
+            for (const [coffee, price] of Object.entries(tier1Prices)) {
+                if (count >= 3) break;
+                const customPrice = (price * ratio).toFixed(2);
+                html += `<div style="margin-bottom: 4px;">${coffee}: $${price.toFixed(2)} → <span style="color: #90EE90;">$${customPrice}</span></div>`;
+                count++;
+            }
+            
+            preview.innerHTML = html;
+        }
+        
+        async function confirmAddCustomer() {
+            const name = document.getElementById('newCustomerName').value.trim();
+            const code = document.getElementById('newCustomerCode').value.toUpperCase().trim();
+            const emailsRaw = document.getElementById('newCustomerEmails').value.trim();
+            const pricingType = document.getElementById('newCustomerPricingType').value;
+            
+            if (!name) {
+                alert('Please enter a customer name.');
+                return;
+            }
+            
+            if (!validateCustomerCode()) {
+                alert('Please enter a valid unique 3-letter code.');
+                return;
+            }
+            
+            const emails = emailsRaw ? emailsRaw.split(',').map(e => e.trim()).filter(e => e) : [];
+            
+            let pricingTable = null;
+            let priceRatio = null;
+            
+            if (pricingType === 'existing') {
+                pricingTable = document.getElementById('newCustomerPricingTable').value;
+            } else {
+                priceRatio = parseFloat(document.getElementById('newCustomerPriceRatio').value) || 1.0;
+            }
+            
+            closeAddCustomerModal();
+            
+            try {
+                const response = await fetch('/api/customers/wholesale/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name,
+                        code,
+                        emails,
+                        pricingType,
+                        pricingTable,
+                        priceRatio
+                    })
+                });
+                
+                const result = await response.json();
+                
+                if (!result.success) {
+                    alert('Error adding customer: ' + (result.error || 'Unknown error'));
+                    return;
+                }
+                
+                // Reload the customers list
+                await loadCustomersList();
+                
+                let successMsg = `Added ${name} (${code}) as a wholesale customer.`;
+                if (result.pricingCreated) {
+                    successMsg += `\n\nCustom pricing table "Wholesale ${name}" created with ratio ${priceRatio}× Tier 1.`;
+                }
+                
+                alert(successMsg);
+                
+            } catch (error) {
+                console.error('Error adding customer:', error);
+                alert('Error adding customer: ' + error.message);
             }
         }
 
@@ -5258,6 +5549,7 @@ Archives of Us Coffee`;
                 html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
                 html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
                 html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
+                html += '<button class="action-btn" onclick="openManageCustomers()">Manage Customers</button>';
                 html += '</div>';
                 
                 addMessage(html, false);
@@ -5278,6 +5570,7 @@ Archives of Us Coffee`;
             html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
             html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
             html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
+            html += '<button class="action-btn" onclick="openManageCustomers()">Manage Customers</button>';
             html += '</div>';
             
             addMessage(html, false);
@@ -5293,6 +5586,7 @@ Archives of Us Coffee`;
             html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
             html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
             html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
+            html += '<button class="action-btn" onclick="openManageCustomers()">Manage Customers</button>';
             html += '</div>';
             
             addMessage(html, false);

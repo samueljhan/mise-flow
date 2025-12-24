@@ -4814,13 +4814,31 @@ app.get('/api/todo', async (req, res) => {
         let detailedDesc = '';
         const sortedCustomers = Object.entries(invoicesByCustomer).sort((a, b) => a[0].localeCompare(b[0]));
         
+        // Helper to format Excel serial date to MM/DD/YY
+        const formatInvoiceDate = (dateVal) => {
+          if (!dateVal) return '';
+          // If it's a number (Excel serial date), convert it
+          if (typeof dateVal === 'number') {
+            // Excel serial date: days since Dec 30, 1899
+            const excelEpoch = new Date(1899, 11, 30);
+            const date = new Date(excelEpoch.getTime() + dateVal * 24 * 60 * 60 * 1000);
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            const y = String(date.getFullYear()).slice(-2);
+            return `${m}/${d}/${y}`;
+          }
+          // If it's already a string, return as-is
+          return String(dateVal);
+        };
+        
         sortedCustomers.forEach(([name, invoices]) => {
           // Calculate total for this customer
           const customerTotal = invoices.reduce((sum, inv) => sum + inv.amount, 0);
           
           detailedDesc += `customer|${name} — $${customerTotal.toFixed(2)} total\n`;
           invoices.forEach(inv => {
-            detailedDesc += `invoice|${inv.invoiceNumber} — $${inv.amount.toFixed(2)} (${inv.date})\n`;
+            // Just show invoice number and amount, no date in parentheses
+            detailedDesc += `invoice|${inv.invoiceNumber} — $${inv.amount.toFixed(2)}\n`;
           });
         });
         

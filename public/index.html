@@ -704,19 +704,122 @@
                 <h4 style="color: #90EE90; margin-bottom: 10px;">Green Coffee (Unroasted)</h4>
                 <div style="color: #666; font-size: 10px; margin-bottom: 8px;">Name | Weight (lb) | Profile | Drop Temp (°F)</div>
                 <div id="greenCoffeeList"></div>
-                <button class="modal-btn send" onclick="addGreenCoffee()" style="margin-top: 10px; width: auto; padding: 8px 16px;">+ Add Green Coffee</button>
+                <button class="modal-btn send" onclick="openAddGreenCoffeeModal()" style="margin-top: 10px; width: auto; padding: 8px 16px;">+ Add Green Coffee</button>
             </div>
             
             <div style="margin-bottom: 20px;">
                 <h4 style="color: #90EE90; margin-bottom: 10px;">Roasted Coffee</h4>
                 <div style="color: #666; font-size: 10px; margin-bottom: 8px;">Name | Weight (lb) | Type (recipe for blends)</div>
                 <div id="roastedCoffeeList"></div>
-                <button class="modal-btn send" onclick="addRoastedCoffee()" style="margin-top: 10px; width: auto; padding: 8px 16px;">+ Add Roasted Coffee</button>
+                <button class="modal-btn send" onclick="openAddRoastedCoffeeModal()" style="margin-top: 10px; width: auto; padding: 8px 16px;">+ Add Roasted Coffee</button>
             </div>
             
             <div class="modal-buttons">
                 <button class="modal-btn cancel" onclick="closeInventoryModal()">Cancel</button>
                 <button class="modal-btn send" onclick="saveInventoryChanges()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add New Green Coffee Modal -->
+    <div class="modal-overlay" id="addGreenCoffeeModal">
+        <div class="modal" style="max-width: 450px;">
+            <h3>Add New Green Coffee</h3>
+            <p style="color: #888; margin-bottom: 15px; font-size: 12px;">Enter details for the new green coffee. Total cost will be used to calculate At-Cost pricing.</p>
+            
+            <div style="margin-bottom: 12px;">
+                <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Coffee Name</label>
+                <input type="text" id="newGreenName" placeholder="e.g., Ethiopia Sidamo" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;">
+            </div>
+            
+            <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+                <div style="flex: 1;">
+                    <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Weight (lb)</label>
+                    <input type="number" id="newGreenWeight" placeholder="0" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;">
+                </div>
+                <div style="flex: 1;">
+                    <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Total Cost ($)</label>
+                    <input type="number" id="newGreenTotalCost" placeholder="0.00" step="0.01" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;">
+                </div>
+            </div>
+            
+            <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+                <div style="flex: 1;">
+                    <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Roast Profile</label>
+                    <input type="text" id="newGreenProfile" placeholder="e.g., 122302" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;">
+                </div>
+                <div style="flex: 1;">
+                    <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Drop Temp (°F)</label>
+                    <input type="text" id="newGreenDropTemp" placeholder="e.g., 410" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;">
+                </div>
+            </div>
+            
+            <div id="newGreenCostPerLb" style="background: #2a2a2a; padding: 10px; border-radius: 4px; margin-bottom: 15px; display: none;">
+                <span style="color: #888; font-size: 12px;">Cost per lb: </span>
+                <span id="costPerLbValue" style="color: #90EE90; font-weight: bold;">$0.00</span>
+            </div>
+            
+            <div class="modal-buttons">
+                <button class="modal-btn cancel" onclick="closeAddGreenCoffeeModal()">Cancel</button>
+                <button class="modal-btn send" onclick="confirmAddGreenCoffee()">Add Coffee</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add New Roasted Coffee Modal -->
+    <div class="modal-overlay" id="addRoastedCoffeeModal">
+        <div class="modal" style="max-width: 500px;">
+            <h3>Add New Roasted Coffee</h3>
+            <p style="color: #888; margin-bottom: 15px; font-size: 12px;">Enter details for the new roasted coffee. Wholesale pricing will be added to all pricing tables.</p>
+            
+            <div style="margin-bottom: 12px;">
+                <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Coffee Name</label>
+                <input type="text" id="newRoastedName" placeholder="e.g., Ethiopia Sidamo" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;" oninput="updateRoastedPreview()">
+            </div>
+            
+            <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+                <div style="flex: 1;">
+                    <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Initial Weight (lb)</label>
+                    <input type="number" id="newRoastedWeight" placeholder="0" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;">
+                </div>
+                <div style="flex: 1;">
+                    <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Type</label>
+                    <select id="newRoastedType" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;" onchange="updateRoastedTypePreview()">
+                        <option value="Single Origin">Single Origin</option>
+                        <option value="Blend">Blend</option>
+                        <option value="Private Label">Private Label</option>
+                    </select>
+                </div>
+            </div>
+            
+            <div id="newRoastedRecipeInfo" style="background: #2a2a2a; padding: 10px; border-radius: 4px; margin-bottom: 12px;">
+                <span style="color: #888; font-size: 12px;">Recipe: </span>
+                <span id="newRoastedRecipeText" style="color: #90EE90;">Will use matching green coffee</span>
+            </div>
+            
+            <div style="margin-bottom: 12px;">
+                <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Wholesale Tier 1 Price ($/lb)</label>
+                <input type="number" id="newRoastedWholesalePrice" placeholder="e.g., 15.00" step="0.01" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;" oninput="updateRoastedPreview()">
+            </div>
+            
+            <div id="newRoastedPricePreview" style="background: #1a3a1a; padding: 12px; border-radius: 4px; margin-bottom: 15px; display: none;">
+                <div style="margin-bottom: 8px;">
+                    <span style="color: #888; font-size: 12px;">At-Cost Price: </span>
+                    <span id="roastedAtCostPrice" style="color: #f0ad4e;">Loading...</span>
+                </div>
+                <div style="margin-bottom: 8px;">
+                    <span style="color: #888; font-size: 12px;">Wholesale Tier 1: </span>
+                    <span id="roastedTier1Price" style="color: #90EE90;">$0.00/lb</span>
+                </div>
+                <div>
+                    <span style="color: #888; font-size: 12px;">Margin: </span>
+                    <span id="roastedMargin" style="color: #90EE90;">$0.00/lb</span>
+                </div>
+            </div>
+            
+            <div class="modal-buttons">
+                <button class="modal-btn cancel" onclick="closeAddRoastedCoffeeModal()">Cancel</button>
+                <button class="modal-btn send" onclick="confirmAddRoastedCoffee()">Add Coffee</button>
             </div>
         </div>
     </div>
@@ -2459,15 +2562,111 @@
             }
         }
 
+        function openAddGreenCoffeeModal() {
+            // Clear previous values
+            document.getElementById('newGreenName').value = '';
+            document.getElementById('newGreenWeight').value = '';
+            document.getElementById('newGreenTotalCost').value = '';
+            document.getElementById('newGreenProfile').value = '';
+            document.getElementById('newGreenDropTemp').value = '';
+            document.getElementById('newGreenCostPerLb').style.display = 'none';
+            
+            // Add event listeners for cost calculation
+            const weightInput = document.getElementById('newGreenWeight');
+            const costInput = document.getElementById('newGreenTotalCost');
+            
+            const updateCostPerLb = () => {
+                const weight = parseFloat(weightInput.value) || 0;
+                const totalCost = parseFloat(costInput.value) || 0;
+                const costPerLbDiv = document.getElementById('newGreenCostPerLb');
+                const costPerLbValue = document.getElementById('costPerLbValue');
+                
+                if (weight > 0 && totalCost > 0) {
+                    const costPerLb = totalCost / weight;
+                    costPerLbValue.textContent = '$' + costPerLb.toFixed(2);
+                    costPerLbDiv.style.display = 'block';
+                } else {
+                    costPerLbDiv.style.display = 'none';
+                }
+            };
+            
+            weightInput.oninput = updateCostPerLb;
+            costInput.oninput = updateCostPerLb;
+            
+            document.getElementById('addGreenCoffeeModal').style.display = 'flex';
+        }
+        
+        function closeAddGreenCoffeeModal() {
+            document.getElementById('addGreenCoffeeModal').style.display = 'none';
+        }
+        
+        async function confirmAddGreenCoffee() {
+            const name = document.getElementById('newGreenName').value.trim();
+            const weight = parseFloat(document.getElementById('newGreenWeight').value) || 0;
+            const totalCost = parseFloat(document.getElementById('newGreenTotalCost').value) || 0;
+            const roastProfile = document.getElementById('newGreenProfile').value.trim();
+            const dropTemp = document.getElementById('newGreenDropTemp').value.trim();
+            
+            if (!name) {
+                alert('Please enter a coffee name.');
+                return;
+            }
+            
+            if (weight <= 0) {
+                alert('Please enter a valid weight.');
+                return;
+            }
+            
+            if (totalCost <= 0) {
+                alert('Please enter a valid total cost.');
+                return;
+            }
+            
+            closeAddGreenCoffeeModal();
+            
+            try {
+                // Add to pricing sheet first
+                const pricingResponse = await fetch('/api/pricing/add-coffee', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: name,
+                        weight: weight,
+                        totalCost: totalCost
+                    })
+                });
+                
+                const pricingResult = await pricingResponse.json();
+                
+                if (!pricingResult.success) {
+                    alert('Error adding to pricing sheet: ' + (pricingResult.error || 'Unknown error'));
+                    return;
+                }
+                
+                // Add to local inventory
+                greenCoffeeInventory.push({
+                    id: name.toLowerCase().replace(/\s+/g, '-'),
+                    name: name,
+                    weight: weight,
+                    roastProfile: roastProfile,
+                    dropTemp: dropTemp
+                });
+                
+                renderInventoryModal();
+                
+                // Show success message
+                const costPerLb = (totalCost / weight).toFixed(2);
+                alert(`Added ${name} to inventory and pricing sheet.\n\nCost per lb: $${costPerLb}\nAt-Cost price: $${pricingResult.atCostPrice?.toFixed(2) || 'calculated'}/lb`);
+                
+            } catch (error) {
+                console.error('Error adding green coffee:', error);
+                alert('Error adding coffee: ' + error.message);
+            }
+        }
+        
+        // Legacy function for simple add (now opens modal)
         function addGreenCoffee() {
-            greenCoffeeInventory.push({
-                id: 'new-green-' + Date.now(),
-                name: 'New Green Coffee',
-                weight: 0,
-                roastProfile: '',
-                dropTemp: ''
-            });
-            renderInventoryModal();
+            openAddGreenCoffeeModal();
         }
 
         function removeGreenCoffee(index) {
@@ -2477,15 +2676,181 @@
             }
         }
 
+        function openAddRoastedCoffeeModal() {
+            // Clear previous values
+            document.getElementById('newRoastedName').value = '';
+            document.getElementById('newRoastedWeight').value = '';
+            document.getElementById('newRoastedType').value = 'Single Origin';
+            document.getElementById('newRoastedWholesalePrice').value = '';
+            document.getElementById('newRoastedPricePreview').style.display = 'none';
+            document.getElementById('newRoastedRecipeInfo').style.display = 'block';
+            
+            // Store At-Cost prices for margin calculation
+            window.atCostPrices = {};
+            
+            // Fetch At-Cost prices
+            fetch('/api/pricing/at-cost-prices')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.success) {
+                        window.atCostPrices = data.prices;
+                    }
+                })
+                .catch(err => console.log('Could not fetch At-Cost prices:', err));
+            
+            updateRoastedTypePreview();
+            document.getElementById('addRoastedCoffeeModal').style.display = 'flex';
+        }
+        
+        function closeAddRoastedCoffeeModal() {
+            document.getElementById('addRoastedCoffeeModal').style.display = 'none';
+        }
+        
+        function updateRoastedTypePreview() {
+            const type = document.getElementById('newRoastedType').value;
+            const name = document.getElementById('newRoastedName').value.trim();
+            const recipeInfo = document.getElementById('newRoastedRecipeInfo');
+            const recipeText = document.getElementById('newRoastedRecipeText');
+            
+            if (type === 'Single Origin') {
+                recipeInfo.style.display = 'block';
+                recipeText.textContent = name ? `100% ${name} (matching green coffee)` : 'Will use matching green coffee';
+            } else if (type === 'Blend') {
+                recipeInfo.style.display = 'block';
+                recipeText.textContent = 'Configure recipe in inventory modal after adding';
+                recipeText.style.color = '#f0ad4e';
+            } else {
+                recipeInfo.style.display = 'block';
+                recipeText.textContent = 'Private Label - no recipe required';
+                recipeText.style.color = '#888';
+            }
+            
+            updateRoastedPreview();
+        }
+        
+        function updateRoastedPreview() {
+            const name = document.getElementById('newRoastedName').value.trim();
+            const wholesalePrice = parseFloat(document.getElementById('newRoastedWholesalePrice').value) || 0;
+            const previewDiv = document.getElementById('newRoastedPricePreview');
+            
+            if (wholesalePrice > 0) {
+                previewDiv.style.display = 'block';
+                document.getElementById('roastedTier1Price').textContent = '$' + wholesalePrice.toFixed(2) + '/lb';
+                
+                // Try to find At-Cost price for margin calculation
+                let atCostPrice = null;
+                if (window.atCostPrices && name) {
+                    // Look for matching At-Cost price (try exact match first, then partial)
+                    const nameLower = name.toLowerCase();
+                    for (const [coffeeName, price] of Object.entries(window.atCostPrices)) {
+                        if (coffeeName.toLowerCase() === nameLower || 
+                            coffeeName.toLowerCase().includes(nameLower) ||
+                            nameLower.includes(coffeeName.toLowerCase())) {
+                            atCostPrice = price;
+                            break;
+                        }
+                    }
+                }
+                
+                if (atCostPrice !== null) {
+                    document.getElementById('roastedAtCostPrice').textContent = '$' + atCostPrice.toFixed(2) + '/lb';
+                    const margin = wholesalePrice - atCostPrice;
+                    const marginColor = margin >= 0 ? '#90EE90' : '#ff6b6b';
+                    document.getElementById('roastedMargin').textContent = '$' + margin.toFixed(2) + '/lb';
+                    document.getElementById('roastedMargin').style.color = marginColor;
+                } else {
+                    document.getElementById('roastedAtCostPrice').textContent = 'Not found (add green coffee first)';
+                    document.getElementById('roastedAtCostPrice').style.color = '#f0ad4e';
+                    document.getElementById('roastedMargin').textContent = 'N/A';
+                    document.getElementById('roastedMargin').style.color = '#888';
+                }
+            } else {
+                previewDiv.style.display = 'none';
+            }
+        }
+        
+        async function confirmAddRoastedCoffee() {
+            const name = document.getElementById('newRoastedName').value.trim();
+            const weight = parseFloat(document.getElementById('newRoastedWeight').value) || 0;
+            const type = document.getElementById('newRoastedType').value;
+            const wholesalePrice = parseFloat(document.getElementById('newRoastedWholesalePrice').value) || 0;
+            
+            if (!name) {
+                alert('Please enter a coffee name.');
+                return;
+            }
+            
+            if (wholesalePrice <= 0) {
+                alert('Please enter a valid Wholesale Tier 1 price.');
+                return;
+            }
+            
+            closeAddRoastedCoffeeModal();
+            
+            try {
+                // Add to all wholesale pricing tables
+                const pricingResponse = await fetch('/api/pricing/add-roasted-coffee', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: name,
+                        wholesaleTier1Price: wholesalePrice
+                    })
+                });
+                
+                const pricingResult = await pricingResponse.json();
+                
+                if (!pricingResult.success) {
+                    alert('Error adding to pricing sheet: ' + (pricingResult.error || 'Unknown error'));
+                    return;
+                }
+                
+                // Build recipe for single origin
+                let recipe = [];
+                if (type === 'Single Origin') {
+                    // Find matching green coffee
+                    const matchingGreen = greenCoffeeInventory.find(g => 
+                        g.name.toLowerCase() === name.toLowerCase() ||
+                        g.name.toLowerCase().includes(name.toLowerCase()) ||
+                        name.toLowerCase().includes(g.name.toLowerCase())
+                    );
+                    
+                    if (matchingGreen) {
+                        recipe = [{ greenCoffeeId: matchingGreen.id, name: matchingGreen.name, percentage: 100 }];
+                    }
+                }
+                
+                // Add to local inventory
+                roastedCoffeeInventory.push({
+                    id: name.toLowerCase().replace(/\s+/g, '-') + '-roasted',
+                    name: name,
+                    weight: weight,
+                    type: type,
+                    recipe: type === 'Private Label' ? null : recipe
+                });
+                
+                renderInventoryModal();
+                
+                // Show success message with calculated prices
+                let successMsg = `Added ${name} to inventory and all pricing tables.\n\n`;
+                successMsg += `Wholesale Tier 1: $${wholesalePrice.toFixed(2)}/lb\n`;
+                if (pricingResult.calculatedPrices) {
+                    successMsg += `Wholesale Dex: $${pricingResult.calculatedPrices.dex.toFixed(2)}/lb\n`;
+                    successMsg += `Wholesale CED: $${pricingResult.calculatedPrices.ced.toFixed(2)}/lb\n`;
+                    successMsg += `Wholesale Junia: $${pricingResult.calculatedPrices.junia.toFixed(2)}/lb`;
+                }
+                
+                alert(successMsg);
+                
+            } catch (error) {
+                console.error('Error adding roasted coffee:', error);
+                alert('Error adding coffee: ' + error.message);
+            }
+        }
+        
+        // Legacy function for simple add (now opens modal)
         function addRoastedCoffee() {
-            roastedCoffeeInventory.push({
-                id: 'new-roasted-' + Date.now(),
-                name: 'New Roasted Coffee',
-                weight: 0,
-                type: 'Single Origin',
-                recipe: []
-            });
-            renderInventoryModal();
+            openAddRoastedCoffeeModal();
         }
 
         function removeRoastedCoffee(index) {

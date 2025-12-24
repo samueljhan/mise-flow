@@ -4918,6 +4918,426 @@ app.post('/api/inventory/enroute/deliver', async (req, res) => {
   res.json({ success: true, message: `${item.name} (${item.weight}lb) added to roasted inventory. What else can I help you with?` });
 });
 
+// ============ Pricing Sheet API ============
+
+// Add new coffee to Wholesale Pricing At-Cost table
+app.post('/api/pricing/add-coffee', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { name, weight, totalCost } = req.body;
+  
+  if (!name || weight <= 0 || totalCost <= 0) {
+    return res.status(400).json({ error: 'Name, weight, and total cost are required' });
+  }
+  
+  const costPerLb = totalCost / weight;
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Read the Wholesale Pricing sheet to find At-Cost table and Colombia Decaf row
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Wholesale Pricing!A:H'
+    });
+    
+    const rows = response.data.values || [];
+    
+    // Find the At-Cost table section and Colombia Decaf row
+    let atCostStartRow = -1;
+    let colombiaDecafRow = -1;
+    let templateRow = null;
+    
+    for (let i = 0; i < rows.length; i++) {
+      const cellB = (rows[i][1] || '').toString().toLowerCase();
+      
+      // Find At-Cost header
+      if (cellB === 'at-cost') {
+        atCostStartRow = i;
+      }
+      
+      // Find Colombia Decaf (case insensitive)
+      if (atCostStartRow > -1 && cellB.includes('colombia decaf')) {
+        colombiaDecafRow = i;
+        // Get the row above Colombia Decaf as template for fees
+        if (i > atCostStartRow + 1) {
+          templateRow = rows[i - 1];
+        }
+        break;
+      }
+    }
+    
+    if (atCostStartRow === -1) {
+      return res.status(400).json({ error: 'Could not find At-Cost table in Wholesale Pricing sheet' });
+    }
+    
+    if (colombiaDecafRow === -1) {
+      return res.status(400).json({ error: 'Could not find Colombia Decaf row in At-Cost table' });
+    }
+    
+    // Get template values from row above Colombia Decaf (or use defaults)
+    // At-Cost columns: B=Name, C=Cost/lb, D=Roasting, E=Shipping, F=Packaging, G=Total Cost, H=At-Cost Price
+    const roastingFee = templateRow ? (parseFloat(templateRow[3]) || 2.25) : 2.25;
+    const shippingFee = templateRow ? (parseFloat(templateRow[4]) || 0.50) : 0.50;
+    const packagingFee = templateRow ? (parseFloat(templateRow[5]) || 0.25) : 0.25;
+    
+    // Calculate total cost and at-cost price
+    // Total Cost = Cost/lb + Roasting + Shipping + Packaging
+    const totalCostPerLb = costPerLb + roastingFee + shippingFee + packagingFee;
+    // At-Cost Price = Total Cost (or with small markup if needed)
+    const atCostPrice = totalCostPerLb;
+    
+    // Insert a new row above Colombia Decaf
+    // First, insert a blank row
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: {
+        requests: [{
+          insertDimension: {
+            range: {
+              sheetId: await getSheetId(sheets, 'Wholesale Pricing'),
+              dimension: 'ROWS',
+              startIndex: colombiaDecafRow,
+              endIndex: colombiaDecafRow + 1
+            },
+            inheritFromBefore: true
+          }
+        }]
+      }
+    });
+    
+    // Now write the new row data (row index is colombiaDecafRow + 1 because sheets are 1-indexed)
+    const newRowData = [
+      '',              // A - empty
+      name,            // B - Coffee name
+      costPerLb,       // C - Cost per lb
+      roastingFee,     // D - Roasting fee
+      shippingFee,     // E - Shipping
+      packagingFee,    // F - Packaging
+      totalCostPerLb,  // G - Total Cost
+      atCostPrice      // H - At-Cost Price
+    ];
+    
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Wholesale Pricing!A${colombiaDecafRow + 1}:H${colombiaDecafRow + 1}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [newRowData]
+      }
+    });
+    
+    // Apply currency formatting to the new row
+    await sheets.spreadsheets.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      requestBody: {
+        requests: [{
+          repeatCell: {
+            range: {
+              sheetId: await getSheetId(sheets, 'Wholesale Pricing'),
+              startRowIndex: colombiaDecafRow,
+              endRowIndex: colombiaDecafRow + 1,
+              startColumnIndex: 2,  // Column C
+              endColumnIndex: 8     // Through Column H
+            },
+            cell: {
+              userEnteredFormat: {
+                numberFormat: {
+                  type: 'CURRENCY',
+                  pattern: '$#,##0.00'
+                }
+              }
+            },
+            fields: 'userEnteredFormat.numberFormat'
+          }
+        }]
+      }
+    });
+    
+    console.log(`✅ Added ${name} to At-Cost pricing: $${costPerLb.toFixed(2)}/lb → $${atCostPrice.toFixed(2)} at-cost`);
+    
+    res.json({
+      success: true,
+      costPerLb: costPerLb,
+      atCostPrice: atCostPrice,
+      roastingFee: roastingFee,
+      shippingFee: shippingFee,
+      packagingFee: packagingFee,
+      message: `Added ${name} to At-Cost pricing table`
+    });
+    
+  } catch (error) {
+    console.error('Error adding coffee to pricing sheet:', error);
+    res.status(500).json({ error: 'Failed to add coffee to pricing: ' + error.message });
+  }
+});
+
+// Helper to get sheet ID by name
+async function getSheetId(sheets, sheetName) {
+  const spreadsheet = await sheets.spreadsheets.get({
+    spreadsheetId: SPREADSHEET_ID
+  });
+  
+  const sheet = spreadsheet.data.sheets.find(s => s.properties.title === sheetName);
+  return sheet ? sheet.properties.sheetId : 0;
+}
+
+// Get At-Cost prices for margin calculation
+app.get('/api/pricing/at-cost-prices', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Wholesale Pricing!A:H'
+    });
+    
+    const rows = response.data.values || [];
+    const prices = {};
+    
+    // Find At-Cost section and extract prices from column H
+    let inAtCostSection = false;
+    
+    for (let i = 0; i < rows.length; i++) {
+      const cellB = (rows[i][1] || '').toString().toLowerCase();
+      
+      if (cellB === 'at-cost') {
+        inAtCostSection = true;
+        continue;
+      }
+      
+      // Exit At-Cost section when we hit another section header or empty rows
+      if (inAtCostSection && (cellB.startsWith('wholesale') || cellB === '')) {
+        if (cellB.startsWith('wholesale')) break;
+        continue;
+      }
+      
+      if (inAtCostSection && rows[i][1] && rows[i][7]) {
+        const coffeeName = rows[i][1].toString();
+        const atCostPrice = parseFloat(rows[i][7]) || 0;
+        if (coffeeName && atCostPrice > 0) {
+          prices[coffeeName] = atCostPrice;
+        }
+      }
+    }
+    
+    res.json({ success: true, prices });
+    
+  } catch (error) {
+    console.error('Error fetching At-Cost prices:', error);
+    res.status(500).json({ error: 'Failed to fetch At-Cost prices: ' + error.message });
+  }
+});
+
+// Add new roasted coffee to all wholesale pricing tables
+app.post('/api/pricing/add-roasted-coffee', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { name, wholesaleTier1Price } = req.body;
+  
+  if (!name || wholesaleTier1Price <= 0) {
+    return res.status(400).json({ error: 'Name and wholesale price are required' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Read the entire Wholesale Pricing sheet
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Wholesale Pricing!A:H'
+    });
+    
+    const rows = response.data.values || [];
+    
+    // Find all table sections and their Colombia Decaf rows
+    const tables = {
+      'wholesale tier 1': { startRow: -1, decafRow: -1, priceCol: 3, prices: {} },
+      'wholesale dex': { startRow: -1, decafRow: -1, priceCol: 3, prices: {} },
+      'wholesale ced': { startRow: -1, decafRow: -1, priceCol: 3, prices: {} },
+      'wholesale junia': { startRow: -1, decafRow: -1, priceCol: 3, prices: {} }
+    };
+    
+    let currentTable = null;
+    
+    for (let i = 0; i < rows.length; i++) {
+      const cellB = (rows[i][1] || '').toString().toLowerCase();
+      
+      // Check for table headers
+      for (const tableName of Object.keys(tables)) {
+        if (cellB === tableName) {
+          tables[tableName].startRow = i;
+          currentTable = tableName;
+          break;
+        }
+      }
+      
+      // Look for Colombia Decaf in current table
+      if (currentTable && cellB.includes('colombia decaf')) {
+        tables[currentTable].decafRow = i;
+        currentTable = null; // Move to next table
+      }
+      
+      // Collect prices from each table for ratio calculation
+      if (currentTable && tables[currentTable].startRow > -1 && rows[i][1] && rows[i][3]) {
+        const coffeeName = rows[i][1].toString().toLowerCase();
+        const price = parseFloat(rows[i][3]) || 0;
+        if (price > 0 && !coffeeName.includes('decaf')) {
+          tables[currentTable].prices[coffeeName] = price;
+        }
+      }
+    }
+    
+    // Calculate price ratios based on existing coffees
+    // Use average ratio across all coffees
+    const tier1Prices = tables['wholesale tier 1'].prices;
+    const ratios = { dex: [], ced: [], junia: [] };
+    
+    for (const [coffeeName, tier1Price] of Object.entries(tier1Prices)) {
+      if (tier1Price > 0) {
+        const dexPrice = tables['wholesale dex'].prices[coffeeName];
+        const cedPrice = tables['wholesale ced'].prices[coffeeName];
+        const juniaPrice = tables['wholesale junia'].prices[coffeeName];
+        
+        if (dexPrice) ratios.dex.push(dexPrice / tier1Price);
+        if (cedPrice) ratios.ced.push(cedPrice / tier1Price);
+        if (juniaPrice) ratios.junia.push(juniaPrice / tier1Price);
+      }
+    }
+    
+    // Calculate average ratios (or use defaults if no data)
+    const avgRatio = (arr) => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 1;
+    const dexRatio = avgRatio(ratios.dex) || 0.95;
+    const cedRatio = avgRatio(ratios.ced) || 0.92;
+    const juniaRatio = avgRatio(ratios.junia) || 0.90;
+    
+    // Calculate prices for each table
+    const calculatedPrices = {
+      tier1: wholesaleTier1Price,
+      dex: Math.round(wholesaleTier1Price * dexRatio * 100) / 100,
+      ced: Math.round(wholesaleTier1Price * cedRatio * 100) / 100,
+      junia: Math.round(wholesaleTier1Price * juniaRatio * 100) / 100
+    };
+    
+    console.log(`📊 Price ratios - Dex: ${dexRatio.toFixed(3)}, CED: ${cedRatio.toFixed(3)}, Junia: ${juniaRatio.toFixed(3)}`);
+    console.log(`📊 Calculated prices for ${name}:`, calculatedPrices);
+    
+    // Get sheet ID for batch operations
+    const sheetId = await getSheetId(sheets, 'Wholesale Pricing');
+    
+    // Insert rows and add data for each table (in reverse order to avoid row shifting issues)
+    const tableOrder = ['wholesale junia', 'wholesale ced', 'wholesale dex', 'wholesale tier 1'];
+    const priceMap = {
+      'wholesale tier 1': calculatedPrices.tier1,
+      'wholesale dex': calculatedPrices.dex,
+      'wholesale ced': calculatedPrices.ced,
+      'wholesale junia': calculatedPrices.junia
+    };
+    
+    for (const tableName of tableOrder) {
+      const table = tables[tableName];
+      
+      if (table.decafRow === -1) {
+        console.log(`⚠️ Could not find Colombia Decaf row in ${tableName}`);
+        continue;
+      }
+      
+      // Insert a new row above Colombia Decaf
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: {
+          requests: [{
+            insertDimension: {
+              range: {
+                sheetId: sheetId,
+                dimension: 'ROWS',
+                startIndex: table.decafRow,
+                endIndex: table.decafRow + 1
+              },
+              inheritFromBefore: true
+            }
+          }]
+        }
+      });
+      
+      // Write the new row data
+      // Wholesale tables have: B=Name, C=empty, D=Price
+      const newRowData = [
+        '',                    // A - empty
+        name,                  // B - Coffee name
+        '',                    // C - empty (or description)
+        priceMap[tableName]    // D - Price
+      ];
+      
+      await sheets.spreadsheets.values.update({
+        spreadsheetId: SPREADSHEET_ID,
+        range: `Wholesale Pricing!A${table.decafRow + 1}:D${table.decafRow + 1}`,
+        valueInputOption: 'USER_ENTERED',
+        requestBody: {
+          values: [newRowData]
+        }
+      });
+      
+      // Apply currency formatting
+      await sheets.spreadsheets.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: {
+          requests: [{
+            repeatCell: {
+              range: {
+                sheetId: sheetId,
+                startRowIndex: table.decafRow,
+                endRowIndex: table.decafRow + 1,
+                startColumnIndex: 3,  // Column D
+                endColumnIndex: 4
+              },
+              cell: {
+                userEnteredFormat: {
+                  numberFormat: {
+                    type: 'CURRENCY',
+                    pattern: '$#,##0.00'
+                  }
+                }
+              },
+              fields: 'userEnteredFormat.numberFormat'
+            }
+          }]
+        }
+      });
+      
+      // Update decaf rows for subsequent tables (they shifted down by 1)
+      for (const otherTable of Object.values(tables)) {
+        if (otherTable.decafRow > table.decafRow) {
+          otherTable.decafRow++;
+        }
+      }
+      
+      console.log(`✅ Added ${name} to ${tableName} at $${priceMap[tableName].toFixed(2)}`);
+    }
+    
+    res.json({
+      success: true,
+      calculatedPrices: calculatedPrices,
+      message: `Added ${name} to all wholesale pricing tables`
+    });
+    
+  } catch (error) {
+    console.error('Error adding roasted coffee to pricing:', error);
+    res.status(500).json({ error: 'Failed to add to pricing: ' + error.message });
+  }
+});
+
 // ============ UPS Tracking API ============
 
 // Format date as mm/dd/yy

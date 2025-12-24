@@ -140,6 +140,10 @@ app.get('/auth/google/callback', async (req, res) => {
     // Format all sheets with currency formatting (async, don't wait)
     formatAllSheetsCurrency().catch(e => console.log('Currency format on connect:', e.message));
     
+    // Load data from sheets after authentication (async, don't wait)
+    loadInventoryFromSheets().catch(e => console.log('Inventory load on connect:', e.message));
+    loadCustomerDirectoryFromSheets().catch(e => console.log('Customer load on connect:', e.message));
+    
     // Explicitly save session before redirect
     req.session.save((err) => {
       if (err) {
@@ -752,36 +756,141 @@ For unknown customers, respond like:
 Be concise, friendly, and action-oriented. Don't ask unnecessary questions - if the intent is clear, proceed with the action.`;
 
 // Customer directory with codes and emails
-let customerDirectory = {
-  'archives of us': {
-    name: 'Archives of Us',
-    code: 'AOU',
-    emails: ['nick@archivesofus.com'],
-    pricingTable: 'at-cost',
-    dateSince: '01/01/23'
-  },
-  'ced': {
-    name: 'CED',
-    code: 'CED',
-    emails: ['songs0519@hotmail.com'],
-    pricingTable: 'wholesale ced',
-    dateSince: '03/15/23'
-  },
-  'dex': {
-    name: 'Dex',
-    code: 'DEX',
-    emails: ['dexcoffeeusa@gmail.com', 'lkusacorp@gmail.com'],
-    pricingTable: 'wholesale dex',
-    dateSince: '06/01/23'
-  },
-  'junia': {
-    name: 'Junia',
-    code: 'JUN',
-    emails: ['hello@juniacafe.com'],
-    pricingTable: 'wholesale junia',
-    dateSince: '09/01/24'
+let customerDirectory = {};
+
+// Load customer directory from Google Sheets
+async function loadCustomerDirectoryFromSheets() {
+  if (!userTokens) {
+    console.log('⚠️ Cannot load customers - Google not connected');
+    return { success: false, error: 'Google not connected' };
   }
-};
+
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Customer Directory!B:F'
+    });
+    
+    const rows = response.data.values || [];
+    if (rows.length < 2) {
+      console.log('⚠️ Customer Directory empty or missing header');
+      return { success: false, error: 'Sheet empty' };
+    }
+
+    // Find header row
+    let headerIndex = -1;
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i][0] && rows[i][0].toString().toLowerCase().includes('customerid')) {
+        headerIndex = i;
+        break;
+      }
+    }
+
+    if (headerIndex === -1) {
+      console.log('⚠️ Customer Directory header not found');
+      return { success: false, error: 'Header not found' };
+    }
+
+    // Clear and reload
+    customerDirectory = {};
+    
+    for (let i = headerIndex + 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row[0] || !row[1]) continue; // Skip empty rows
+      
+      const code = row[0].toString().trim().toUpperCase();
+      const name = row[1].toString().trim();
+      const emailsRaw = row[2] ? row[2].toString().trim() : '';
+      const terms = row[3] ? row[3].toString().trim() : 'Net 15';
+      const pricingTier = row[4] ? row[4].toString().trim().toLowerCase() : 'wholesale tier 1';
+      
+      // Parse emails (comma or semicolon separated)
+      const emails = emailsRaw ? emailsRaw.split(/[,;]/).map(e => e.trim()).filter(e => e) : [];
+      
+      // Map pricing tier to internal format
+      let pricingTable = pricingTier.toLowerCase();
+      if (pricingTable === 'at-cost') pricingTable = 'at-cost';
+      else if (pricingTable.includes('dex')) pricingTable = 'wholesale dex';
+      else if (pricingTable.includes('ced')) pricingTable = 'wholesale ced';
+      else if (pricingTable.includes('junia')) pricingTable = 'wholesale junia';
+      else pricingTable = 'wholesale tier 1';
+      
+      customerDirectory[name.toLowerCase()] = {
+        name: name,
+        code: code,
+        emails: emails,
+        pricingTable: pricingTable,
+        terms: terms
+      };
+      
+      // Also add by code as alias
+      customerDirectory[code.toLowerCase()] = customerDirectory[name.toLowerCase()];
+    }
+
+    console.log(`👥 Loaded ${Object.keys(customerDirectory).length / 2} customers from Sheets`);
+    return { success: true };
+  } catch (error) {
+    console.error('Error loading customer directory:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Add or update customer in Google Sheets
+async function saveCustomerToSheets(customer) {
+  if (!userTokens) {
+    return { success: false, error: 'Google not connected' };
+  }
+
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    // Read existing data to find the next empty row
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Customer Directory!B:F'
+    });
+    
+    const rows = response.data.values || [];
+    let nextRow = rows.length + 1;
+    
+    // Find header row to calculate next data row
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i][0] && rows[i][0].toString().toLowerCase().includes('customerid')) {
+        // Start counting from header + 1
+        nextRow = i + 2;
+        for (let j = i + 1; j < rows.length; j++) {
+          if (!rows[j][0] && !rows[j][1]) {
+            nextRow = j + 1;
+            break;
+          }
+          nextRow = j + 2;
+        }
+        break;
+      }
+    }
+
+    // Append new customer
+    const emails = Array.isArray(customer.emails) ? customer.emails.join(', ') : customer.emails || '';
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Customer Directory!B${nextRow}:F${nextRow}`,
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: [[customer.code, customer.name, emails, customer.terms || 'Net 15', customer.pricingTier || 'Wholesale Tier 1']]
+      }
+    });
+
+    console.log(`✅ Customer ${customer.name} saved to Sheets`);
+    return { success: true };
+  } catch (error) {
+    console.error('Error saving customer to sheets:', error);
+    return { success: false, error: error.message };
+  }
+}
 
 // Helper to get known customers list
 function getKnownCustomers() {
@@ -824,6 +933,254 @@ function addOrUpdateCustomer(name, code, emails = [], pricingTable = 'wholesale 
     pricingTable: pricingTable,
     dateSince: dateSince
   };
+}
+
+// ============ Roast Log Functions ============
+
+// Get the product columns from the Roast Log header row
+async function getRoastLogColumns() {
+  if (!userTokens) return { success: false, columns: [] };
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Roast Log!B2:Z2' // Header row (row 2, starting from B)
+    });
+    
+    const headerRow = response.data.values?.[0] || [];
+    // Find product columns (between Tracking # and Arrival Date)
+    const trackingIdx = headerRow.findIndex(h => h && h.toString().toLowerCase().includes('tracking'));
+    const arrivalIdx = headerRow.findIndex(h => h && h.toString().toLowerCase().includes('arrival'));
+    
+    const columns = [];
+    for (let i = trackingIdx + 1; i < arrivalIdx && i < headerRow.length; i++) {
+      if (headerRow[i]) {
+        columns.push({
+          index: i,
+          name: headerRow[i].toString().trim(),
+          column: String.fromCharCode(66 + i) // B + offset
+        });
+      }
+    }
+    
+    return { success: true, columns, trackingIdx, arrivalIdx, confirmIdx: arrivalIdx + 1 };
+  } catch (error) {
+    console.error('Error getting roast log columns:', error);
+    return { success: false, columns: [] };
+  }
+}
+
+// Add a new entry to the Roast Log when an order is placed
+async function addRoastLogEntry(orderDate, orderItems) {
+  if (!userTokens) {
+    console.log('⚠️ Cannot add roast log entry - Google not connected');
+    return { success: false, error: 'Google not connected' };
+  }
+
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    // Get the header row to understand column structure
+    const colInfo = await getRoastLogColumns();
+    if (!colInfo.success) {
+      console.log('⚠️ Could not read Roast Log header');
+      return { success: false, error: 'Could not read header' };
+    }
+
+    // Read existing data to find next empty row
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Roast Log!B:H'
+    });
+    
+    const rows = response.data.values || [];
+    let nextRow = 3; // Start after header (row 2)
+    
+    for (let i = 2; i < rows.length; i++) {
+      if (!rows[i] || (!rows[i][0] && !rows[i][1])) {
+        nextRow = i + 1;
+        break;
+      }
+      nextRow = i + 2;
+    }
+
+    // Build the row data
+    // Structure: Date Ordered | Tracking # | [Product Columns...] | Arrival Date | Confirmation
+    const rowData = new Array(colInfo.confirmIdx + 2).fill('');
+    
+    // Date Ordered (column B, index 0)
+    rowData[0] = orderDate;
+    
+    // Tracking # (column C, index 1) - empty initially
+    rowData[1] = '';
+    
+    // Fill in product weights
+    for (const item of orderItems) {
+      const col = colInfo.columns.find(c => 
+        c.name.toLowerCase() === item.name.toLowerCase() ||
+        item.name.toLowerCase().includes(c.name.toLowerCase())
+      );
+      if (col) {
+        rowData[col.index] = item.weight;
+      }
+    }
+
+    // Write the row
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Roast Log!B${nextRow}`,
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: [rowData]
+      }
+    });
+
+    console.log(`📝 Added roast log entry at row ${nextRow}`);
+    return { success: true, rowNumber: nextRow };
+  } catch (error) {
+    console.error('Error adding roast log entry:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Update tracking number in Roast Log
+async function updateRoastLogTracking(dateOrdered, trackingNumber) {
+  if (!userTokens) {
+    return { success: false, error: 'Google not connected' };
+  }
+
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    // Read the roast log to find the matching row
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Roast Log!B:C' // Date and Tracking columns
+    });
+    
+    const rows = response.data.values || [];
+    
+    // Find row matching the date with no tracking number
+    let targetRow = -1;
+    for (let i = 2; i < rows.length; i++) {
+      const rowDate = rows[i]?.[0];
+      const rowTracking = rows[i]?.[1];
+      
+      if (rowDate && !rowTracking) {
+        // Compare dates (handle different formats)
+        const rowDateStr = formatDateForComparison(rowDate);
+        const orderDateStr = formatDateForComparison(dateOrdered);
+        
+        if (rowDateStr === orderDateStr) {
+          targetRow = i + 1; // 1-indexed
+          break;
+        }
+      }
+    }
+
+    if (targetRow === -1) {
+      console.log('⚠️ No matching roast log entry found for tracking update');
+      return { success: false, error: 'No matching entry found' };
+    }
+
+    // Update tracking number (column C)
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Roast Log!C${targetRow}`,
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: [[trackingNumber]]
+      }
+    });
+
+    console.log(`📦 Updated tracking in roast log row ${targetRow}`);
+    return { success: true, rowNumber: targetRow };
+  } catch (error) {
+    console.error('Error updating roast log tracking:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Update arrival date and confirmation in Roast Log
+async function updateRoastLogDelivery(trackingNumber, arrivalDate, confirmation = 'RP') {
+  if (!userTokens) {
+    return { success: false, error: 'Google not connected' };
+  }
+
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+
+    // Get column info
+    const colInfo = await getRoastLogColumns();
+
+    // Read the roast log to find the matching row by tracking number
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Roast Log!B:H'
+    });
+    
+    const rows = response.data.values || [];
+    
+    // Find row with matching tracking number
+    let targetRow = -1;
+    for (let i = 2; i < rows.length; i++) {
+      const rowTracking = rows[i]?.[1];
+      if (rowTracking && rowTracking.toString().trim() === trackingNumber.trim()) {
+        targetRow = i + 1; // 1-indexed
+        break;
+      }
+    }
+
+    if (targetRow === -1) {
+      console.log('⚠️ No matching roast log entry found for delivery update');
+      return { success: false, error: 'No matching entry found' };
+    }
+
+    // Update arrival date (column G) and confirmation (column H)
+    // Column G is index 5 from B (B=0, C=1, D=2, E=3, F=4, G=5)
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Roast Log!G${targetRow}:H${targetRow}`,
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: [[arrivalDate, confirmation]]
+      }
+    });
+
+    console.log(`✅ Updated delivery in roast log row ${targetRow}`);
+    return { success: true, rowNumber: targetRow };
+  } catch (error) {
+    console.error('Error updating roast log delivery:', error);
+    return { success: false, error: error.message };
+  }
+}
+
+// Helper to format dates for comparison
+function formatDateForComparison(dateVal) {
+  if (!dateVal) return '';
+  
+  // If it's already a string in MM/DD/YY format
+  if (typeof dateVal === 'string' && dateVal.match(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/)) {
+    const parts = dateVal.split('/');
+    return `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[2].slice(-2)}`;
+  }
+  
+  // If it's a Date object or date string
+  const d = new Date(dateVal);
+  if (!isNaN(d.getTime())) {
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    const y = String(d.getFullYear()).slice(-2);
+    return `${m}/${day}/${y}`;
+  }
+  
+  return dateVal.toString();
 }
 
 // ============ Coffee Inventory Data ============
@@ -1542,8 +1899,9 @@ scheduleWeeklySync();
 
 // Also load from Sheets on startup after a delay (to allow Google connection)
 setTimeout(async () => {
-  console.log('🔄 Running startup inventory load...');
+  console.log('🔄 Running startup data load...');
   await loadInventoryFromSheets();
+  await loadCustomerDirectoryFromSheets();
 }, 5000);
 
 // ============ Google Status and Disconnect ============
@@ -1836,6 +2194,16 @@ app.get('/api/customers', (req, res) => {
   res.json({ customers: getKnownCustomers() });
 });
 
+// Reload customer directory from Google Sheets
+app.post('/api/customers/reload', async (req, res) => {
+  const result = await loadCustomerDirectoryFromSheets();
+  if (result.success) {
+    res.json({ success: true, message: 'Customer directory reloaded', count: Object.keys(customerDirectory).length / 2 });
+  } else {
+    res.status(500).json({ success: false, error: result.error || 'Failed to reload' });
+  }
+});
+
 // Get customer info (including emails)
 app.get('/api/customers/:name', (req, res) => {
   const customerName = req.params.name;
@@ -1849,7 +2217,7 @@ app.get('/api/customers/:name', (req, res) => {
 });
 
 // Add a new customer
-app.post('/api/customers/add', (req, res) => {
+app.post('/api/customers/add', async (req, res) => {
   const { name, code, emails } = req.body;
   
   if (!name) {
@@ -1870,6 +2238,15 @@ app.post('/api/customers/add', (req, res) => {
   
   addOrUpdateCustomer(trimmedName, trimmedCode, emails || []);
   console.log(`✅ Added new customer: ${trimmedName} (code: ${trimmedCode})`);
+  
+  // Save to Google Sheets
+  saveCustomerToSheets({
+    code: trimmedCode,
+    name: trimmedName,
+    emails: emails || [],
+    terms: 'Net 15',
+    pricingTier: 'Wholesale Tier 1'
+  }).catch(e => console.log('Save customer to sheets:', e.message));
   
   res.json({ 
     success: true, 
@@ -2017,8 +2394,13 @@ app.get('/api/customers/wholesale', async (req, res) => {
       }
     }
     
-    // Build customer list
+    // Build customer list (avoid duplicates from code aliases)
+    const seenCodes = new Set();
     for (const [key, customer] of Object.entries(customerDirectory)) {
+      // Skip if we've already seen this customer (by code)
+      if (seenCodes.has(customer.code)) continue;
+      seenCodes.add(customer.code);
+      
       const lastInvoice = lastInvoiceDates[key] || lastInvoiceDates[customer.name.toLowerCase()] || null;
       
       // Format pricing table name nicely
@@ -2038,7 +2420,7 @@ app.get('/api/customers/wholesale', async (req, res) => {
         code: customer.code,
         emails: customer.emails || [],
         pricingTable: pricingTableDisplay,
-        dateSince: customer.dateSince || 'N/A',
+        dateSince: customer.dateSince || customer.terms || 'N/A',
         lastInvoice: lastInvoice || 'No invoices'
       });
     }
@@ -2168,6 +2550,21 @@ app.post('/api/customers/wholesale/add', async (req, res) => {
       pricingTable: finalPricingTable,
       dateSince: dateSince
     };
+    
+    // Save to Google Sheets Customer Directory
+    const pricingTierName = finalPricingTable.toLowerCase().includes('tier 1') ? 'Wholesale Tier 1' :
+                           finalPricingTable.toLowerCase().includes('dex') ? 'Wholesale Dex' :
+                           finalPricingTable.toLowerCase().includes('ced') ? 'Wholesale CED' :
+                           finalPricingTable.toLowerCase().includes('at-cost') ? 'At-Cost' :
+                           `Wholesale ${name}`;
+    
+    saveCustomerToSheets({
+      code: code,
+      name: name,
+      emails: emails || [],
+      terms: 'Net 15',
+      pricingTier: pricingTierName
+    }).catch(e => console.log('Save customer to sheets:', e.message));
     
     console.log(`✅ Added wholesale customer: ${name} (${code}), pricing: ${finalPricingTable}`);
     
@@ -5243,6 +5640,13 @@ app.post('/api/inventory/enroute/tracking', async (req, res) => {
   
   await syncInventoryToSheets();
   
+  // Update Roast Log with tracking number
+  if (item.dateOrdered) {
+    updateRoastLogTracking(item.dateOrdered, trackingNumber).catch(e => 
+      console.log('Roast log tracking update:', e.message)
+    );
+  }
+  
   // Build response message
   let message = `Tracking saved: ${trackingNumber}`;
   if (item.estimatedDelivery) {
@@ -5293,6 +5697,16 @@ app.post('/api/inventory/enroute/deliver', async (req, res) => {
   enRouteCoffeeInventory.splice(index, 1);
   
   await syncInventoryToSheets();
+  
+  // Update Roast Log with delivery info
+  if (item.trackingNumber) {
+    const arrivalDate = formatDateMMDDYY(new Date());
+    const confirmation = confirmedBy || 'RP'; // Default to RP (Received Product)
+    updateRoastLogDelivery(item.trackingNumber, arrivalDate, confirmation).catch(e => 
+      console.log('Roast log delivery update:', e.message)
+    );
+  }
+  
   res.json({ success: true, message: `${item.name} (${item.weight}lb) added to roasted inventory. What else can I help you with?` });
 });
 
@@ -7297,6 +7711,10 @@ app.post('/api/roast-order/confirm', async (req, res) => {
   // Sync inventory to Sheets before responding
   await syncInventoryToSheets();
   
+  // Add entry to Roast Log
+  const orderDate = formatDateMMDDYY(new Date());
+  addRoastLogEntry(orderDate, orderItems).catch(e => console.log('Roast log entry:', e.message));
+  
   res.json({
     success: true,
     deductions,
@@ -7418,6 +7836,10 @@ app.post('/api/roast-order/confirm-no-draft', async (req, res) => {
   
   // Sync inventory to Sheets
   await syncInventoryToSheets();
+  
+  // Add entry to Roast Log
+  const orderDate = formatDateMMDDYY(new Date());
+  addRoastLogEntry(orderDate, orderItems).catch(e => console.log('Roast log entry:', e.message));
   
   res.json({
     success: true,

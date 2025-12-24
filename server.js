@@ -4539,7 +4539,21 @@ async function ensureRetailWeeksUpToDate(sheets) {
     });
     
     const rows = response.data.values || [];
-    const headerRow = rows[1] || [];
+    
+    // Detect new vs old structure by looking for "Retail Sales" section marker
+    let salesHeaderRowIndex = 1; // Default: old structure (header in row 2)
+    let dataStartRowIndex = 2;   // Default: old structure (data starts row 3)
+    
+    for (let i = 0; i < Math.min(rows.length, 12); i++) {
+      const cellB = (rows[i]?.[1] || '').toString().toLowerCase().trim();
+      if (cellB.includes('retail sales') && !cellB.includes('total')) {
+        salesHeaderRowIndex = i + 1; // Header row is next row (0-indexed: i+1)
+        dataStartRowIndex = i + 2;   // Data starts after header
+        break;
+      }
+    }
+    
+    const headerRow = rows[salesHeaderRowIndex] || [];
     
     // Find Total Retail Sales column to know structure
     let totalColIndex = -1;
@@ -4557,13 +4571,13 @@ async function ensureRetailWeeksUpToDate(sheets) {
     
     // Find existing weeks and last week date
     const existingWeeks = [];
-    let lastDataRow = 2;
+    let lastDataRow = dataStartRowIndex;
     
-    for (let i = 2; i < rows.length; i++) {
+    for (let i = dataStartRowIndex; i < rows.length; i++) {
       const row = rows[i];
       if (row && row[1]) {
         existingWeeks.push(String(row[1]));
-        lastDataRow = i + 1;
+        lastDataRow = i + 1; // 1-indexed
       }
     }
     
@@ -6256,8 +6270,59 @@ app.get('/api/retail/data', async (req, res) => {
     
     const rows = response.data.values || [];
     
-    // Row 2 (index 1) has headers
-    const headerRow = rows[1] || [];
+    // New structure: Find "Retail Offerings" section (row 2) and "Retail Sales" section (row 8)
+    // Row 3: Product names
+    // Row 4: Price per Unit
+    // Row 5: Weight per Unit (lb)
+    // Row 9: Retail Sales headers
+    // Row 10+: Weekly data
+    
+    // Find the retail offerings section and retail sales section
+    let offeringsHeaderRow = -1;
+    let salesHeaderRow = -1;
+    
+    for (let i = 0; i < rows.length; i++) {
+      const row = rows[i];
+      if (row && row[1]) {
+        const cellB = String(row[1]).toLowerCase().trim();
+        if (cellB.includes('retail offerings')) {
+          offeringsHeaderRow = i;
+        } else if (cellB.includes('retail sales') && !cellB.includes('total')) {
+          salesHeaderRow = i;
+          break;
+        }
+      }
+    }
+    
+    // Get product info from Retail Offerings section (new structure)
+    const productInfo = {};
+    if (offeringsHeaderRow >= 0 && rows[offeringsHeaderRow + 1]) {
+      const productNames = rows[offeringsHeaderRow + 1] || [];  // Row with product names
+      const pricesRow = rows[offeringsHeaderRow + 2] || [];     // Price per Unit row
+      const weightsRow = rows[offeringsHeaderRow + 3] || [];    // Weight per Unit row
+      
+      for (let i = 2; i < productNames.length; i++) {
+        const name = productNames[i];
+        if (name && name !== 'Price per Unit' && name !== 'Weight per Unit (lb)') {
+          productInfo[name] = {
+            pricePerUnit: parseFloat(pricesRow[i]) || 0,
+            weightPerUnit: parseFloat(weightsRow[i]) || 0
+          };
+        }
+      }
+    }
+    
+    // Fall back to old structure if new structure not found
+    let headerRow;
+    let dataStartRow;
+    
+    if (salesHeaderRow >= 0) {
+      headerRow = rows[salesHeaderRow + 1] || []; // Row after "Retail Sales" header
+      dataStartRow = salesHeaderRow + 2;          // Data starts after header
+    } else {
+      headerRow = rows[1] || [];                   // Old: Row 2 (index 1) has headers
+      dataStartRow = 2;                            // Old: Row 3+ has data
+    }
     
     // Find column indices dynamically
     const products = [];
@@ -6278,18 +6343,20 @@ app.get('/api/retail/data', async (req, res) => {
         products.push({
           index: i,
           name: header,
-          column: String.fromCharCode(65 + i)
+          column: String.fromCharCode(65 + i),
+          pricePerUnit: productInfo[header]?.pricePerUnit || 0,
+          weightPerUnit: productInfo[header]?.weightPerUnit || 0
         });
       }
     }
     
-    // Get existing weeks (rows 3+, index 2+)
+    // Get existing weeks
     const weeks = [];
-    for (let i = 2; i < rows.length; i++) {
+    for (let i = dataStartRow; i < rows.length; i++) {
       const row = rows[i];
       if (!row) continue;
       
-      // Find the date - it should be in column B (index 1), but check a few positions
+      // Find the date - it should be in column B (index 1)
       let dateStr = row[1]; // Column B
       if (!dateStr && row[0]) dateStr = row[0]; // Fallback to A if B is empty
       
@@ -6480,13 +6547,25 @@ app.post('/api/retail/sales', async (req, res) => {
     oauth2Client.setCredentials(userTokens);
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
     
-    // Get current header row to find column mappings
-    const headerResponse = await sheets.spreadsheets.values.get({
+    // Read sheet to find the correct header row (new vs old structure)
+    const sheetResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Retail Sales!A2:Z2'
+      range: 'Retail Sales!A1:Z12'
     });
     
-    const headerRow = headerResponse.data.values?.[0] || [];
+    const allRows = sheetResponse.data.values || [];
+    
+    // Find sales header row
+    let salesHeaderRowIndex = 1; // Default: old structure (row 2)
+    for (let i = 0; i < allRows.length; i++) {
+      const cellB = (allRows[i]?.[1] || '').toString().toLowerCase().trim();
+      if (cellB.includes('retail sales') && !cellB.includes('total')) {
+        salesHeaderRowIndex = i + 1; // Header is next row (1-indexed)
+        break;
+      }
+    }
+    
+    const headerRow = allRows[salesHeaderRowIndex] || [];
     
     // Find Total Retail Sales column and product range
     let totalColIndex = -1;
@@ -6605,9 +6684,703 @@ app.post('/api/retail/sales', async (req, res) => {
       updatedCells: updates.length
     });
     
+    // After saving sales, check if we should generate an AOU invoice for this week
+    // Run asynchronously so we don't block the response
+    if (hasValidSalesData) {
+      generateAOUInvoiceForWeek(rowIndex).catch(e => 
+        console.log('AOU auto-invoice:', e.message)
+      );
+    }
+    
   } catch (error) {
     console.error('Update sales error:', error);
     res.status(500).json({ error: 'Failed to update sales: ' + error.message });
+  }
+});
+
+// ============ AOU Weekly Reconciliation & Auto-Invoice ============
+
+// Read retail product configuration (price per unit, weight per unit)
+async function getRetailProductConfig() {
+  if (!userTokens) return null;
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Retail Sales!A1:Z10',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const rows = response.data.values || [];
+    
+    // Find row indices for structure
+    let offeringsHeaderRow = -1;
+    let salesHeaderRow = -1;
+    
+    for (let i = 0; i < rows.length; i++) {
+      const cellB = (rows[i]?.[1] || '').toString().toLowerCase();
+      if (cellB.includes('retail offerings')) {
+        offeringsHeaderRow = i;
+      } else if (cellB.includes('retail sales')) {
+        salesHeaderRow = i;
+      }
+    }
+    
+    // If new structure exists
+    if (offeringsHeaderRow > -1 && salesHeaderRow > -1) {
+      const productNameRow = rows[offeringsHeaderRow + 1] || [];
+      const priceRow = rows[offeringsHeaderRow + 2] || [];
+      const weightRow = rows[offeringsHeaderRow + 3] || [];
+      const salesHeader = rows[salesHeaderRow + 1] || [];
+      
+      const products = {};
+      
+      // Map product names to their config
+      for (let i = 2; i < productNameRow.length; i++) {
+        const name = productNameRow[i];
+        if (!name || name === '') break;
+        
+        products[name] = {
+          pricePerUnit: parseFloat(priceRow[i]) || 0,
+          weightPerUnit: parseFloat(weightRow[i]) || 0,
+          columnIndex: i
+        };
+      }
+      
+      return {
+        products,
+        salesHeaderRow: salesHeaderRow + 2, // 1-indexed row number of sales header
+        dataStartRow: salesHeaderRow + 3    // 1-indexed row number of first data row
+      };
+    }
+    
+    // Fallback to old structure (header in row 2, data starts row 3)
+    return {
+      products: {},
+      salesHeaderRow: 2,
+      dataStartRow: 3,
+      legacyStructure: true
+    };
+  } catch (error) {
+    console.error('Error reading retail config:', error);
+    return null;
+  }
+}
+
+// Get At-Cost prices for all products
+async function getAtCostPrices() {
+  if (!userTokens) return {};
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Wholesale Pricing!A:H',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const rows = response.data.values || [];
+    const prices = {};
+    let inAtCostSection = false;
+    
+    for (let i = 0; i < rows.length; i++) {
+      const cellB = (rows[i]?.[1] || '').toString().toLowerCase();
+      
+      if (cellB === 'at-cost') {
+        inAtCostSection = true;
+        continue;
+      }
+      
+      // End of At-Cost section when we hit another "Wholesale" header
+      if (inAtCostSection && cellB.startsWith('wholesale')) {
+        break;
+      }
+      
+      // Skip header row
+      if (inAtCostSection && cellB === 'coffee') continue;
+      
+      // Get price per lb (column H, index 7)
+      if (inAtCostSection && rows[i]?.[1]) {
+        const coffeeName = rows[i][1].toString();
+        const perLb = parseFloat(rows[i][7]) || 0;
+        if (coffeeName && perLb > 0) {
+          prices[coffeeName.toLowerCase()] = perLb;
+          // Also store variations
+          if (coffeeName.toLowerCase().includes('archives')) {
+            prices['archives blend'] = perLb;
+            prices['archives blend (s)'] = perLb;
+            prices['archives blend (l)'] = perLb;
+          }
+          if (coffeeName.toLowerCase().includes('ethiopia')) {
+            prices['ethiopia gera'] = perLb;
+            prices['ethiopia gera (s)'] = perLb;
+            prices['ethiopia gera (l)'] = perLb;
+            prices['ethiopia gera natural'] = perLb;
+          }
+          if (coffeeName.toLowerCase().includes('colombia') && !coffeeName.toLowerCase().includes('decaf')) {
+            prices['colombia excelso'] = perLb;
+          }
+          if (coffeeName.toLowerCase().includes('decaf')) {
+            prices['colombia decaf'] = perLb;
+          }
+        }
+      }
+    }
+    
+    return prices;
+  } catch (error) {
+    console.error('Error reading At-Cost prices:', error);
+    return {};
+  }
+}
+
+// Get roast deliveries within a date range
+async function getRoastDeliveriesInRange(startDate, endDate) {
+  if (!userTokens) return [];
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Roast Log!A:H',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const rows = response.data.values || [];
+    const deliveries = [];
+    
+    // Find header row
+    let headerRowIndex = -1;
+    let productColumns = {};
+    
+    for (let i = 0; i < rows.length; i++) {
+      if ((rows[i]?.[1] || '').toString().toLowerCase().includes('date ordered')) {
+        headerRowIndex = i;
+        // Map product columns
+        for (let j = 3; j < rows[i].length; j++) {
+          const header = rows[i][j];
+          if (header && !header.toString().toLowerCase().includes('arrival') && 
+              !header.toString().toLowerCase().includes('confirmation')) {
+            productColumns[j] = header.toString();
+          }
+        }
+        break;
+      }
+    }
+    
+    if (headerRowIndex === -1) return [];
+    
+    // Process delivery rows
+    for (let i = headerRowIndex + 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || !row[6]) continue; // No arrival date
+      
+      // Parse arrival date
+      let arrivalDate;
+      if (typeof row[6] === 'number') {
+        // Excel serial date
+        const excelEpoch = new Date(1899, 11, 30);
+        arrivalDate = new Date(excelEpoch.getTime() + row[6] * 24 * 60 * 60 * 1000);
+      } else {
+        arrivalDate = new Date(row[6]);
+      }
+      
+      if (isNaN(arrivalDate.getTime())) continue;
+      
+      // Check if within range
+      if (arrivalDate >= startDate && arrivalDate <= endDate) {
+        const delivery = { arrivalDate, products: {} };
+        
+        for (const [colIdx, productName] of Object.entries(productColumns)) {
+          const weight = parseFloat(row[parseInt(colIdx)]) || 0;
+          if (weight > 0) {
+            delivery.products[productName] = weight;
+          }
+        }
+        
+        if (Object.keys(delivery.products).length > 0) {
+          deliveries.push(delivery);
+        }
+      }
+    }
+    
+    return deliveries;
+  } catch (error) {
+    console.error('Error reading roast deliveries:', error);
+    return [];
+  }
+}
+
+// Get wholesale invoices to OTHER customers (not AOU) in a date range
+async function getOtherCustomerInvoicesInRange(startDate, endDate) {
+  if (!userTokens) return [];
+  
+  // Read invoices sheet to find non-AOU invoices
+  // For now, we need the actual line items, which aren't stored in the sheet
+  // This is a limitation - we'll need to track invoice line items separately
+  // For now, return empty and focus on retail deduction
+  return [];
+}
+
+// Calculate AOU weekly reconciliation
+async function calculateAOUWeeklyReconciliation(weekDateRange) {
+  // Parse week date range (e.g., "12/04/25-12/10/25")
+  const [startStr, endStr] = weekDateRange.split('-');
+  const parseDate = (str) => {
+    const [m, d, y] = str.trim().split('/');
+    return new Date(2000 + parseInt(y), parseInt(m) - 1, parseInt(d));
+  };
+  
+  const startDate = parseDate(startStr);
+  const endDate = parseDate(endStr);
+  endDate.setHours(23, 59, 59, 999); // End of day
+  
+  // Get deliveries in this date range
+  const deliveries = await getRoastDeliveriesInRange(startDate, endDate);
+  
+  // Sum up all deliveries by product
+  const totalDelivered = {};
+  deliveries.forEach(d => {
+    for (const [product, weight] of Object.entries(d.products)) {
+      if (!totalDelivered[product]) totalDelivered[product] = 0;
+      totalDelivered[product] += weight;
+    }
+  });
+  
+  return {
+    weekRange: weekDateRange,
+    startDate,
+    endDate,
+    deliveries: totalDelivered,
+    totalDeliveredLbs: Object.values(totalDelivered).reduce((a, b) => a + b, 0)
+  };
+}
+
+// Generate AOU invoice for a completed retail week
+async function generateAOUInvoiceForWeek(rowIndex) {
+  if (!userTokens) {
+    console.log('Cannot generate AOU invoice - Google not connected');
+    return null;
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Get retail config
+    const retailConfig = await getRetailProductConfig();
+    if (!retailConfig) {
+      console.log('Cannot read retail config');
+      return null;
+    }
+    
+    // Read the specific row to get week range and sales data
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Retail Sales!A${rowIndex}:Z${rowIndex}`,
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const row = response.data.values?.[0];
+    if (!row) return null;
+    
+    const weekRange = row[1]; // Column B has date range
+    if (!weekRange) return null;
+    
+    // Get net retail payout (last meaningful column)
+    // Find Total column first
+    const headerResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Retail Sales!A${retailConfig.salesHeaderRow}:Z${retailConfig.salesHeaderRow}`,
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const headerRow = headerResponse.data.values?.[0] || [];
+    let totalColIndex = -1;
+    let productStartIndex = -1;
+    
+    for (let i = 0; i < headerRow.length; i++) {
+      if (headerRow[i] === 'Total Retail Sales') {
+        totalColIndex = i;
+        break;
+      }
+      if (headerRow[i] && headerRow[i] !== 'Date' && productStartIndex === -1) {
+        productStartIndex = i;
+      }
+    }
+    
+    const totalRetailSales = parseFloat(row[totalColIndex]) || 0;
+    const retailTransactionFee = parseFloat(row[totalColIndex + 1]) || 0;
+    const netRetailPayout = parseFloat(row[totalColIndex + 2]) || 0;
+    
+    if (totalRetailSales === 0) {
+      console.log('No retail sales for week:', weekRange);
+      return null;
+    }
+    
+    // Get At-Cost prices
+    const atCostPrices = await getAtCostPrices();
+    
+    // Calculate retail bags sold and weight for each product
+    const retailDeductions = [];
+    let totalRetailWeightLbs = 0;
+    let totalRetailDeductionAmount = 0;
+    
+    for (let i = productStartIndex; i < totalColIndex; i++) {
+      const productName = headerRow[i];
+      const salesAmount = parseFloat(row[i]) || 0;
+      
+      if (salesAmount > 0 && retailConfig.products[productName]) {
+        const config = retailConfig.products[productName];
+        const pricePerUnit = config.pricePerUnit;
+        const weightPerUnit = config.weightPerUnit;
+        
+        // Calculate bags sold (round up for discounts)
+        const bagsSold = Math.ceil(salesAmount / pricePerUnit);
+        const totalWeight = bagsSold * weightPerUnit;
+        
+        // Find at-cost price for this product
+        let atCostPerLb = 0;
+        const productLower = productName.toLowerCase();
+        for (const [key, price] of Object.entries(atCostPrices)) {
+          if (productLower.includes(key) || key.includes(productLower.split(' ')[0])) {
+            atCostPerLb = price;
+            break;
+          }
+        }
+        
+        if (atCostPerLb === 0) {
+          // Default prices based on product name
+          if (productLower.includes('archives')) atCostPerLb = atCostPrices['archives blend'] || 10.22;
+          else if (productLower.includes('ethiopia')) atCostPerLb = atCostPrices['ethiopia gera'] || 10.39;
+          else if (productLower.includes('colombia')) atCostPerLb = atCostPrices['colombia excelso'] || 9.86;
+        }
+        
+        const deductionAmount = totalWeight * atCostPerLb;
+        
+        retailDeductions.push({
+          product: productName,
+          bagsSold,
+          weightPerBag: weightPerUnit,
+          totalWeight,
+          atCostPerLb,
+          deductionAmount
+        });
+        
+        totalRetailWeightLbs += totalWeight;
+        totalRetailDeductionAmount += deductionAmount;
+      }
+    }
+    
+    // Get week reconciliation (deliveries in this period)
+    const reconciliation = await calculateAOUWeeklyReconciliation(weekRange);
+    
+    // Calculate AOU wholesale usage (deliveries minus retail weight)
+    const wholesaleUsage = {};
+    let totalWholesaleAmount = 0;
+    
+    for (const [product, deliveredWeight] of Object.entries(reconciliation.deliveries)) {
+      // Find retail deduction for this product type
+      let retailWeight = 0;
+      retailDeductions.forEach(rd => {
+        const rdLower = rd.product.toLowerCase();
+        const prodLower = product.toLowerCase();
+        if (rdLower.includes(prodLower.split(' ')[0]) || prodLower.includes(rdLower.split(' ')[0])) {
+          retailWeight += rd.totalWeight;
+        }
+      });
+      
+      const netWeight = Math.max(0, deliveredWeight - retailWeight);
+      
+      // Get at-cost price
+      let atCostPerLb = atCostPrices[product.toLowerCase()] || 0;
+      if (atCostPerLb === 0) {
+        if (product.toLowerCase().includes('archives')) atCostPerLb = atCostPrices['archives blend'] || 10.22;
+        else if (product.toLowerCase().includes('ethiopia')) atCostPerLb = atCostPrices['ethiopia gera'] || 10.39;
+        else if (product.toLowerCase().includes('decaf')) atCostPerLb = atCostPrices['colombia decaf'] || 12.54;
+      }
+      
+      if (netWeight > 0 && atCostPerLb > 0) {
+        wholesaleUsage[product] = {
+          deliveredWeight,
+          retailWeight,
+          netWeight,
+          atCostPerLb,
+          amount: netWeight * atCostPerLb
+        };
+        totalWholesaleAmount += netWeight * atCostPerLb;
+      }
+    }
+    
+    // Build invoice data
+    const invoiceItems = [];
+    
+    // Add wholesale usage items
+    for (const [product, usage] of Object.entries(wholesaleUsage)) {
+      invoiceItems.push({
+        description: `${product} (wholesale)`,
+        quantity: usage.netWeight,
+        unitPrice: usage.atCostPerLb,
+        total: usage.amount
+      });
+    }
+    
+    // Add retail deduction (negative line item)
+    if (totalRetailDeductionAmount > 0) {
+      invoiceItems.push({
+        description: `Retail Sales Adjustment (${totalRetailWeightLbs.toFixed(2)} lb)`,
+        quantity: 1,
+        unitPrice: -totalRetailDeductionAmount,
+        total: -totalRetailDeductionAmount
+      });
+    }
+    
+    // Add net retail payout (positive - money owed to AOU)
+    if (netRetailPayout > 0) {
+      invoiceItems.push({
+        description: `Net Retail Payout (week ${weekRange})`,
+        quantity: 1,
+        unitPrice: netRetailPayout,
+        total: netRetailPayout
+      });
+    }
+    
+    const invoiceTotal = totalWholesaleAmount - totalRetailDeductionAmount + netRetailPayout;
+    
+    // Generate invoice number
+    const lastInvoiceResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Invoices!C:C'
+    });
+    
+    const invoiceNumbers = (lastInvoiceResponse.data.values || [])
+      .flat()
+      .filter(n => n && n.toString().startsWith('C-AOU-'))
+      .map(n => parseInt(n.replace('C-AOU-', '')) || 0);
+    
+    const nextNumber = invoiceNumbers.length > 0 ? Math.max(...invoiceNumbers) + 1 : 1000;
+    const invoiceNumber = `C-AOU-${nextNumber}`;
+    
+    // Create invoice PDF
+    const invoiceData = {
+      invoiceNumber,
+      customer: 'Archives of Us',
+      customerCode: 'AOU',
+      date: new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' }),
+      items: invoiceItems,
+      total: invoiceTotal,
+      weekRange,
+      isReconciliation: true
+    };
+    
+    console.log(`📄 Generated AOU reconciliation invoice ${invoiceNumber} for week ${weekRange}: $${invoiceTotal.toFixed(2)}`);
+    
+    // Save to Invoices sheet
+    const today = new Date();
+    const dateValue = today.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+    
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Invoices!B:E',
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[dateValue, invoiceNumber, invoiceTotal, '']]
+      }
+    });
+    
+    return invoiceData;
+    
+  } catch (error) {
+    console.error('Error generating AOU invoice:', error);
+    return null;
+  }
+}
+
+// Endpoint to manually generate AOU reconciliation invoice
+app.post('/api/aou/reconciliation', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { weekRange } = req.body;
+  
+  if (!weekRange) {
+    return res.status(400).json({ error: 'Week range required' });
+  }
+  
+  try {
+    // Find the row index for this week
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    const retailConfig = await getRetailProductConfig();
+    
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Retail Sales!B:B',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const dates = response.data.values || [];
+    let rowIndex = -1;
+    
+    for (let i = 0; i < dates.length; i++) {
+      if (dates[i]?.[0] === weekRange) {
+        rowIndex = i + 1; // 1-indexed
+        break;
+      }
+    }
+    
+    if (rowIndex === -1) {
+      return res.status(404).json({ error: 'Week not found' });
+    }
+    
+    const invoice = await generateAOUInvoiceForWeek(rowIndex);
+    
+    if (invoice) {
+      res.json({ success: true, invoice });
+    } else {
+      res.status(400).json({ error: 'Could not generate invoice - check if retail sales data exists' });
+    }
+    
+  } catch (error) {
+    console.error('AOU reconciliation error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Endpoint to generate AOU invoices for all completed weeks since a date
+app.post('/api/aou/generate-historical', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { sinceDate } = req.body; // e.g., "12/02/2025"
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    const retailConfig = await getRetailProductConfig();
+    
+    // Read all retail sales data
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Retail Sales!A1:Z100',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const rows = response.data.values || [];
+    
+    // Find header row for sales data
+    let salesHeaderRow = retailConfig.salesHeaderRow;
+    const headerRow = rows[salesHeaderRow - 1] || [];
+    
+    // Find Total column
+    let totalColIndex = -1;
+    for (let i = 0; i < headerRow.length; i++) {
+      if (headerRow[i] === 'Total Retail Sales') {
+        totalColIndex = i;
+        break;
+      }
+    }
+    
+    // Parse since date
+    const sinceDateParts = sinceDate.split('/');
+    const sinceDateTime = new Date(
+      parseInt(sinceDateParts[2]),
+      parseInt(sinceDateParts[0]) - 1,
+      parseInt(sinceDateParts[1])
+    );
+    
+    const generatedInvoices = [];
+    
+    // Process each data row
+    for (let i = salesHeaderRow; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || !row[1]) continue;
+      
+      const weekRange = row[1].toString();
+      const totalSales = parseFloat(row[totalColIndex]) || 0;
+      
+      if (totalSales === 0) continue; // Skip weeks without sales
+      
+      // Parse week end date to check if after sinceDate
+      const [startStr, endStr] = weekRange.split('-');
+      const [m, d, y] = endStr.trim().split('/');
+      const weekEndDate = new Date(2000 + parseInt(y), parseInt(m) - 1, parseInt(d));
+      
+      if (weekEndDate >= sinceDateTime) {
+        const invoice = await generateAOUInvoiceForWeek(i + 1);
+        if (invoice) {
+          generatedInvoices.push(invoice);
+        }
+      }
+    }
+    
+    res.json({
+      success: true,
+      message: `Generated ${generatedInvoices.length} AOU invoices`,
+      invoices: generatedInvoices
+    });
+    
+  } catch (error) {
+    console.error('Historical AOU generation error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get list of AOU invoices
+app.get('/api/aou/invoices', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Invoices!B:E',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const rows = response.data.values || [];
+    const aouInvoices = [];
+    
+    for (let i = 1; i < rows.length; i++) {
+      const row = rows[i];
+      if (row && row[1] && row[1].toString().includes('-AOU-')) {
+        // Convert Excel date to readable format
+        let dateStr = row[0];
+        if (typeof dateStr === 'number') {
+          const excelEpoch = new Date(1899, 11, 30);
+          const jsDate = new Date(excelEpoch.getTime() + dateStr * 24 * 60 * 60 * 1000);
+          dateStr = jsDate.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+        }
+        
+        aouInvoices.push({
+          date: dateStr,
+          invoiceNumber: row[1],
+          amount: parseFloat(row[2]) || 0,
+          paid: row[3] ? true : false
+        });
+      }
+    }
+    
+    res.json({ success: true, invoices: aouInvoices.reverse() }); // Most recent first
+    
+  } catch (error) {
+    console.error('AOU invoices list error:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 

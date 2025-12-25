@@ -656,9 +656,9 @@
                         <strong>🧾 Generate Invoice</strong>
                         <span>Create a wholesale invoice</span>
                     </div>
-                    <div class="example-prompt" onclick="manageRetailPlaceholder()">
-                        <strong>🛒 Manage Retail</strong>
-                        <span>Update retail bag sales</span>
+                    <div class="example-prompt" onclick="manageAOUCafePlaceholder()">
+                        <strong>☕ AOU Cafe Activity</strong>
+                        <span>Retail sales and coffee usage</span>
                     </div>
                     <div class="example-prompt" onclick="openManageCustomers()">
                         <strong>👥 Manage Customers</strong>
@@ -3522,6 +3522,23 @@
                         });
                         
                         html += `</div>`;
+                    } else if (item.type === 'inventory_log') {
+                        // Display inventory log weeks needing entries
+                        const lines = item.description.split('\n');
+                        html += `<div style="font-size: 13px;">`;
+                        
+                        lines.forEach(line => {
+                            const [type, ...textParts] = line.split('|');
+                            const text = textParts.join('|');
+                            
+                            if (type === 'header') {
+                                html += `<div style="color: #ccc; font-weight: 600; margin: 8px 0 4px 0; font-size: 11px; text-transform: uppercase;">${text}</div>`;
+                            } else if (type === 'inventory') {
+                                html += `<div style="margin: 2px 0 2px 8px; color: #f0ad4e;">📊 ${text}</div>`;
+                            }
+                        });
+                        
+                        html += `</div>`;
                     } else {
                         html += `<div style="color: #999; font-size: 13px;">${item.description}</div>`;
                     }
@@ -3573,9 +3590,13 @@
                 case 'outstanding_invoices':
                     return 'showOutstandingInvoices()';
                 case 'retail_overview':
-                    return 'manageRetail()';
+                    return 'manageAOUCafe()';
+                case 'aou_cafe':
+                    return 'manageAOUCafe()';
                 case 'en_route_overview':
                     return 'viewEnRoute()';
+                case 'inventory_log':
+                    return 'showInventoryLog()';
                 default:
                     return '';
             }
@@ -3589,8 +3610,12 @@
                     return 'Send Reminders';
                 case 'retail_overview':
                     return 'Manage Retail';
+                case 'aou_cafe':
+                    return 'Manage';
                 case 'en_route_overview':
                     return 'View En Route';
+                case 'inventory_log':
+                    return 'Log Inventory';
                 default:
                     return 'Go →';
             }
@@ -4914,7 +4939,7 @@ Archives of Us Coffee`;
                     if (messages.length > 0) {
                         messages[messages.length - 1].remove();
                     }
-                    manageRetail();
+                    manageAOUCafe();
                     return null;
                 }
                 
@@ -5373,8 +5398,8 @@ Archives of Us Coffee`;
                 'generate invoice': () => { startInvoice(); return true; },
                 'create invoice': () => { startInvoice(); return true; },
                 'new invoice': () => { startInvoice(); return true; },
-                'manage retail': () => { manageRetail(); return true; },
-                'retail': () => { manageRetail(); return true; },
+                'manage retail': () => { manageAOUCafe(); return true; },
+                'retail': () => { manageAOUCafe(); return true; },
                 'forecast': () => { showForecast(); return true; },
             };
             
@@ -5942,7 +5967,7 @@ Archives of Us Coffee`;
                 html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
             }
             if (config.exclude !== 'manage_retail') {
-                html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
+                html += '<button class="action-btn" onclick="manageAOUCafePlaceholder()">AOU Cafe</button>';
             }
             if (config.exclude !== 'manage_customers') {
                 html += '<button class="action-btn" onclick="openManageCustomers()">Manage Customers</button>';
@@ -5961,7 +5986,7 @@ Archives of Us Coffee`;
             html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
             html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
             html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
-            html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
+            html += '<button class="action-btn" onclick="manageAOUCafePlaceholder()">AOU Cafe</button>';
             html += '<button class="action-btn" onclick="openManageCustomers()">Manage Customers</button>';
             html += '</div>';
             
@@ -5977,7 +6002,7 @@ Archives of Us Coffee`;
             html += '<button class="action-btn" onclick="startRoastOrder()">Order Roast</button>';
             html += '<button class="action-btn" onclick="viewEnRoute()">En Route</button>';
             html += '<button class="action-btn" onclick="startInvoice()">Generate Invoice</button>';
-            html += '<button class="action-btn" onclick="manageRetailPlaceholder()">Manage Retail</button>';
+            html += '<button class="action-btn" onclick="manageAOUCafePlaceholder()">AOU Cafe</button>';
             html += '<button class="action-btn" onclick="openManageCustomers()">Manage Customers</button>';
             html += '</div>';
             
@@ -5991,14 +6016,14 @@ Archives of Us Coffee`;
         let retailMissingWeeks = [];
         let retailIncompleteWeeks = [];
         
-        async function manageRetail() {
+        async function manageAOUCafe() {
             // Clear welcome message
             const welcomeMsg = chatContainer.querySelector('.welcome-message');
             if (welcomeMsg) welcomeMsg.remove();
             
             // Show user's request first
-            addMessage('Update retail bag sales', true);
-            addMessage('Loading retail sales data...', false);
+            addMessage('AOU Cafe Activity', true);
+            addMessage('Loading cafe activity data...', false);
             
             try {
                 const response = await fetch('/api/retail/data');
@@ -6033,17 +6058,18 @@ Archives of Us Coffee`;
                 const lastMsg = messages[messages.length - 1];
                 if (lastMsg) {
                     const content = lastMsg.querySelector('.message-content') || lastMsg;
-                    content.innerHTML = `<div style="color: #dc3545;">Error loading retail data: ${error.message}</div>`;
+                    content.innerHTML = `<div style="color: #dc3545;">Error loading data: ${error.message}</div>`;
                 }
             }
         }
         
         function showRetailManagementUI(data) {
-            let html = '<strong>Retail Sales Management</strong><br><br>';
+            let html = '<strong>☕ AOU Cafe Activity</strong><br>';
+            html += '<span style="color: #888; font-size: 12px;">Retail sales and coffee usage</span><br><br>';
             
             // Current products
             html += '<div style="margin-bottom: 16px;">';
-            html += '<strong>Products:</strong> ';
+            html += '<strong>Retail Products:</strong> ';
             if (retailProducts.length > 0) {
                 html += retailProducts.map(p => p.name).join(', ');
             } else {
@@ -6060,7 +6086,21 @@ Archives of Us Coffee`;
                 html += `</div>`;
             }
             
-            // Incomplete weeks
+            // Weeks needing coffee usage tracking
+            const weeksNeedingUsage = retailWeeks.filter(w => w.hasData && !w.hasWholesaleUsage);
+            if (weeksNeedingUsage.length > 0) {
+                html += `<div style="background: #2a3a3a; padding: 10px; border-radius: 8px; margin-bottom: 12px;">`;
+                html += `<strong>📦 ${weeksNeedingUsage.length} week(s) need coffee usage:</strong><br>`;
+                weeksNeedingUsage.slice(0, 3).forEach(week => {
+                    html += `<div style="margin: 4px 0; font-size: 12px;">`;
+                    html += `${week.dateRange} `;
+                    html += `<button class="action-btn" style="padding: 2px 6px; font-size: 10px;" onclick="trackCoffeeUsage('${week.dateRange}', ${week.rowIndex})">Track Usage</button>`;
+                    html += `</div>`;
+                });
+                html += `</div>`;
+            }
+            
+            // Incomplete weeks (no sales data)
             if (retailIncompleteWeeks.length > 0) {
                 html += `<div style="background: #3a2020; padding: 10px; border-radius: 8px; margin-bottom: 12px;">`;
                 html += `<strong>⚠️ ${retailIncompleteWeeks.length} week(s) need sales data:</strong><br>`;
@@ -6092,8 +6132,9 @@ Archives of Us Coffee`;
             // Action buttons
             html += '<div class="response-buttons" style="margin-top: 12px;">';
             html += '<button class="action-btn" onclick="checkUninvoicedRetailWeeks()">Send Invoices</button>';
+            html += '<button class="action-btn" onclick="showTrackCoffeeUsage()">Track Coffee Usage</button>';
+            html += '<button class="action-btn" onclick="showInventoryLog()">Inventory Log</button>';
             html += '<button class="action-btn" onclick="showRetailProductsManager()">Manage Products</button>';
-            html += '<button class="action-btn" onclick="showRecentRetailWeeks()">Recent Sales Weeks</button>';
             html += '<button class="action-btn" onclick="cancelRetailMode()">Done</button>';
             html += '</div>';
             
@@ -6133,7 +6174,7 @@ Archives of Us Coffee`;
                     }
                     
                     html += `<div class="response-buttons" style="margin-top: 12px;">`;
-                    html += `<button class="action-btn" onclick="manageRetail()">Back to Retail</button>`;
+                    html += `<button class="action-btn" onclick="manageAOUCafe()">Back to Retail</button>`;
                     html += `<button class="action-btn" onclick="addConversationalFollowUp('completed')">Done</button>`;
                     html += `</div>`;
                     
@@ -6164,7 +6205,7 @@ Archives of Us Coffee`;
                 
                 if (data.success) {
                     // Reload retail data
-                    await manageRetail();
+                    await manageAOUCafe();
                 } else {
                     throw new Error(data.error || 'Failed to add weeks');
                 }
@@ -6191,7 +6232,7 @@ Archives of Us Coffee`;
             html += '</div>';
             html += '<div class="response-buttons">';
             html += `<button class="action-btn" onclick="saveWeekSales(${rowIndex}, '${dateRange}')">Save</button>`;
-            html += '<button class="action-btn" onclick="manageRetail()">Cancel</button>';
+            html += '<button class="action-btn" onclick="manageAOUCafe()">Cancel</button>';
             html += '</div>';
             
             addMessage(html, false);
@@ -6225,7 +6266,7 @@ Archives of Us Coffee`;
                 
                 if (data.success) {
                     addMessage(`Sales for ${dateRange} saved successfully!`, false);
-                    setTimeout(() => manageRetail(), 1000);
+                    setTimeout(() => manageAOUCafe(), 1000);
                 } else {
                     throw new Error(data.error || 'Failed to save sales');
                 }
@@ -6261,7 +6302,7 @@ Archives of Us Coffee`;
             }
             
             html += '<div class="response-buttons" style="margin-top: 12px;">';
-            html += '<button class="action-btn" onclick="manageRetail()">Back</button>';
+            html += '<button class="action-btn" onclick="manageAOUCafe()">Back</button>';
             html += '</div>';
             
             addMessage(html, false);
@@ -6299,7 +6340,7 @@ Archives of Us Coffee`;
             html += '</div>';
             
             html += '<div class="response-buttons" style="margin-top: 12px;">';
-            html += '<button class="action-btn" onclick="manageRetail()">Back</button>';
+            html += '<button class="action-btn" onclick="manageAOUCafe()">Back</button>';
             html += '</div>';
             
             addMessage(html, false);
@@ -6327,7 +6368,7 @@ Archives of Us Coffee`;
                 
                 if (data.success) {
                     addMessage(`Product "${productName}" added!`, false);
-                    setTimeout(() => manageRetail(), 1000);
+                    setTimeout(() => manageAOUCafe(), 1000);
                 } else {
                     throw new Error(data.error || 'Failed to add product');
                 }
@@ -6356,7 +6397,7 @@ Archives of Us Coffee`;
                 
                 if (data.success) {
                     addMessage(`Product "${productName}" removed.`, false);
-                    setTimeout(() => manageRetail(), 1000);
+                    setTimeout(() => manageAOUCafe(), 1000);
                 } else {
                     throw new Error(data.error || 'Failed to remove product');
                 }
@@ -6382,7 +6423,7 @@ Archives of Us Coffee`;
             .then(data => {
                 if (data.success) {
                     addMessage(`Renamed to "${newName}"!`, false);
-                    setTimeout(() => manageRetail(), 1000);
+                    setTimeout(() => manageAOUCafe(), 1000);
                 } else {
                     throw new Error(data.error);
                 }
@@ -6391,6 +6432,422 @@ Archives of Us Coffee`;
                 console.error('Error renaming product:', error);
                 addMessage(`Error: ${error.message}`, false);
             });
+        }
+        
+        // ============ Track Coffee Usage ============
+        
+        let roastedCoffeeTypes = ['Archives Blend', 'Ethiopia Gera', 'Colombia Decaf'];
+        
+        async function showTrackCoffeeUsage() {
+            addMessage('Track Coffee Usage', true);
+            addMessage('Loading...', false);
+            
+            try {
+                // Get inventory log data for roasted coffee types
+                const invResponse = await fetch('/api/inventory-log');
+                const invData = await invResponse.json();
+                
+                if (invData.success && invData.roastedCoffees) {
+                    roastedCoffeeTypes = invData.roastedCoffees;
+                }
+                
+                // Get retail weeks that need usage tracking
+                const retailResponse = await fetch('/api/retail/data');
+                const retailData = await retailResponse.json();
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                let html = '<strong>☕ Track AOU Coffee Usage</strong><br>';
+                html += '<span style="color: #888; font-size: 12px;">Log coffee dropped off at AOU Cafe</span><br><br>';
+                
+                // Show form to enter usage
+                html += '<div style="background: #2a2a2a; padding: 12px; border-radius: 8px; margin-bottom: 12px;">';
+                html += '<div style="margin-bottom: 12px;">';
+                html += '<label style="color: #888; font-size: 12px;">Drop-off Date:</label><br>';
+                html += `<input type="date" id="usageDate" value="${new Date().toISOString().split('T')[0]}" 
+                         style="padding: 6px; background: #1a1a1a; border: 1px solid #404040; color: #fff; border-radius: 4px; width: 150px;">`;
+                html += '</div>';
+                
+                html += '<div style="color: #888; font-size: 11px; margin-bottom: 8px;">Enter weights dropped off (lb):</div>';
+                
+                roastedCoffeeTypes.forEach(coffee => {
+                    const safeName = coffee.toLowerCase().replace(/\s+/g, '-');
+                    html += `<div style="display: flex; align-items: center; gap: 8px; margin: 6px 0;">`;
+                    html += `<label style="min-width: 120px; font-size: 13px;">${coffee}:</label>`;
+                    html += `<input type="number" step="0.1" min="0" id="usage-${safeName}" placeholder="0" 
+                             style="width: 80px; padding: 6px; background: #1a1a1a; border: 1px solid #404040; color: #fff; border-radius: 4px;">`;
+                    html += `<span style="color: #666; font-size: 11px;">lb</span>`;
+                    html += `</div>`;
+                });
+                
+                html += '</div>';
+                
+                // Show weeks needing usage data
+                const weeksNeedingUsage = (retailData.weeks || []).filter(w => w.hasData && !w.hasWholesaleUsage);
+                if (weeksNeedingUsage.length > 0) {
+                    html += '<div style="margin-bottom: 12px; padding: 8px; background: #3a3a20; border-radius: 6px;">';
+                    html += `<div style="font-size: 11px; color: #888; margin-bottom: 4px;">⚠️ ${weeksNeedingUsage.length} week(s) need usage data:</div>`;
+                    html += `<div style="font-size: 12px;">${weeksNeedingUsage.map(w => w.dateRange).join(', ')}</div>`;
+                    html += '</div>';
+                }
+                
+                html += '<div class="response-buttons">';
+                html += '<button class="action-btn" onclick="submitCoffeeUsage()">Save Usage</button>';
+                html += '<button class="action-btn" onclick="manageAOUCafe()">Cancel</button>';
+                html += '</div>';
+                
+                content.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Error loading usage form:', error);
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.innerHTML = `<div style="color: #ff6b6b;">Error: ${error.message}</div>`;
+                }
+            }
+        }
+        
+        async function submitCoffeeUsage() {
+            const dateInput = document.getElementById('usageDate');
+            const dropoffDate = dateInput?.value;
+            
+            if (!dropoffDate) {
+                alert('Please select a date');
+                return;
+            }
+            
+            // Collect usage values
+            const usage = {};
+            let hasAnyUsage = false;
+            
+            roastedCoffeeTypes.forEach(coffee => {
+                const safeName = coffee.toLowerCase().replace(/\s+/g, '-');
+                const input = document.getElementById(`usage-${safeName}`);
+                const value = parseFloat(input?.value) || 0;
+                if (value > 0) {
+                    hasAnyUsage = true;
+                    // Map to standard keys
+                    if (coffee.toLowerCase().includes('archives')) usage.archives = (usage.archives || 0) + value;
+                    else if (coffee.toLowerCase().includes('ethiopia')) usage.ethiopia = (usage.ethiopia || 0) + value;
+                    else if (coffee.toLowerCase().includes('decaf')) usage.decaf = (usage.decaf || 0) + value;
+                }
+            });
+            
+            if (!hasAnyUsage) {
+                alert('Please enter at least one coffee weight');
+                return;
+            }
+            
+            // Find the week that contains the dropoff date
+            const dropDate = new Date(dropoffDate);
+            // Weeks run Friday-Thursday
+            const dayOfWeek = dropDate.getDay();
+            const diffToFriday = dayOfWeek >= 5 ? (dayOfWeek - 5) : (dayOfWeek + 2);
+            const weekStart = new Date(dropDate);
+            weekStart.setDate(dropDate.getDate() - diffToFriday);
+            const weekEnd = new Date(weekStart);
+            weekEnd.setDate(weekStart.getDate() + 6);
+            
+            const formatShortDate = (d) => `${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getDate().toString().padStart(2, '0')}/${d.getFullYear().toString().slice(-2)}`;
+            const weekRange = `${formatShortDate(weekStart)}-${formatShortDate(weekEnd)}`;
+            
+            addMessage(`Saving coffee usage for ${weekRange}...`, false);
+            
+            try {
+                const response = await fetch('/api/aou/track-usage', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ weekRange, usage })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    let summary = `✅ Coffee usage saved for ${weekRange}:\n`;
+                    if (usage.archives) summary += `• Archives Blend: ${usage.archives} lb\n`;
+                    if (usage.ethiopia) summary += `• Ethiopia Gera: ${usage.ethiopia} lb\n`;
+                    if (usage.decaf) summary += `• Colombia Decaf: ${usage.decaf} lb\n`;
+                    
+                    addMessage(summary, false);
+                    setTimeout(() => manageAOUCafe(), 1500);
+                } else {
+                    throw new Error(data.error || 'Failed to save usage');
+                }
+                
+            } catch (error) {
+                console.error('Error saving usage:', error);
+                addMessage(`Error: ${error.message}`, false);
+            }
+        }
+        
+        // Track coffee usage for a specific week (from UI button)
+        function trackCoffeeUsage(dateRange, rowIndex) {
+            addMessage(`Track usage for ${dateRange}`, true);
+            
+            let html = `<strong>Track Coffee Usage for ${dateRange}</strong><br><br>`;
+            html += '<div style="background: #2a2a2a; padding: 12px; border-radius: 8px; margin-bottom: 12px;">';
+            html += '<div style="color: #888; font-size: 11px; margin-bottom: 8px;">Enter coffee weights (lb):</div>';
+            
+            roastedCoffeeTypes.forEach(coffee => {
+                const safeName = coffee.toLowerCase().replace(/\s+/g, '-');
+                html += `<div style="display: flex; align-items: center; gap: 8px; margin: 6px 0;">`;
+                html += `<label style="min-width: 120px; font-size: 13px;">${coffee}:</label>`;
+                html += `<input type="number" step="0.1" min="0" id="week-usage-${safeName}" placeholder="0" 
+                         style="width: 80px; padding: 6px; background: #1a1a1a; border: 1px solid #404040; color: #fff; border-radius: 4px;">`;
+                html += `<span style="color: #666; font-size: 11px;">lb</span>`;
+                html += `</div>`;
+            });
+            
+            html += '</div>';
+            html += '<div class="response-buttons">';
+            html += `<button class="action-btn" onclick="saveWeekCoffeeUsage('${dateRange}')">Save</button>`;
+            html += '<button class="action-btn" onclick="manageAOUCafe()">Cancel</button>';
+            html += '</div>';
+            
+            addMessage(html, false);
+        }
+        
+        async function saveWeekCoffeeUsage(weekRange) {
+            const usage = {};
+            let hasAnyUsage = false;
+            
+            roastedCoffeeTypes.forEach(coffee => {
+                const safeName = coffee.toLowerCase().replace(/\s+/g, '-');
+                const input = document.getElementById(`week-usage-${safeName}`);
+                const value = parseFloat(input?.value) || 0;
+                if (value > 0) {
+                    hasAnyUsage = true;
+                    if (coffee.toLowerCase().includes('archives')) usage.archives = (usage.archives || 0) + value;
+                    else if (coffee.toLowerCase().includes('ethiopia')) usage.ethiopia = (usage.ethiopia || 0) + value;
+                    else if (coffee.toLowerCase().includes('decaf')) usage.decaf = (usage.decaf || 0) + value;
+                }
+            });
+            
+            if (!hasAnyUsage) {
+                alert('Please enter at least one coffee weight');
+                return;
+            }
+            
+            addMessage(`Saving usage for ${weekRange}...`, false);
+            
+            try {
+                const response = await fetch('/api/aou/track-usage', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ weekRange, usage })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addMessage(`✅ Coffee usage saved!`, false);
+                    setTimeout(() => manageAOUCafe(), 1000);
+                } else {
+                    throw new Error(data.error);
+                }
+            } catch (error) {
+                addMessage(`Error: ${error.message}`, false);
+            }
+        }
+        
+        // ============ Inventory Log Management ============
+        
+        let inventoryLogData = null;
+        
+        async function showInventoryLog() {
+            addMessage('View Inventory Log', true);
+            addMessage('Loading inventory log...', false);
+            
+            try {
+                const response = await fetch('/api/inventory-log');
+                inventoryLogData = await response.json();
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                if (!inventoryLogData.success) {
+                    content.innerHTML = `<div style="color: #ff6b6b;">Error: ${inventoryLogData.error}</div>`;
+                    return;
+                }
+                
+                let html = '<strong>📊 Inventory Log</strong><br>';
+                html += '<span style="color: #888; font-size: 12px;">Weekly inventory snapshots</span><br><br>';
+                
+                const entries = inventoryLogData.entries || [];
+                const roastedCoffees = inventoryLogData.roastedCoffees || [];
+                const greenCoffees = inventoryLogData.greenCoffees || [];
+                
+                if (entries.length === 0) {
+                    html += '<div style="color: #888;">No entries yet.</div>';
+                } else {
+                    // Show recent entries (newest first)
+                    html += '<div style="max-height: 350px; overflow-y: auto;">';
+                    
+                    entries.slice().reverse().forEach(entry => {
+                        const hasRoasted = Object.values(entry.roasted).some(v => v !== null);
+                        const hasGreen = Object.values(entry.green).some(v => v !== null);
+                        const isComplete = hasRoasted && hasGreen;
+                        
+                        html += `<div style="background: #1a1a1a; padding: 10px; border-radius: 6px; margin-bottom: 8px; border-left: 3px solid ${isComplete ? '#4a6741' : '#6a4a41'};">`;
+                        html += `<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">`;
+                        html += `<strong>${entry.date}</strong>`;
+                        html += `<button class="action-btn" style="padding: 2px 8px; font-size: 10px;" onclick="editInventoryEntry('${entry.date}', ${entry.rowIndex})">Edit</button>`;
+                        html += `</div>`;
+                        
+                        // Roasted
+                        html += '<div style="font-size: 11px; color: #888;">Roasted: ';
+                        const roastedParts = [];
+                        roastedCoffees.forEach(c => {
+                            const val = entry.roasted[c];
+                            if (val !== null) roastedParts.push(`${c.split(' ')[0]} ${val}lb`);
+                        });
+                        html += roastedParts.length > 0 ? roastedParts.join(', ') : '<span style="color: #6a4a41;">Not entered</span>';
+                        html += '</div>';
+                        
+                        // Green
+                        html += '<div style="font-size: 11px; color: #888;">Green: ';
+                        const greenParts = [];
+                        greenCoffees.forEach(c => {
+                            const val = entry.green[c];
+                            if (val !== null) greenParts.push(`${c.split(' ')[0]} ${val}lb`);
+                        });
+                        html += greenParts.length > 0 ? greenParts.join(', ') : '<span style="color: #6a4a41;">Not entered</span>';
+                        html += '</div>';
+                        
+                        html += '</div>';
+                    });
+                    
+                    html += '</div>';
+                }
+                
+                // Find weeks needing inventory entry
+                const weeksNeedingRoasted = entries.filter(e => !Object.values(e.roasted).some(v => v !== null));
+                if (weeksNeedingRoasted.length > 0) {
+                    html += `<div style="background: #3a2a20; padding: 8px; border-radius: 6px; margin: 12px 0;">`;
+                    html += `<div style="font-size: 11px;">⚠️ ${weeksNeedingRoasted.length} week(s) need roasted inventory</div>`;
+                    html += `</div>`;
+                }
+                
+                html += '<div class="response-buttons" style="margin-top: 12px;">';
+                html += '<button class="action-btn" onclick="manageAOUCafe()">← Back</button>';
+                html += '<button class="action-btn" onclick="addFollowUpMessage()">Done</button>';
+                html += '</div>';
+                
+                content.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Error loading inventory log:', error);
+                addMessage(`Error: ${error.message}`, false);
+            }
+        }
+        
+        async function editInventoryEntry(weekDate, rowIndex) {
+            addMessage(`Edit inventory for ${weekDate}`, true);
+            
+            // Fetch current data
+            const response = await fetch('/api/inventory-log');
+            const data = await response.json();
+            
+            if (!data.success) {
+                addMessage('Error loading data', false);
+                return;
+            }
+            
+            const entry = data.entries.find(e => e.date === weekDate);
+            const roastedCoffees = data.roastedCoffees || [];
+            
+            let html = `<strong>Edit Roasted Inventory for ${weekDate}</strong><br><br>`;
+            html += '<div style="background: #2a2a2a; padding: 12px; border-radius: 8px; margin-bottom: 12px;">';
+            
+            roastedCoffees.forEach(coffee => {
+                const currentVal = entry?.roasted[coffee] ?? '';
+                const safeName = coffee.toLowerCase().replace(/\s+/g, '-');
+                html += `<div style="display: flex; align-items: center; gap: 8px; margin: 6px 0;">`;
+                html += `<label style="min-width: 120px; font-size: 13px;">${coffee}:</label>`;
+                html += `<input type="number" step="0.1" min="0" id="inv-${safeName}" value="${currentVal}" 
+                         style="width: 80px; padding: 6px; background: #1a1a1a; border: 1px solid #404040; color: #fff; border-radius: 4px;">`;
+                html += `<span style="color: #666; font-size: 11px;">lb</span>`;
+                html += `</div>`;
+            });
+            
+            html += '</div>';
+            
+            // Auto-fill green button
+            html += `<button class="action-btn" style="font-size: 11px; margin-bottom: 12px;" onclick="autoFillGreenInventory('${weekDate}')">📋 Auto-fill Green from Inventory Sheet</button><br>`;
+            
+            html += '<div class="response-buttons">';
+            html += `<button class="action-btn" onclick="saveInventoryEntry('${weekDate}')">Save</button>`;
+            html += '<button class="action-btn" onclick="showInventoryLog()">Cancel</button>';
+            html += '</div>';
+            
+            addMessage(html, false);
+        }
+        
+        async function saveInventoryEntry(weekDate) {
+            const roastedInventory = {};
+            
+            if (!inventoryLogData?.roastedCoffees) {
+                const response = await fetch('/api/inventory-log');
+                inventoryLogData = await response.json();
+            }
+            
+            (inventoryLogData.roastedCoffees || []).forEach(coffee => {
+                const safeName = coffee.toLowerCase().replace(/\s+/g, '-');
+                const input = document.getElementById(`inv-${safeName}`);
+                const value = parseFloat(input?.value);
+                if (!isNaN(value)) {
+                    roastedInventory[coffee] = value;
+                }
+            });
+            
+            addMessage('Saving inventory...', false);
+            
+            try {
+                const response = await fetch('/api/inventory-log/save-roasted', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ weekEndDate: weekDate, roastedInventory })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addMessage('✅ Inventory saved!', false);
+                    setTimeout(() => showInventoryLog(), 1000);
+                } else {
+                    throw new Error(data.error);
+                }
+            } catch (error) {
+                addMessage(`Error: ${error.message}`, false);
+            }
+        }
+        
+        async function autoFillGreenInventory(weekDate) {
+            addMessage('Auto-filling green coffee from inventory sheet...', false);
+            
+            try {
+                const response = await fetch('/api/inventory-log/auto-green', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ weekEndDate: weekDate })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    const greenList = Object.entries(data.greenInventory || {}).map(([k, v]) => `${k}: ${v}lb`).join(', ');
+                    addMessage(`✅ Green inventory auto-filled: ${greenList || 'none'}`, false);
+                } else {
+                    throw new Error(data.error);
+                }
+            } catch (error) {
+                addMessage(`Error: ${error.message}`, false);
+            }
         }
         
         // Check for uninvoiced retail weeks and show send invoice UI
@@ -6420,7 +6877,7 @@ Archives of Us Coffee`;
                     let html = `<div style="color: #4a6741; margin-bottom: 12px;">✅ All invoices have been sent!</div>`;
                     html += `<div style="color: #888;">You're up to date on retail sales payouts.</div>`;
                     html += `<div class="response-buttons" style="margin-top: 12px;">`;
-                    html += `<button class="action-btn" onclick="manageRetail()">← Back to Retail</button>`;
+                    html += `<button class="action-btn" onclick="manageAOUCafe()">← Back to Retail</button>`;
                     html += `<button class="action-btn" onclick="addFollowUpMessage()">Done</button>`;
                     html += `</div>`;
                     content.innerHTML = html;
@@ -6446,7 +6903,7 @@ Archives of Us Coffee`;
                 if (uninvoicedWeeks.length > 1) {
                     html += `<button class="action-btn" onclick="sendAllAOUInvoices()">Send All (${uninvoicedWeeks.length})</button>`;
                 }
-                html += `<button class="action-btn" onclick="manageRetail()">← Back to Retail</button>`;
+                html += `<button class="action-btn" onclick="manageAOUCafe()">← Back to Retail</button>`;
                 html += `</div>`;
                 
                 content.innerHTML = html;
@@ -6468,7 +6925,101 @@ Archives of Us Coffee`;
         // Send a single AOU invoice
         async function sendAOUInvoice(rowIndex, weekRange) {
             addMessage(`Generate invoice for ${weekRange}`, true);
-            addMessage('Generating invoice...', false);
+            addMessage('Checking for discrepancies...', false);
+            
+            try {
+                // First, check for discrepancies between tracked and calculated usage
+                const calcResponse = await fetch(`/api/aou/calculated-usage?weekRange=${encodeURIComponent(weekRange)}`);
+                const calcData = await calcResponse.json();
+                
+                const retailResponse = await fetch('/api/retail/data');
+                const retailData = await retailResponse.json();
+                
+                // Find the week's tracked usage
+                const weekData = retailData.weeks?.find(w => w.dateRange === weekRange);
+                const trackedUsage = weekData?.wholesaleUsage || {};
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                // Compare tracked vs calculated if we have inventory data
+                let hasDiscrepancy = false;
+                let discrepancyDetails = [];
+                
+                if (calcData.success && calcData.hasInventoryData) {
+                    for (const [coffee, data] of Object.entries(calcData.calculated || {})) {
+                        const tracked = coffee.toLowerCase().includes('archives') ? trackedUsage.archives :
+                                       coffee.toLowerCase().includes('ethiopia') ? trackedUsage.ethiopia :
+                                       coffee.toLowerCase().includes('decaf') ? trackedUsage.decaf : null;
+                        
+                        if (tracked !== null && data.calculatedUsage !== null) {
+                            const diff = Math.abs((tracked || 0) - data.calculatedUsage);
+                            if (diff > 1) {
+                                hasDiscrepancy = true;
+                                discrepancyDetails.push({
+                                    coffee,
+                                    tracked: tracked || 0,
+                                    calculated: data.calculatedUsage,
+                                    diff: diff.toFixed(1)
+                                });
+                            }
+                        }
+                    }
+                }
+                
+                // If discrepancy found, ask user to confirm
+                if (hasDiscrepancy) {
+                    let html = `<div style="background: #4a3a20; padding: 12px; border-radius: 8px; margin-bottom: 12px;">`;
+                    html += `<div style="color: #ffd700; font-weight: 600; margin-bottom: 8px;">⚠️ Usage Discrepancy Detected</div>`;
+                    html += `<div style="font-size: 12px; margin-bottom: 8px;">The tracked usage differs from the calculated usage by more than 1 lb:</div>`;
+                    html += `<table style="width: 100%; font-size: 11px; border-collapse: collapse;">`;
+                    html += `<tr style="color: #888;"><th style="text-align: left; padding: 4px;">Coffee</th><th style="text-align: right; padding: 4px;">Tracked</th><th style="text-align: right; padding: 4px;">Calculated</th><th style="text-align: right; padding: 4px;">Diff</th></tr>`;
+                    
+                    discrepancyDetails.forEach(d => {
+                        html += `<tr><td style="padding: 4px;">${d.coffee}</td>`;
+                        html += `<td style="text-align: right; padding: 4px;">${d.tracked} lb</td>`;
+                        html += `<td style="text-align: right; padding: 4px;">${d.calculated} lb</td>`;
+                        html += `<td style="text-align: right; padding: 4px; color: #ff8c00;">${d.diff} lb</td></tr>`;
+                    });
+                    html += `</table>`;
+                    html += `<div style="font-size: 11px; color: #888; margin-top: 8px;">Tracked usage (from AOU Cafe Activity) will be used for invoicing.</div>`;
+                    html += `</div>`;
+                    
+                    html += `<div class="response-buttons">`;
+                    html += `<button class="action-btn" onclick="confirmSendAOUInvoice(${rowIndex}, '${weekRange}')">Confirm & Generate Invoice</button>`;
+                    html += `<button class="action-btn" onclick="trackCoffeeUsage('${weekRange}', ${rowIndex})">Edit Usage</button>`;
+                    html += `<button class="action-btn" onclick="checkUninvoicedRetailWeeks()">Cancel</button>`;
+                    html += `</div>`;
+                    
+                    content.innerHTML = html;
+                    return;
+                }
+                
+                // No discrepancy or no inventory data - proceed with invoice generation
+                await confirmSendAOUInvoice(rowIndex, weekRange);
+                
+            } catch (error) {
+                console.error('Error checking discrepancy:', error);
+                // If error checking discrepancy, proceed anyway
+                await confirmSendAOUInvoice(rowIndex, weekRange);
+            }
+        }
+        
+        // Actually generate and send the invoice (after discrepancy check)
+        async function confirmSendAOUInvoice(rowIndex, weekRange) {
+            const messages = chatContainer.querySelectorAll('.message');
+            let lastMsg = messages[messages.length - 1];
+            let content = lastMsg?.querySelector('.message-content') || lastMsg;
+            
+            if (content) {
+                content.innerHTML = 'Generating invoice...';
+            } else {
+                addMessage('Generating invoice...', false);
+                const newMessages = chatContainer.querySelectorAll('.message');
+                lastMsg = newMessages[newMessages.length - 1];
+                content = lastMsg?.querySelector('.message-content') || lastMsg;
+            }
             
             try {
                 const response = await fetch('/api/retail/send-aou-invoice', {
@@ -6478,10 +7029,6 @@ Archives of Us Coffee`;
                 });
                 
                 const data = await response.json();
-                
-                const messages = chatContainer.querySelectorAll('.message');
-                const lastMsg = messages[messages.length - 1];
-                const content = lastMsg?.querySelector('.message-content') || lastMsg;
                 
                 if (!data.success) {
                     content.innerHTML = `<div style="color: #ff6b6b;">Error: ${data.error}</div>`;
@@ -6521,12 +7068,7 @@ Archives of Us Coffee`;
                 
             } catch (error) {
                 console.error('Error sending AOU invoice:', error);
-                const messages = chatContainer.querySelectorAll('.message');
-                const lastMsg = messages[messages.length - 1];
-                if (lastMsg) {
-                    const content = lastMsg.querySelector('.message-content') || lastMsg;
-                    content.innerHTML = `<div style="color: #ff6b6b;">Error: ${error.message}</div>`;
-                }
+                content.innerHTML = `<div style="color: #ff6b6b;">Error: ${error.message}</div>`;
             }
         }
         
@@ -6589,7 +7131,7 @@ Archives of Us Coffee`;
             }
             
             html += `<div class="response-buttons">`;
-            html += `<button class="action-btn" onclick="manageRetail()">← Back to Retail</button>`;
+            html += `<button class="action-btn" onclick="manageAOUCafe()">← Back to Retail</button>`;
             html += `<button class="action-btn" onclick="addFollowUpMessage()">Done</button>`;
             html += `</div>`;
             
@@ -6643,8 +7185,8 @@ Archives of Us Coffee`;
         }
         
         // Alias for backward compatibility
-        function manageRetailPlaceholder() {
-            manageRetail();
+        function manageAOUCafePlaceholder() {
+            manageAOUCafe();
         }
 
         function useQuickAction(prompt) {

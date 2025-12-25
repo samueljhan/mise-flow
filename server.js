@@ -1467,7 +1467,7 @@ async function formatAllSheetsCurrency() {
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
     
     // Get all sheet names
-    const sheetNames = ['Wholesale Pricing', 'Bank Transactions', 'Invoices', 'Retail Sales', 'Inventory'];
+    const sheetNames = ['Wholesale Pricing', 'Bank Transactions', 'Invoices', 'AOU Cafe Activity', 'Inventory'];
     
     // Apply Calibri 11 font to all sheets
     for (const sheetName of sheetNames) {
@@ -1489,7 +1489,7 @@ async function formatAllSheetsCurrency() {
     try {
       const retailResponse = await sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: 'Retail Sales!A2:Z2'
+        range: 'AOU Cafe Activity!A2:Z2'
       });
       const headerRow = retailResponse.data.values?.[0] || [];
       
@@ -1514,7 +1514,7 @@ async function formatAllSheetsCurrency() {
         for (let i = productStartColIndex; i <= totalColIndex + 2; i++) {
           moneyColumns.push(i);
         }
-        await applyCurrencyFormat(sheets, 'Retail Sales', moneyColumns, 3);
+        await applyCurrencyFormat(sheets, 'AOU Cafe Activity', moneyColumns, 3);
       }
     } catch (e) {
       console.log('Retail Sales sheet not found or error:', e.message);
@@ -4796,7 +4796,7 @@ async function ensureRetailWeeksUpToDate(sheets) {
     // Get current sheet data
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Retail Sales!A1:Z100'
+      range: 'AOU Cafe Activity!A1:Z100'
     });
     
     const rows = response.data.values || [];
@@ -5121,7 +5121,7 @@ app.get('/api/todo', async (req, res) => {
       
       const retailResponse = await sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: 'Retail Sales!A1:K100',
+        range: 'AOU Cafe Activity!A1:N100',
         valueRenderOption: 'UNFORMATTED_VALUE'
       });
       
@@ -5148,14 +5148,21 @@ app.get('/api/todo', async (req, res) => {
         }
       }
       
-      // Invoice Sent column is J (index 9)
-      const invoiceSentColIndex = 9;
+      // New column indices:
+      // G (6) = Total Retail Sales
+      // J (9) = Archives Usage
+      // K (10) = Ethiopia Usage
+      // L (11) = Colombia Decaf Usage
+      // M (12) = Invoice Sent
+      const invoiceSentColIndex = 12;
+      const usageStartColIndex = 9;
       
       // Get current week range to exclude it (week not finished yet)
       const currentWeekRange = getWeekRangeStringForRetail(new Date());
       
       const weeksWithoutData = [];
       const weeksNeedingInvoice = [];
+      const weeksNeedingUsage = [];
       const recentWeeksWithData = [];
       
       if (totalColIndex > -1) {
@@ -5168,6 +5175,14 @@ app.get('/api/todo', async (req, res) => {
           const netPayout = parseFloat(row[totalColIndex + 2]) || 0;
           const invoiceSent = row[invoiceSentColIndex] && String(row[invoiceSentColIndex]).trim().toLowerCase() === 'x';
           
+          // Check wholesale coffee usage columns (J, K, L)
+          const archivesUsage = row[usageStartColIndex];
+          const ethiopiaUsage = row[usageStartColIndex + 1];
+          const decafUsage = row[usageStartColIndex + 2];
+          const hasUsageData = (archivesUsage !== undefined && archivesUsage !== '' && archivesUsage !== null) ||
+                               (ethiopiaUsage !== undefined && ethiopiaUsage !== '' && ethiopiaUsage !== null) ||
+                               (decafUsage !== undefined && decafUsage !== '' && decafUsage !== null);
+          
           // Skip current week (not finished yet)
           if (dateRange === currentWeekRange) continue;
           
@@ -5175,12 +5190,16 @@ app.get('/api/todo', async (req, res) => {
           if (!totalSales || totalSales === 0) {
             weeksWithoutData.push(dateRange);
           } else {
-            // Has data - check if invoiced
+            // Has sales data - check if needs coffee usage tracking
+            if (!hasUsageData) {
+              weeksNeedingUsage.push({ dateRange, total: totalSales, rowIndex: i + 1 });
+            }
+            // Check if needs invoicing
             if (!invoiceSent) {
-              weeksNeedingInvoice.push({ dateRange, total: totalSales, netPayout, rowIndex: i + 1 });
+              weeksNeedingInvoice.push({ dateRange, total: totalSales, netPayout, rowIndex: i + 1, hasUsageData });
             }
             // Keep for recent summary
-            recentWeeksWithData.push({ dateRange, total: totalSales, invoiceSent });
+            recentWeeksWithData.push({ dateRange, total: totalSales, invoiceSent, hasUsageData });
           }
         }
       }
@@ -5190,11 +5209,11 @@ app.get('/api/todo', async (req, res) => {
       // Get last 3 weeks with data for summary
       const lastWeeksWithData = recentWeeksWithData.slice(-3).reverse();
       
-      // Show retail section if there are weeks needing data OR weeks needing invoice
-      if (recentWeeksWithoutData.length > 0 || weeksNeedingInvoice.length > 0) {
+      // Show section if there are weeks needing data, usage tracking, or invoice
+      if (recentWeeksWithoutData.length > 0 || weeksNeedingUsage.length > 0 || weeksNeedingInvoice.length > 0) {
         let detailedDesc = '';
         
-        // Add weeks needing invoice (higher priority)
+        // Add weeks needing invoice (highest priority)
         if (weeksNeedingInvoice.length > 0) {
           detailedDesc += `header|Needs Invoice Sent\n`;
           weeksNeedingInvoice.forEach(week => {
@@ -5202,7 +5221,15 @@ app.get('/api/todo', async (req, res) => {
           });
         }
         
-        // Add weeks needing data
+        // Add weeks needing coffee usage tracking
+        if (weeksNeedingUsage.length > 0) {
+          detailedDesc += `header|Needs Coffee Usage\n`;
+          weeksNeedingUsage.forEach(week => {
+            detailedDesc += `usage|${week.dateRange}\n`;
+          });
+        }
+        
+        // Add weeks needing sales data
         if (recentWeeksWithoutData.length > 0) {
           detailedDesc += `header|Needs Sales Data\n`;
           recentWeeksWithoutData.forEach(week => {
@@ -5213,22 +5240,26 @@ app.get('/api/todo', async (req, res) => {
         // Build summary
         let summaryParts = [];
         if (weeksNeedingInvoice.length > 0) {
-          summaryParts.push(`${weeksNeedingInvoice.length} week(s) need invoicing`);
+          summaryParts.push(`${weeksNeedingInvoice.length} need invoicing`);
+        }
+        if (weeksNeedingUsage.length > 0) {
+          summaryParts.push(`${weeksNeedingUsage.length} need usage`);
         }
         if (recentWeeksWithoutData.length > 0) {
-          summaryParts.push(`${recentWeeksWithoutData.length} week(s) need sales data`);
+          summaryParts.push(`${recentWeeksWithoutData.length} need sales`);
         }
         
         todoItems.push({
-          type: 'retail_overview',
+          type: 'aou_cafe',
           priority: weeksNeedingInvoice.length > 0 ? 'high' : 'medium',
-          title: 'Retail Sales',
+          title: 'AOU Cafe Activity',
           description: detailedDesc.trim(),
           summary: summaryParts.join(', '),
           items: recentWeeksWithoutData,
           uninvoicedWeeks: weeksNeedingInvoice,
+          weeksNeedingUsage: weeksNeedingUsage,
           recentWeeks: lastWeeksWithData,
-          action: 'manageRetail'
+          action: 'manageAOUCafe'
         });
       }
     } catch (e) {
@@ -5345,6 +5376,96 @@ app.get('/api/todo', async (req, res) => {
       console.log('Could not check roast log:', e.message);
     }
     
+    // 5. Check Inventory Log for weeks needing roasted inventory counts
+    try {
+      const invLogResponse = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Inventory Log!A1:Z50',
+        valueRenderOption: 'UNFORMATTED_VALUE'
+      });
+      
+      const invLogRows = invLogResponse.data.values || [];
+      const headers = invLogRows[2] || [];
+      const sectionRow = invLogRows[1] || [];
+      
+      // Find roasted section boundaries
+      let roastedStartIndex = -1;
+      let greenStartIndex = -1;
+      
+      for (let i = 0; i < sectionRow.length; i++) {
+        const section = String(sectionRow[i] || '').toLowerCase();
+        if (section.includes('roasted')) roastedStartIndex = i;
+        else if (section.includes('green')) greenStartIndex = i;
+      }
+      
+      // Get current week ending date to exclude it
+      const today = new Date();
+      const dayOfWeek = today.getDay();
+      const diffToFriday = dayOfWeek >= 5 ? (dayOfWeek - 5) : (dayOfWeek + 2);
+      const currentWeekStart = new Date(today);
+      currentWeekStart.setDate(today.getDate() - diffToFriday);
+      const currentWeekEnd = new Date(currentWeekStart);
+      currentWeekEnd.setDate(currentWeekStart.getDate() + 6);
+      const currentWeekEndStr = currentWeekEnd.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+      
+      const weeksNeedingRoastedInventory = [];
+      
+      // Check each week for missing roasted inventory
+      for (let i = 3; i < invLogRows.length; i++) {
+        const row = invLogRows[i];
+        if (!row || !row[1]) continue;
+        
+        let dateVal = row[1];
+        if (typeof dateVal === 'number') {
+          const excelEpoch = new Date(1899, 11, 30);
+          const date = new Date(excelEpoch.getTime() + dateVal * 24 * 60 * 60 * 1000);
+          dateVal = date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+        }
+        
+        // Skip current week
+        if (String(dateVal) === currentWeekEndStr) continue;
+        
+        // Check if roasted inventory columns have data
+        let hasRoastedData = false;
+        for (let j = roastedStartIndex; j < greenStartIndex; j++) {
+          if (headers[j] && !headers[j].toLowerCase().includes('date')) {
+            const val = row[j];
+            if (val !== undefined && val !== null && val !== '') {
+              hasRoastedData = true;
+              break;
+            }
+          }
+        }
+        
+        if (!hasRoastedData) {
+          weeksNeedingRoastedInventory.push({
+            date: String(dateVal),
+            rowIndex: i + 1
+          });
+        }
+      }
+      
+      // Add inventory log section if there are weeks needing entries
+      if (weeksNeedingRoastedInventory.length > 0) {
+        let detailedDesc = `header|Roasted Inventory Needed\n`;
+        weeksNeedingRoastedInventory.slice(-4).forEach(week => {
+          detailedDesc += `inventory|Week ending ${week.date}\n`;
+        });
+        
+        todoItems.push({
+          type: 'inventory_log',
+          priority: 'medium',
+          title: 'Inventory Log',
+          description: detailedDesc.trim(),
+          summary: `${weeksNeedingRoastedInventory.length} week(s) need inventory counts`,
+          weeksNeedingRoastedInventory,
+          action: 'showInventoryLog'
+        });
+      }
+    } catch (e) {
+      console.log('Could not check inventory log:', e.message);
+    }
+    
     // Sort by priority: high, medium, low
     const priorityOrder = { high: 0, medium: 1, low: 2 };
     todoItems.sort((a, b) => priorityOrder[a.priority] - priorityOrder[b.priority]);
@@ -5405,7 +5526,7 @@ app.get('/api/forecast', async (req, res) => {
     try {
       const retailResponse = await sheets.spreadsheets.values.get({
         spreadsheetId: SPREADSHEET_ID,
-        range: 'Retail Sales!A:Z',
+        range: 'AOU Cafe Activity!A:Z',
         valueRenderOption: 'UNFORMATTED_VALUE'
       });
       retailData = retailResponse.data.values || [];
@@ -5721,7 +5842,7 @@ async function writeForecastToSheet(sheets, forecast) {
   });
   
   data.push(['', '', '', '']);
-  data.push(['Retail Sales', '', '', '']);
+  data.push(['AOU Cafe Activity', '', '', '']);
   data.push(['─────────────────────────────────────────', '', '', '']);
   data.push(['Avg Weekly Sales', `$${forecast.salesAnalytics.retail.avgWeeklySales.toFixed(2)}`, '', '']);
   data.push(['', '', '', '']);
@@ -6708,7 +6829,613 @@ app.post('/api/tracking/lookup', async (req, res) => {
   });
 });
 
-// ============ Retail Sales Management API ============
+// ============ AOU Cafe Activity & Inventory Log API ============
+
+// Get Inventory Log data
+app.get('/api/inventory-log', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Read Inventory Log sheet
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Inventory Log!A1:Z50',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const rows = response.data.values || [];
+    
+    // Row 2: Section headers (C2 = Roasted, F2 = Green)
+    // Row 3: Column headers (Date, coffee names)
+    // Row 4+: Weekly data
+    
+    const headers = rows[2] || [];
+    const roastedCoffees = [];
+    const greenCoffees = [];
+    let dateColIndex = -1;
+    let roastedStartIndex = -1;
+    let greenStartIndex = -1;
+    
+    // Find column indices
+    for (let i = 0; i < headers.length; i++) {
+      const header = String(headers[i] || '').toLowerCase();
+      if (header === 'date' || header === 'week ending') {
+        dateColIndex = i;
+      }
+    }
+    
+    // Row 1 has section markers
+    const sectionRow = rows[1] || [];
+    for (let i = 0; i < sectionRow.length; i++) {
+      const section = String(sectionRow[i] || '').toLowerCase();
+      if (section.includes('roasted')) {
+        roastedStartIndex = i;
+      } else if (section.includes('green')) {
+        greenStartIndex = i;
+      }
+    }
+    
+    // Extract coffee names from header row
+    if (roastedStartIndex >= 0 && greenStartIndex >= 0) {
+      for (let i = roastedStartIndex; i < greenStartIndex; i++) {
+        if (headers[i] && !headers[i].toLowerCase().includes('date')) {
+          roastedCoffees.push({ index: i, name: headers[i] });
+        }
+      }
+      for (let i = greenStartIndex; i < headers.length; i++) {
+        if (headers[i]) {
+          greenCoffees.push({ index: i, name: headers[i] });
+        }
+      }
+    }
+    
+    // Get weekly entries
+    const entries = [];
+    for (let i = 3; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || !row[dateColIndex >= 0 ? dateColIndex : 1]) continue;
+      
+      let dateVal = row[dateColIndex >= 0 ? dateColIndex : 1];
+      
+      // Convert Excel serial date to string if needed
+      if (typeof dateVal === 'number') {
+        const excelEpoch = new Date(1899, 11, 30);
+        const date = new Date(excelEpoch.getTime() + dateVal * 24 * 60 * 60 * 1000);
+        dateVal = date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+      }
+      
+      const entry = {
+        rowIndex: i + 1,
+        date: String(dateVal),
+        roasted: {},
+        green: {}
+      };
+      
+      roastedCoffees.forEach(coffee => {
+        const val = row[coffee.index];
+        entry.roasted[coffee.name] = (val !== undefined && val !== null && val !== '') ? parseFloat(val) : null;
+      });
+      
+      greenCoffees.forEach(coffee => {
+        const val = row[coffee.index];
+        entry.green[coffee.name] = (val !== undefined && val !== null && val !== '') ? parseFloat(val) : null;
+      });
+      
+      entries.push(entry);
+    }
+    
+    res.json({
+      success: true,
+      roastedCoffees: roastedCoffees.map(c => c.name),
+      greenCoffees: greenCoffees.map(c => c.name),
+      entries,
+      dateColIndex: dateColIndex >= 0 ? dateColIndex : 1,
+      roastedStartIndex,
+      greenStartIndex
+    });
+    
+  } catch (error) {
+    console.error('Error reading Inventory Log:', error);
+    res.status(500).json({ error: 'Failed to read Inventory Log: ' + error.message });
+  }
+});
+
+// Save roasted inventory to Inventory Log
+app.post('/api/inventory-log/save-roasted', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { weekEndDate, roastedInventory } = req.body;
+  
+  if (!weekEndDate || !roastedInventory) {
+    return res.status(400).json({ error: 'Week end date and roasted inventory required' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Read current Inventory Log to find the right row
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Inventory Log!A1:Z50',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const rows = response.data.values || [];
+    const headers = rows[2] || [];
+    
+    // Find date column index
+    let dateColIndex = 1;
+    for (let i = 0; i < headers.length; i++) {
+      if (String(headers[i] || '').toLowerCase().includes('date')) {
+        dateColIndex = i;
+        break;
+      }
+    }
+    
+    // Find the row with matching date
+    let targetRow = -1;
+    for (let i = 3; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row) continue;
+      
+      let dateVal = row[dateColIndex];
+      if (typeof dateVal === 'number') {
+        const excelEpoch = new Date(1899, 11, 30);
+        const date = new Date(excelEpoch.getTime() + dateVal * 24 * 60 * 60 * 1000);
+        dateVal = date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+      }
+      
+      if (String(dateVal) === weekEndDate) {
+        targetRow = i + 1; // 1-indexed for Sheets API
+        break;
+      }
+    }
+    
+    if (targetRow === -1) {
+      return res.status(400).json({ error: 'Week not found in Inventory Log' });
+    }
+    
+    // Find roasted coffee column indices from header row
+    const sectionRow = rows[1] || [];
+    let roastedStartIndex = -1;
+    let greenStartIndex = -1;
+    
+    for (let i = 0; i < sectionRow.length; i++) {
+      const section = String(sectionRow[i] || '').toLowerCase();
+      if (section.includes('roasted')) roastedStartIndex = i;
+      else if (section.includes('green')) greenStartIndex = i;
+    }
+    
+    // Build update values
+    const updates = [];
+    for (let i = roastedStartIndex; i < greenStartIndex; i++) {
+      const coffeeName = headers[i];
+      if (coffeeName && roastedInventory[coffeeName] !== undefined) {
+        const col = String.fromCharCode(65 + i);
+        updates.push({
+          range: `Inventory Log!${col}${targetRow}`,
+          values: [[roastedInventory[coffeeName]]]
+        });
+      }
+    }
+    
+    if (updates.length > 0) {
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: updates
+        }
+      });
+    }
+    
+    // Also update the main Inventory sheet with current roasted inventory
+    const inventoryUpdates = [];
+    for (const [coffee, weight] of Object.entries(roastedInventory)) {
+      if (weight !== null && weight !== undefined) {
+        inventoryUpdates.push({ name: coffee, weight });
+      }
+    }
+    
+    // Update main Inventory sheet roasted section
+    if (inventoryUpdates.length > 0) {
+      const invResponse = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Inventory!A:E'
+      });
+      
+      const invRows = invResponse.data.values || [];
+      const batchUpdates = [];
+      
+      for (const update of inventoryUpdates) {
+        for (let i = 0; i < invRows.length; i++) {
+          const invCoffee = String(invRows[i][1] || '').toLowerCase();
+          if (invCoffee.includes(update.name.toLowerCase().split(' ')[0])) {
+            // Check if this is roasted (column E has weight)
+            if (invRows[i][4] !== undefined) {
+              batchUpdates.push({
+                range: `Inventory!E${i + 1}`,
+                values: [[update.weight]]
+              });
+              break;
+            }
+          }
+        }
+      }
+      
+      if (batchUpdates.length > 0) {
+        await sheets.spreadsheets.values.batchUpdate({
+          spreadsheetId: SPREADSHEET_ID,
+          requestBody: {
+            valueInputOption: 'USER_ENTERED',
+            data: batchUpdates
+          }
+        });
+      }
+    }
+    
+    console.log(`✅ Saved roasted inventory for week ${weekEndDate}`);
+    
+    res.json({ success: true, message: 'Roasted inventory saved' });
+    
+  } catch (error) {
+    console.error('Error saving roasted inventory:', error);
+    res.status(500).json({ error: 'Failed to save inventory: ' + error.message });
+  }
+});
+
+// Auto-populate green coffee inventory for a week
+app.post('/api/inventory-log/auto-green', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { weekEndDate } = req.body;
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Read main Inventory sheet for current green coffee levels
+    const invResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Inventory!A:E'
+    });
+    
+    const invRows = invResponse.data.values || [];
+    const greenInventory = {};
+    
+    // Find green coffee section (column D has weight for green coffee)
+    for (let i = 0; i < invRows.length; i++) {
+      const row = invRows[i];
+      const coffeeName = row[1];
+      const greenWeight = row[3]; // Column D for green coffee
+      
+      if (coffeeName && greenWeight !== undefined && greenWeight !== '' && parseFloat(greenWeight) >= 0) {
+        // Check it's actually green coffee (not roasted)
+        const roastedWeight = row[4]; // Column E for roasted
+        if (roastedWeight === undefined || roastedWeight === '') {
+          greenInventory[coffeeName] = parseFloat(greenWeight) || 0;
+        }
+      }
+    }
+    
+    // Read Inventory Log to find the target row
+    const logResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Inventory Log!A1:Z50',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const rows = logResponse.data.values || [];
+    const headers = rows[2] || [];
+    const sectionRow = rows[1] || [];
+    
+    // Find indices
+    let dateColIndex = 1;
+    let greenStartIndex = -1;
+    
+    for (let i = 0; i < headers.length; i++) {
+      if (String(headers[i] || '').toLowerCase().includes('date')) {
+        dateColIndex = i;
+      }
+    }
+    
+    for (let i = 0; i < sectionRow.length; i++) {
+      if (String(sectionRow[i] || '').toLowerCase().includes('green')) {
+        greenStartIndex = i;
+        break;
+      }
+    }
+    
+    // Find target row
+    let targetRow = -1;
+    for (let i = 3; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row) continue;
+      
+      let dateVal = row[dateColIndex];
+      if (typeof dateVal === 'number') {
+        const excelEpoch = new Date(1899, 11, 30);
+        const date = new Date(excelEpoch.getTime() + dateVal * 24 * 60 * 60 * 1000);
+        dateVal = date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+      }
+      
+      if (String(dateVal) === weekEndDate) {
+        targetRow = i + 1;
+        break;
+      }
+    }
+    
+    if (targetRow === -1) {
+      return res.status(400).json({ error: 'Week not found' });
+    }
+    
+    // Update green coffee columns
+    const updates = [];
+    for (let i = greenStartIndex; i < headers.length; i++) {
+      const coffeeName = headers[i];
+      if (coffeeName && greenInventory[coffeeName] !== undefined) {
+        const col = String.fromCharCode(65 + i);
+        updates.push({
+          range: `Inventory Log!${col}${targetRow}`,
+          values: [[greenInventory[coffeeName]]]
+        });
+      }
+    }
+    
+    if (updates.length > 0) {
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: updates
+        }
+      });
+    }
+    
+    res.json({ success: true, greenInventory });
+    
+  } catch (error) {
+    console.error('Error auto-populating green inventory:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Track wholesale coffee usage for AOU
+app.post('/api/aou/track-usage', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { weekRange, usage } = req.body;
+  // usage: { archives: number, ethiopia: number, decaf: number }
+  
+  if (!weekRange) {
+    return res.status(400).json({ error: 'Week range required' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Read AOU Cafe Activity sheet to find the row
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'AOU Cafe Activity!A1:Z50',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const rows = response.data.values || [];
+    
+    // Find the row with matching week range
+    let targetRow = -1;
+    for (let i = 9; i < rows.length; i++) { // Data starts around row 10
+      const row = rows[i];
+      if (!row) continue;
+      
+      const dateCell = String(row[1] || ''); // Column B
+      if (dateCell === weekRange || dateCell.replace(/\s/g, '') === weekRange.replace(/\s/g, '')) {
+        targetRow = i + 1;
+        break;
+      }
+    }
+    
+    if (targetRow === -1) {
+      return res.status(400).json({ error: 'Week not found in AOU Cafe Activity sheet' });
+    }
+    
+    // Update wholesale usage columns (J, K, L)
+    const updates = [];
+    
+    if (usage.archives !== undefined && usage.archives !== null) {
+      updates.push({ range: `AOU Cafe Activity!J${targetRow}`, values: [[usage.archives]] });
+    }
+    if (usage.ethiopia !== undefined && usage.ethiopia !== null) {
+      updates.push({ range: `AOU Cafe Activity!K${targetRow}`, values: [[usage.ethiopia]] });
+    }
+    if (usage.decaf !== undefined && usage.decaf !== null) {
+      updates.push({ range: `AOU Cafe Activity!L${targetRow}`, values: [[usage.decaf]] });
+    }
+    
+    if (updates.length > 0) {
+      await sheets.spreadsheets.values.batchUpdate({
+        spreadsheetId: SPREADSHEET_ID,
+        requestBody: {
+          valueInputOption: 'USER_ENTERED',
+          data: updates
+        }
+      });
+    }
+    
+    console.log(`✅ Tracked AOU coffee usage for ${weekRange}: Archives=${usage.archives || 0}lb, Ethiopia=${usage.ethiopia || 0}lb, Decaf=${usage.decaf || 0}lb`);
+    
+    res.json({ success: true, message: 'Coffee usage tracked' });
+    
+  } catch (error) {
+    console.error('Error tracking coffee usage:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get calculated AOU usage from inventory change
+app.get('/api/aou/calculated-usage', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { weekRange } = req.query;
+  
+  if (!weekRange) {
+    return res.status(400).json({ error: 'Week range required' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Parse week range to get dates
+    const [startStr, endStr] = weekRange.split('-');
+    const parseDate = (str) => {
+      const [m, d, y] = str.trim().split('/');
+      return new Date(2000 + parseInt(y), parseInt(m) - 1, parseInt(d));
+    };
+    
+    const weekEndDate = parseDate(endStr);
+    const prevWeekEndDate = new Date(weekEndDate);
+    prevWeekEndDate.setDate(prevWeekEndDate.getDate() - 7);
+    
+    const formatDate = (d) => d.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+    
+    // Read Inventory Log
+    const logResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Inventory Log!A1:Z50',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const rows = logResponse.data.values || [];
+    const headers = rows[2] || [];
+    const sectionRow = rows[1] || [];
+    
+    // Find roasted coffee columns
+    let roastedStartIndex = -1;
+    let greenStartIndex = -1;
+    
+    for (let i = 0; i < sectionRow.length; i++) {
+      const section = String(sectionRow[i] || '').toLowerCase();
+      if (section.includes('roasted')) roastedStartIndex = i;
+      else if (section.includes('green')) greenStartIndex = i;
+    }
+    
+    const roastedCoffees = [];
+    for (let i = roastedStartIndex; i < greenStartIndex; i++) {
+      if (headers[i] && !headers[i].toLowerCase().includes('date')) {
+        roastedCoffees.push({ index: i, name: headers[i] });
+      }
+    }
+    
+    // Find inventory values for this week and previous week
+    let thisWeekInventory = {};
+    let prevWeekInventory = {};
+    
+    for (let i = 3; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row) continue;
+      
+      let dateVal = row[1];
+      if (typeof dateVal === 'number') {
+        const excelEpoch = new Date(1899, 11, 30);
+        const date = new Date(excelEpoch.getTime() + dateVal * 24 * 60 * 60 * 1000);
+        dateVal = formatDate(date);
+      }
+      
+      if (String(dateVal) === formatDate(weekEndDate)) {
+        roastedCoffees.forEach(c => {
+          thisWeekInventory[c.name] = parseFloat(row[c.index]) || 0;
+        });
+      } else if (String(dateVal) === formatDate(prevWeekEndDate)) {
+        roastedCoffees.forEach(c => {
+          prevWeekInventory[c.name] = parseFloat(row[c.index]) || 0;
+        });
+      }
+    }
+    
+    // Get deliveries and other invoices for the period
+    const startDate = parseDate(startStr);
+    const endDate = parseDate(endStr);
+    endDate.setHours(23, 59, 59, 999);
+    
+    const deliveries = await getRoastDeliveriesInRange(startDate, endDate);
+    const otherInvoices = await getOtherCustomerInvoicesInRange(startDate, endDate);
+    
+    // Sum deliveries
+    const totalDelivered = { archives: 0, ethiopia: 0, decaf: 0 };
+    deliveries.forEach(d => {
+      for (const [product, weight] of Object.entries(d.products)) {
+        const prodLower = product.toLowerCase();
+        if (prodLower.includes('archives')) totalDelivered.archives += weight;
+        else if (prodLower.includes('ethiopia')) totalDelivered.ethiopia += weight;
+        else if (prodLower.includes('decaf')) totalDelivered.decaf += weight;
+      }
+    });
+    
+    // Calculate AOU usage using inventory change method:
+    // Usage = Starting Inventory + Deliveries - Other Invoices - Retail Weight - Ending Inventory
+    const calculated = {};
+    
+    roastedCoffees.forEach(coffee => {
+      const coffeeLower = coffee.name.toLowerCase();
+      let deliveredAmt = 0;
+      let otherInvoicesAmt = 0;
+      
+      if (coffeeLower.includes('archives')) {
+        deliveredAmt = totalDelivered.archives;
+        otherInvoicesAmt = otherInvoices.archives;
+      } else if (coffeeLower.includes('ethiopia')) {
+        deliveredAmt = totalDelivered.ethiopia;
+        otherInvoicesAmt = otherInvoices.ethiopia;
+      } else if (coffeeLower.includes('decaf')) {
+        deliveredAmt = totalDelivered.decaf;
+        otherInvoicesAmt = otherInvoices.decaf;
+      }
+      
+      const startInv = prevWeekInventory[coffee.name] || 0;
+      const endInv = thisWeekInventory[coffee.name] || 0;
+      
+      // Usage = Start + Delivered - Other Invoices - End
+      // (retail weight is already accounted for in the ending inventory since beans are taken for bags)
+      const usage = startInv + deliveredAmt - otherInvoicesAmt - endInv;
+      
+      calculated[coffee.name] = {
+        startInventory: startInv,
+        delivered: deliveredAmt,
+        otherInvoices: otherInvoicesAmt,
+        endInventory: endInv,
+        calculatedUsage: Math.max(0, usage)
+      };
+    });
+    
+    res.json({
+      success: true,
+      weekRange,
+      calculated,
+      hasInventoryData: Object.keys(thisWeekInventory).length > 0 && Object.keys(prevWeekInventory).length > 0
+    });
+    
+  } catch (error) {
+    console.error('Error calculating AOU usage:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Get retail data (products and weeks)
 app.get('/api/retail/data', async (req, res) => {
@@ -6726,7 +7453,7 @@ app.get('/api/retail/data', async (req, res) => {
     // Read the Retail Sales sheet - use valueRenderOption to get calculated values
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Retail Sales!A1:Z100',
+      range: 'AOU Cafe Activity!A1:Z100',
       valueRenderOption: 'UNFORMATTED_VALUE' // Get actual numbers, not formatted strings
     });
     
@@ -6846,11 +7573,29 @@ app.get('/api/retail/data', async (req, res) => {
         const totalVal = row[totalColIndex];
         const feeVal = row[totalColIndex + 1];
         const netVal = row[totalColIndex + 2];
-        const invoiceSentVal = row[totalColIndex + 3]; // Column J = Invoice Sent (3 columns after Total)
+        
+        // Wholesale Coffee Usage columns (J, K, L) are at totalColIndex + 3, 4, 5
+        const archivesUsage = row[totalColIndex + 3];
+        const ethiopiaUsage = row[totalColIndex + 4];
+        const decafUsage = row[totalColIndex + 5];
+        
+        // Invoice Sent is now in column M (totalColIndex + 6)
+        const invoiceSentVal = row[totalColIndex + 6];
         
         weekData.totalSales = (totalVal !== undefined && totalVal !== null && totalVal !== '') ? parseFloat(totalVal) : 0;
         weekData.transactionFee = (feeVal !== undefined && feeVal !== null && feeVal !== '') ? parseFloat(feeVal) : 0;
         weekData.netPayout = (netVal !== undefined && netVal !== null && netVal !== '') ? parseFloat(netVal) : 0;
+        
+        // Wholesale coffee usage
+        weekData.wholesaleUsage = {
+          archives: (archivesUsage !== undefined && archivesUsage !== null && archivesUsage !== '') ? parseFloat(archivesUsage) : null,
+          ethiopia: (ethiopiaUsage !== undefined && ethiopiaUsage !== null && ethiopiaUsage !== '') ? parseFloat(ethiopiaUsage) : null,
+          decaf: (decafUsage !== undefined && decafUsage !== null && decafUsage !== '') ? parseFloat(decafUsage) : null
+        };
+        weekData.hasWholesaleUsage = weekData.wholesaleUsage.archives !== null || 
+                                      weekData.wholesaleUsage.ethiopia !== null || 
+                                      weekData.wholesaleUsage.decaf !== null;
+        
         weekData.invoiceSent = invoiceSentVal && String(invoiceSentVal).trim().toLowerCase() === 'x';
       }
       
@@ -6922,7 +7667,7 @@ app.post('/api/retail/add-weeks', async (req, res) => {
     // Get current sheet structure
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Retail Sales!A1:Z100'
+      range: 'AOU Cafe Activity!A1:Z100'
     });
     
     const rows = response.data.values || [];
@@ -7014,7 +7759,7 @@ app.post('/api/retail/sales', async (req, res) => {
     // Read sheet to find the correct header row (new vs old structure)
     const sheetResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Retail Sales!A1:Z12'
+      range: 'AOU Cafe Activity!A1:Z12'
     });
     
     const allRows = sheetResponse.data.values || [];
@@ -7106,7 +7851,7 @@ app.post('/api/retail/sales', async (req, res) => {
         const spreadsheet = await sheets.spreadsheets.get({
           spreadsheetId: SPREADSHEET_ID
         });
-        const retailSheet = spreadsheet.data.sheets.find(s => s.properties.title === 'Retail Sales');
+        const retailSheet = spreadsheet.data.sheets.find(s => s.properties.title === 'AOU Cafe Activity');
         
         if (retailSheet) {
           const sheetId = retailSheet.properties.sheetId;
@@ -7174,7 +7919,7 @@ async function getRetailProductConfig() {
     
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Retail Sales!A1:Z10',
+      range: 'AOU Cafe Activity!A1:Z10',
       valueRenderOption: 'UNFORMATTED_VALUE'
     });
     
@@ -7807,7 +8552,7 @@ app.post('/api/aou/reconciliation', async (req, res) => {
     
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Retail Sales!B:B',
+      range: 'AOU Cafe Activity!B:B',
       valueRenderOption: 'UNFORMATTED_VALUE'
     });
     
@@ -7849,10 +8594,10 @@ app.get('/api/retail/uninvoiced-weeks', async (req, res) => {
     oauth2Client.setCredentials(userTokens);
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
     
-    // Read Retail Sales sheet
+    // Read AOU Cafe Activity sheet
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Retail Sales!A1:K100',
+      range: 'AOU Cafe Activity!A1:N100',
       valueRenderOption: 'UNFORMATTED_VALUE'
     });
     
@@ -7882,8 +8627,8 @@ app.get('/api/retail/uninvoiced-weeks', async (req, res) => {
       }
     }
     
-    // Invoice Sent is column J (index 9)
-    const invoiceSentColIndex = 9;
+    // Invoice Sent is now column M (index 12) - after Wholesale Coffee Usage columns
+    const invoiceSentColIndex = 12;
     
     // Get current week (can't invoice current week)
     const currentWeekRange = getWeekRangeStringForRetail(new Date());
@@ -7970,10 +8715,10 @@ app.post('/api/retail/send-aou-invoice', async (req, res) => {
       console.log('Drive upload failed:', driveError.message);
     }
     
-    // Mark the retail week as invoiced (column J)
+    // Mark the retail week as invoiced (column M)
     await sheets.spreadsheets.values.update({
       spreadsheetId: SPREADSHEET_ID,
-      range: `Retail Sales!J${rowIndex}`,
+      range: `AOU Cafe Activity!M${rowIndex}`,
       valueInputOption: 'USER_ENTERED',
       requestBody: {
         values: [['x']]
@@ -8097,7 +8842,7 @@ app.post('/api/aou/generate-historical', async (req, res) => {
     // Read all retail sales data
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Retail Sales!A1:Z100',
+      range: 'AOU Cafe Activity!A1:Z100',
       valueRenderOption: 'UNFORMATTED_VALUE'
     });
     
@@ -8733,7 +9478,7 @@ app.post('/api/retail/products/add', async (req, res) => {
     // Get current structure
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Retail Sales!A1:Z100'
+      range: 'AOU Cafe Activity!A1:Z100'
     });
     
     const rows = response.data.values || [];
@@ -8757,7 +9502,7 @@ app.post('/api/retail/products/add', async (req, res) => {
       spreadsheetId: SPREADSHEET_ID
     });
     
-    const retailSheet = spreadsheet.data.sheets.find(s => s.properties.title === 'Retail Sales');
+    const retailSheet = spreadsheet.data.sheets.find(s => s.properties.title === 'AOU Cafe Activity');
     if (!retailSheet) {
       return res.status(400).json({ error: 'Retail Sales sheet not found' });
     }
@@ -8845,7 +9590,7 @@ app.post('/api/retail/products/remove', async (req, res) => {
     // Get current header
     const headerResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Retail Sales!A2:Z2'
+      range: 'AOU Cafe Activity!A2:Z2'
     });
     
     const headerRow = headerResponse.data.values?.[0] || [];
@@ -8861,7 +9606,7 @@ app.post('/api/retail/products/remove', async (req, res) => {
       spreadsheetId: SPREADSHEET_ID
     });
     
-    const retailSheet = spreadsheet.data.sheets.find(s => s.properties.title === 'Retail Sales');
+    const retailSheet = spreadsheet.data.sheets.find(s => s.properties.title === 'AOU Cafe Activity');
     if (!retailSheet) {
       return res.status(400).json({ error: 'Retail Sales sheet not found' });
     }
@@ -8888,7 +9633,7 @@ app.post('/api/retail/products/remove', async (req, res) => {
     // Update Total formulas after deletion
     const dataResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Retail Sales!A1:Z100'
+      range: 'AOU Cafe Activity!A1:Z100'
     });
     
     const rows = dataResponse.data.values || [];
@@ -8955,7 +9700,7 @@ app.post('/api/retail/products/rename', async (req, res) => {
     // Get header row
     const headerResponse = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Retail Sales!A2:Z2'
+      range: 'AOU Cafe Activity!A2:Z2'
     });
     
     const headerRow = headerResponse.data.values?.[0] || [];
@@ -9016,7 +9761,7 @@ app.post('/api/retail/fix-formulas', async (req, res) => {
     // Get current sheet structure
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Retail Sales!A1:Z100'
+      range: 'AOU Cafe Activity!A1:Z100'
     });
     
     const rows = response.data.values || [];

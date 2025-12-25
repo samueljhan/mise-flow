@@ -2255,7 +2255,145 @@ app.post('/api/customers/reload', async (req, res) => {
   }
 });
 
-// Get customer info (including emails)
+// Get all wholesale customers with details (MUST be before /:name route)
+app.get('/api/customers/wholesale', async (req, res) => {
+  try {
+    // If customerDirectory is empty, try to load it first
+    if (Object.keys(customerDirectory).length === 0 && userTokens) {
+      console.log('📋 Customer directory empty, reloading...');
+      await loadCustomerDirectoryFromSheets();
+    }
+    
+    // Get all existing codes
+    const existingCodes = Object.values(customerDirectory).map(c => c.code);
+    
+    // Build customer list with last invoice dates
+    const customers = [];
+    let lastInvoiceDates = {};
+    
+    // Try to get last invoice dates from Google Sheets
+    if (userTokens) {
+      try {
+        oauth2Client.setCredentials(userTokens);
+        const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+        
+        const invoicesResponse = await sheets.spreadsheets.values.get({
+          spreadsheetId: SPREADSHEET_ID,
+          range: 'Invoices!A:I'
+        });
+        
+        const invoiceRows = invoicesResponse.data.values || [];
+        
+        // Find last invoice date for each customer 
+        // Structure: B=Date(1), C=Invoice#(2) - invoice # contains customer code like C-CED-1000
+        for (let i = 2; i < invoiceRows.length; i++) {
+          const row = invoiceRows[i];
+          const invoiceNum = (row[2] || '').toString();
+          const date = row[1] || '';
+          
+          // Extract customer code from invoice number (C-CED-1000 -> CED)
+          const codeMatch = invoiceNum.match(/^C-([A-Z]{3})-/);
+          if (codeMatch && date) {
+            const customerCode = codeMatch[1].toLowerCase();
+            // Keep track of the most recent date for each customer
+            if (!lastInvoiceDates[customerCode] || date > lastInvoiceDates[customerCode]) {
+              lastInvoiceDates[customerCode] = date;
+            }
+          }
+        }
+      } catch (err) {
+        console.log('Could not fetch invoice dates:', err.message);
+      }
+    }
+    
+    // Get Tier 1 prices for custom pricing preview
+    let tier1Prices = {};
+    if (userTokens) {
+      try {
+        oauth2Client.setCredentials(userTokens);
+        const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+        
+        const pricingResponse = await sheets.spreadsheets.values.get({
+          spreadsheetId: SPREADSHEET_ID,
+          range: 'Wholesale Pricing!A:D'
+        });
+        
+        const pricingRows = pricingResponse.data.values || [];
+        let inTier1Section = false;
+        
+        for (let i = 0; i < pricingRows.length; i++) {
+          const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
+          
+          if (cellB === 'wholesale tier 1') {
+            inTier1Section = true;
+            continue;
+          }
+          
+          if (inTier1Section && cellB.startsWith('wholesale')) {
+            break; // End of Tier 1 section
+          }
+          
+          if (inTier1Section && pricingRows[i][1] && pricingRows[i][3]) {
+            const coffeeName = pricingRows[i][1].toString();
+            const price = parseFloat(pricingRows[i][3]) || 0;
+            if (coffeeName && price > 0 && !coffeeName.toLowerCase().includes('decaf')) {
+              tier1Prices[coffeeName] = price;
+            }
+          }
+        }
+      } catch (err) {
+        console.log('Could not fetch Tier 1 prices:', err.message);
+      }
+    }
+    
+    // Build customer list from Customer Directory sheet data
+    const seenCodes = new Set();
+    for (const [key, customer] of Object.entries(customerDirectory)) {
+      // Skip if we've already seen this customer (by code)
+      if (seenCodes.has(customer.code)) continue;
+      seenCodes.add(customer.code);
+      
+      const lastInvoice = lastInvoiceDates[customer.code.toLowerCase()] || null;
+      
+      // Format last invoice date
+      let lastInvoiceDisplay = 'No invoices';
+      if (lastInvoice) {
+        if (typeof lastInvoice === 'number') {
+          const excelEpoch = new Date(1899, 11, 30);
+          const date = new Date(excelEpoch.getTime() + lastInvoice * 24 * 60 * 60 * 1000);
+          lastInvoiceDisplay = date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+        } else {
+          lastInvoiceDisplay = String(lastInvoice);
+        }
+      }
+      
+      customers.push({
+        name: customer.name,
+        code: customer.code,
+        emails: customer.emails || [],
+        terms: customer.terms || 'Net 15',
+        pricingTier: customer.pricingTable || 'Wholesale Tier 1',
+        lastInvoice: lastInvoiceDisplay
+      });
+    }
+    
+    // Sort by name
+    customers.sort((a, b) => a.name.localeCompare(b.name));
+    
+    res.json({ 
+      success: true, 
+      customers, 
+      existingCodes,
+      tier1Prices
+    });
+    
+  } catch (error) {
+    console.error('Error fetching wholesale customers:', error);
+    res.status(500).json({ error: 'Failed to fetch customers: ' + error.message });
+  }
+});
+
+// Get customer info (including emails) - must be AFTER /wholesale route
 app.get('/api/customers/:name', (req, res) => {
   const customerName = req.params.name;
   const lower = customerName.toLowerCase();
@@ -2364,147 +2502,9 @@ If no valid emails found, return: {"emails": []}`;
 
 // ============ Wholesale Customer Management ============
 
-// Get all wholesale customers with details
-app.get('/api/customers/wholesale', async (req, res) => {
-  try {
-    // If customerDirectory is empty, try to load it first
-    if (Object.keys(customerDirectory).length === 0 && userTokens) {
-      console.log('📋 Customer directory empty, reloading...');
-      await loadCustomerDirectoryFromSheets();
-    }
-    
-    // Get all existing codes
-    const existingCodes = Object.values(customerDirectory).map(c => c.code);
-    
-    // Build customer list with last invoice dates
-    const customers = [];
-    let lastInvoiceDates = {};
-    
-    // Try to get last invoice dates from Google Sheets
-    if (userTokens) {
-      try {
-        oauth2Client.setCredentials(userTokens);
-        const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
-        
-        const invoicesResponse = await sheets.spreadsheets.values.get({
-          spreadsheetId: SPREADSHEET_ID,
-          range: 'Invoices!A:I'
-        });
-        
-        const invoiceRows = invoicesResponse.data.values || [];
-        
-        // Find last invoice date for each customer 
-        // Structure: B=Date(1), C=Invoice#(2) - invoice # contains customer code like C-CED-1000
-        for (let i = 2; i < invoiceRows.length; i++) {
-          const row = invoiceRows[i];
-          const invoiceNum = (row[2] || '').toString();
-          const date = row[1] || '';
-          
-          // Extract customer code from invoice number (C-CED-1000 -> CED)
-          const codeMatch = invoiceNum.match(/^C-([A-Z]{3})-/);
-          if (codeMatch && date) {
-            const customerCode = codeMatch[1].toLowerCase();
-            // Keep track of the most recent date for each customer
-            if (!lastInvoiceDates[customerCode] || date > lastInvoiceDates[customerCode]) {
-              lastInvoiceDates[customerCode] = date;
-            }
-          }
-        }
-      } catch (err) {
-        console.log('Could not fetch invoice dates:', err.message);
-      }
-    }
-    
-    // Get Tier 1 prices for custom pricing preview
-    let tier1Prices = {};
-    if (userTokens) {
-      try {
-        oauth2Client.setCredentials(userTokens);
-        const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
-        
-        const pricingResponse = await sheets.spreadsheets.values.get({
-          spreadsheetId: SPREADSHEET_ID,
-          range: 'Wholesale Pricing!A:D'
-        });
-        
-        const pricingRows = pricingResponse.data.values || [];
-        let inTier1Section = false;
-        
-        for (let i = 0; i < pricingRows.length; i++) {
-          const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
-          
-          if (cellB === 'wholesale tier 1') {
-            inTier1Section = true;
-            continue;
-          }
-          
-          if (inTier1Section && cellB.startsWith('wholesale')) {
-            break; // End of Tier 1 section
-          }
-          
-          if (inTier1Section && pricingRows[i][1] && pricingRows[i][3]) {
-            const coffeeName = pricingRows[i][1].toString();
-            const price = parseFloat(pricingRows[i][3]) || 0;
-            if (coffeeName && price > 0 && !coffeeName.toLowerCase().includes('decaf')) {
-              tier1Prices[coffeeName] = price;
-            }
-          }
-        }
-      } catch (err) {
-        console.log('Could not fetch Tier 1 prices:', err.message);
-      }
-    }
-    
-    // Build customer list (avoid duplicates from code aliases)
-    const seenCodes = new Set();
-    for (const [key, customer] of Object.entries(customerDirectory)) {
-      // Skip if we've already seen this customer (by code)
-      if (seenCodes.has(customer.code)) continue;
-      seenCodes.add(customer.code);
-      
-      const lastInvoice = lastInvoiceDates[key] || lastInvoiceDates[customer.name.toLowerCase()] || null;
-      
-      // Format pricing table name nicely
-      let pricingTableDisplay = 'Tier 1';
-      if (customer.pricingTable) {
-        const pt = customer.pricingTable.toLowerCase();
-        if (pt === 'at-cost') pricingTableDisplay = 'At-Cost';
-        else if (pt.includes('dex')) pricingTableDisplay = 'Dex';
-        else if (pt.includes('ced')) pricingTableDisplay = 'CED';
-        else if (pt.includes('junia')) pricingTableDisplay = 'Junia';
-        else if (pt.includes('tier 1')) pricingTableDisplay = 'Tier 1';
-        else pricingTableDisplay = customer.pricingTable;
-      }
-      
-      customers.push({
-        name: customer.name,
-        code: customer.code,
-        emails: customer.emails || [],
-        pricingTable: pricingTableDisplay,
-        dateSince: customer.dateSince || customer.terms || 'N/A',
-        lastInvoice: lastInvoice || 'No invoices'
-      });
-    }
-    
-    // Sort by name
-    customers.sort((a, b) => a.name.localeCompare(b.name));
-    
-    res.json({ 
-      success: true, 
-      customers, 
-      existingCodes,
-      tier1Prices
-    });
-    
-  } catch (error) {
-    console.error('Error fetching wholesale customers:', error);
-    res.status(500).json({ error: 'Failed to fetch customers: ' + error.message });
-  }
-});
-
 // Add new wholesale customer
 app.post('/api/customers/wholesale/add', async (req, res) => {
-  const { name, code, emails, pricingType, pricingTable, priceRatio } = req.body;
+  const { code, name, emails, terms, pricingTier } = req.body;
   
   if (!name || !code) {
     return res.status(400).json({ error: 'Name and code are required' });
@@ -2527,112 +2527,29 @@ app.post('/api/customers/wholesale/add', async (req, res) => {
   }
   
   try {
-    let finalPricingTable = pricingTable || 'wholesale tier 1';
-    let pricingCreated = false;
-    
-    // If custom pricing, create a new pricing table in Google Sheets
-    if (pricingType === 'custom' && priceRatio && userTokens) {
-      oauth2Client.setCredentials(userTokens);
-      const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
-      
-      // Read Tier 1 prices to calculate custom prices
-      const pricingResponse = await sheets.spreadsheets.values.get({
-        spreadsheetId: SPREADSHEET_ID,
-        range: 'Wholesale Pricing!A:D'
-      });
-      
-      const pricingRows = pricingResponse.data.values || [];
-      
-      // Find end of existing pricing tables and Colombia Decaf position
-      let lastTableEndRow = pricingRows.length;
-      let tier1Coffees = [];
-      let inTier1Section = false;
-      
-      for (let i = 0; i < pricingRows.length; i++) {
-        const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
-        
-        if (cellB === 'wholesale tier 1') {
-          inTier1Section = true;
-          continue;
-        }
-        
-        if (inTier1Section && cellB.startsWith('wholesale')) {
-          inTier1Section = false;
-          continue;
-        }
-        
-        if (inTier1Section && pricingRows[i][1] && pricingRows[i][3]) {
-          const coffeeName = pricingRows[i][1].toString();
-          const price = parseFloat(pricingRows[i][3]) || 0;
-          if (coffeeName && price > 0) {
-            tier1Coffees.push({ name: coffeeName, price: price });
-          }
-        }
-      }
-      
-      // Create new pricing table data
-      const customTableName = `Wholesale ${name}`;
-      const newTableData = [
-        ['', '', '', ''],
-        ['', customTableName, '', ''],
-        ['', 'Coffee', '', 'Price']
-      ];
-      
-      tier1Coffees.forEach(coffee => {
-        const customPrice = Math.round(coffee.price * priceRatio * 100) / 100;
-        newTableData.push(['', coffee.name, '', customPrice]);
-      });
-      
-      // Append the new table to the end of the sheet
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: SPREADSHEET_ID,
-        range: 'Wholesale Pricing!A:D',
-        valueInputOption: 'USER_ENTERED',
-        requestBody: {
-          values: newTableData
-        }
-      });
-      
-      finalPricingTable = customTableName.toLowerCase();
-      pricingCreated = true;
-      
-      console.log(`✅ Created custom pricing table "${customTableName}" with ratio ${priceRatio}×`);
-    }
-    
-    // Format date as MM/DD/YY
-    const today = new Date();
-    const dateSince = `${String(today.getMonth() + 1).padStart(2, '0')}/${String(today.getDate()).padStart(2, '0')}/${String(today.getFullYear()).slice(-2)}`;
-    
-    // Add to customer directory
+    // Add to local customer directory
     customerDirectory[lower] = {
       name: name,
       code: code,
       emails: emails || [],
-      pricingTable: finalPricingTable,
-      dateSince: dateSince
+      terms: terms || 'Net 15',
+      pricingTable: pricingTier || 'Wholesale Tier 1'
     };
     
     // Save to Google Sheets Customer Directory
-    const pricingTierName = finalPricingTable.toLowerCase().includes('tier 1') ? 'Wholesale Tier 1' :
-                           finalPricingTable.toLowerCase().includes('dex') ? 'Wholesale Dex' :
-                           finalPricingTable.toLowerCase().includes('ced') ? 'Wholesale CED' :
-                           finalPricingTable.toLowerCase().includes('at-cost') ? 'At-Cost' :
-                           `Wholesale ${name}`;
-    
-    saveCustomerToSheets({
+    await saveCustomerToSheets({
       code: code,
       name: name,
       emails: emails || [],
-      terms: 'Net 15',
-      pricingTier: pricingTierName
-    }).catch(e => console.log('Save customer to sheets:', e.message));
+      terms: terms || 'Net 15',
+      pricingTier: pricingTier || 'Wholesale Tier 1'
+    });
     
-    console.log(`✅ Added wholesale customer: ${name} (${code}), pricing: ${finalPricingTable}`);
+    console.log(`✅ Added wholesale customer: ${name} (${code}), pricing: ${pricingTier || 'Wholesale Tier 1'}`);
     
     res.json({ 
       success: true, 
-      pricingCreated,
-      message: `Added ${name} (${code}) as wholesale customer`
+      message: `Added ${name} (${code}) to Customer Directory`
     });
     
   } catch (error) {
@@ -7802,10 +7719,10 @@ app.post('/api/retail/send-aou-invoice', async (req, res) => {
     const dueDate = new Date(invoiceDate);
     dueDate.setDate(dueDate.getDate() + 15);
     
-    await generateInvoicePDF(pdfPath, {
+    await generateInvoicePDF({
       ...invoiceData,
       dueDate: dueDate.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: 'numeric' })
-    });
+    }, pdfPath);
     
     // Upload to Google Drive
     let driveLink = null;

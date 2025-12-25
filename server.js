@@ -7450,200 +7450,143 @@ app.get('/api/retail/data', async (req, res) => {
     // Ensure weeks are up to date before fetching data
     await ensureRetailWeeksUpToDate(sheets);
     
-    // Read the Retail Sales sheet - use valueRenderOption to get calculated values
+    // Read the AOU Cafe Activity sheet
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'AOU Cafe Activity!A1:Z100',
-      valueRenderOption: 'UNFORMATTED_VALUE' // Get actual numbers, not formatted strings
+      range: 'AOU Cafe Activity!A1:M100',
+      valueRenderOption: 'UNFORMATTED_VALUE'
     });
     
     const rows = response.data.values || [];
     
-    // New structure: Find "Retail Offerings" section (row 2) and "Retail Sales" section (row 8)
-    // Row 3: Product names
-    // Row 4: Price per Unit
-    // Row 5: Weight per Unit (lb)
-    // Row 9: Retail Sales headers
-    // Row 10+: Weekly data
+    // Fixed structure based on actual sheet:
+    // Row 2 (index 1): "Retail Offerings" header in column B
+    // Row 3 (index 2): Product names in C-F
+    // Row 4 (index 3): "Price per Unit" label in B, prices in C-F
+    // Row 5 (index 4): "Weight per Unit" label in B, weights in C-F
+    // Row 8 (index 7): Section labels - "Retail Sales" in C, "Wholesale Coffee Usage" in J
+    // Row 9 (index 8): Column headers - Date(B), Products(C-F), Total(G), Fee(H), Net(I), Usage(J-L), Invoice Sent(M)
+    // Row 10+ (index 9+): Weekly data
     
-    // Find the retail offerings section and retail sales section
-    let offeringsHeaderRow = -1;
-    let salesHeaderRow = -1;
-    
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      if (row && row[1]) {
-        const cellB = String(row[1]).toLowerCase().trim();
-        if (cellB.includes('retail offerings')) {
-          offeringsHeaderRow = i;
-        } else if (cellB.includes('retail sales') && !cellB.includes('total')) {
-          salesHeaderRow = i;
-          break;
-        }
-      }
-    }
-    
-    // Get product info from Retail Offerings section (new structure)
+    // Get product info from Retail Offerings section
     const productInfo = {};
-    if (offeringsHeaderRow >= 0 && rows[offeringsHeaderRow + 1]) {
-      const productNames = rows[offeringsHeaderRow + 1] || [];  // Row with product names
-      const pricesRow = rows[offeringsHeaderRow + 2] || [];     // Price per Unit row
-      const weightsRow = rows[offeringsHeaderRow + 3] || [];    // Weight per Unit row
-      
-      for (let i = 2; i < productNames.length; i++) {
-        const name = productNames[i];
-        if (name && name !== 'Price per Unit' && name !== 'Weight per Unit (lb)') {
-          productInfo[name] = {
-            pricePerUnit: parseFloat(pricesRow[i]) || 0,
-            weightPerUnit: parseFloat(weightsRow[i]) || 0
-          };
-        }
+    const productNamesRow = rows[2] || [];  // Row 3: product names
+    const pricesRow = rows[3] || [];        // Row 4: prices
+    const weightsRow = rows[4] || [];       // Row 5: weights
+    
+    for (let i = 2; i < productNamesRow.length && i < 6; i++) {
+      const name = productNamesRow[i];
+      if (name && typeof name === 'string' && name.trim()) {
+        productInfo[name] = {
+          pricePerUnit: parseFloat(pricesRow[i]) || 0,
+          weightPerUnit: parseFloat(weightsRow[i]) || 0
+        };
       }
     }
     
-    // Fall back to old structure if new structure not found
-    let headerRow;
-    let dataStartRow;
+    // Header row is index 8 (row 9)
+    const headerRow = rows[8] || [];
+    const dataStartRow = 9; // Row 10 is index 9
     
-    if (salesHeaderRow >= 0) {
-      headerRow = rows[salesHeaderRow + 1] || []; // Row after "Retail Sales" header
-      dataStartRow = salesHeaderRow + 2;          // Data starts after header
-    } else {
-      headerRow = rows[1] || [];                   // Old: Row 2 (index 1) has headers
-      dataStartRow = 2;                            // Old: Row 3+ has data
-    }
-    
-    // Find column indices dynamically
+    // Build products list from header row (columns C-F, indices 2-5)
     const products = [];
-    let totalColIndex = -1;
-    let productStartColIndex = -1;
-    
-    for (let i = 0; i < headerRow.length; i++) {
+    for (let i = 2; i < headerRow.length; i++) {
       const header = headerRow[i];
-      if (header === 'Total Retail Sales') {
-        totalColIndex = i;
-        break;
-      }
-      // First non-empty, non-Date header is the start of products
-      if (header && header !== 'Date' && header !== '') {
-        if (productStartColIndex === -1) {
-          productStartColIndex = i;
-        }
-        products.push({
-          index: i,
-          name: header,
-          column: String.fromCharCode(65 + i),
-          pricePerUnit: productInfo[header]?.pricePerUnit || 0,
-          weightPerUnit: productInfo[header]?.weightPerUnit || 0
-        });
-      }
+      if (!header) continue;
+      if (header === 'Total Retail Sales') break; // Stop at totals
+      
+      products.push({
+        index: i,
+        name: header,
+        column: String.fromCharCode(65 + i),
+        pricePerUnit: productInfo[header]?.pricePerUnit || 0,
+        weightPerUnit: productInfo[header]?.weightPerUnit || 0
+      });
     }
+    
+    // Column indices (0-based):
+    // B=1 (Date), C-F=2-5 (Products), G=6 (Total), H=7 (Fee), I=8 (Net Payout)
+    // J=9 (Archives Usage), K=10 (Ethiopia Usage), L=11 (Decaf Usage), M=12 (Invoice Sent)
+    const totalColIndex = 6;      // Column G
+    const usageStartColIndex = 9; // Column J
+    const invoiceSentColIndex = 12; // Column M
     
     // Get existing weeks
     const weeks = [];
+    const currentWeekRange = getWeekRangeStringForRetail(new Date());
+    
     for (let i = dataStartRow; i < rows.length; i++) {
       const row = rows[i];
-      if (!row) continue;
+      if (!row || !row[1]) continue; // Skip if no date in column B
       
-      // Find the date - it should be in column B (index 1)
-      let dateStr = row[1]; // Column B
-      if (!dateStr && row[0]) dateStr = row[0]; // Fallback to A if B is empty
-      
-      if (!dateStr) continue; // Skip rows without a date
+      const dateStr = String(row[1]);
+      if (!dateStr.includes('/')) continue; // Must be a date range like "11/28/25-12/04/25"
       
       const weekData = {
         rowIndex: i + 1, // Excel row (1-indexed)
-        dateRange: String(dateStr),
-        sales: {}
+        dateRange: dateStr,
+        sales: {},
+        isCurrentWeek: dateStr === currentWeekRange
       };
       
-      // Get sales for each product
+      // Get sales for each product (columns C-F)
       let hasAnySales = false;
       products.forEach((product) => {
         const value = row[product.index];
         const numVal = (value !== undefined && value !== null && value !== '') ? parseFloat(value) : null;
         weekData.sales[product.name] = numVal;
-        if (numVal !== null && !isNaN(numVal) && numVal !== 0) hasAnySales = true;
+        if (numVal !== null && !isNaN(numVal) && numVal > 0) hasAnySales = true;
       });
       
-      weekData.hasData = hasAnySales;
+      weekData.hasRetailSales = hasAnySales;
       
-      // Get totals if available
-      if (totalColIndex > -1) {
-        const totalVal = row[totalColIndex];
-        const feeVal = row[totalColIndex + 1];
-        const netVal = row[totalColIndex + 2];
-        
-        // Wholesale Coffee Usage columns (J, K, L) are at totalColIndex + 3, 4, 5
-        const archivesUsage = row[totalColIndex + 3];
-        const ethiopiaUsage = row[totalColIndex + 4];
-        const decafUsage = row[totalColIndex + 5];
-        
-        // Invoice Sent is now in column M (totalColIndex + 6)
-        const invoiceSentVal = row[totalColIndex + 6];
-        
-        weekData.totalSales = (totalVal !== undefined && totalVal !== null && totalVal !== '') ? parseFloat(totalVal) : 0;
-        weekData.transactionFee = (feeVal !== undefined && feeVal !== null && feeVal !== '') ? parseFloat(feeVal) : 0;
-        weekData.netPayout = (netVal !== undefined && netVal !== null && netVal !== '') ? parseFloat(netVal) : 0;
-        
-        // Wholesale coffee usage
-        weekData.wholesaleUsage = {
-          archives: (archivesUsage !== undefined && archivesUsage !== null && archivesUsage !== '') ? parseFloat(archivesUsage) : null,
-          ethiopia: (ethiopiaUsage !== undefined && ethiopiaUsage !== null && ethiopiaUsage !== '') ? parseFloat(ethiopiaUsage) : null,
-          decaf: (decafUsage !== undefined && decafUsage !== null && decafUsage !== '') ? parseFloat(decafUsage) : null
-        };
-        weekData.hasWholesaleUsage = weekData.wholesaleUsage.archives !== null || 
-                                      weekData.wholesaleUsage.ethiopia !== null || 
-                                      weekData.wholesaleUsage.decaf !== null;
-        
-        weekData.invoiceSent = invoiceSentVal && String(invoiceSentVal).trim().toLowerCase() === 'x';
-      }
+      // Get totals (columns G-I)
+      weekData.totalSales = parseFloat(row[totalColIndex]) || 0;
+      weekData.transactionFee = parseFloat(row[totalColIndex + 1]) || 0;
+      weekData.netPayout = parseFloat(row[totalColIndex + 2]) || 0;
+      
+      // Get wholesale coffee usage (columns J-L)
+      const archivesUsage = row[usageStartColIndex];
+      const ethiopiaUsage = row[usageStartColIndex + 1];
+      const decafUsage = row[usageStartColIndex + 2];
+      
+      weekData.coffeeUsage = {
+        archives: (archivesUsage !== undefined && archivesUsage !== '' && archivesUsage !== null) ? parseFloat(archivesUsage) : null,
+        ethiopia: (ethiopiaUsage !== undefined && ethiopiaUsage !== '' && ethiopiaUsage !== null) ? parseFloat(ethiopiaUsage) : null,
+        decaf: (decafUsage !== undefined && decafUsage !== '' && decafUsage !== null) ? parseFloat(decafUsage) : null
+      };
+      weekData.hasCoffeeUsage = weekData.coffeeUsage.archives !== null || 
+                                 weekData.coffeeUsage.ethiopia !== null || 
+                                 weekData.coffeeUsage.decaf !== null;
+      
+      // Invoice sent status (column M)
+      const invoiceSentVal = row[invoiceSentColIndex];
+      weekData.invoiceSent = invoiceSentVal && String(invoiceSentVal).trim().toLowerCase() === 'x';
+      
+      // Ready for invoicing = has retail sales AND has coffee usage AND not yet invoiced
+      weekData.readyForInvoice = weekData.hasRetailSales && weekData.hasCoffeeUsage && !weekData.invoiceSent && !weekData.isCurrentWeek;
       
       weeks.push(weekData);
     }
     
-    // Calculate weeks that need to be added up to current date
-    const today = new Date();
-    const currentWeekRange = getWeekRangeStringForRetail(today);
-    
-    // Find the last week end date in the sheet
-    let lastWeekStart = null;
-    if (weeks.length > 0) {
-      const lastWeek = weeks[weeks.length - 1];
-      lastWeekStart = parseWeekStartDateForRetail(lastWeek.dateRange);
-    }
-    
-    // Generate missing weeks
-    const missingWeeks = [];
-    if (lastWeekStart) {
-      let nextWeekStart = new Date(lastWeekStart);
-      nextWeekStart.setDate(nextWeekStart.getDate() + 7);
-      
-      const currentWeekStart = parseWeekStartDateForRetail(currentWeekRange);
-      
-      // Add weeks until we reach the current week
-      while (currentWeekStart && nextWeekStart <= currentWeekStart) {
-        const weekRange = getWeekRangeStringForRetail(nextWeekStart);
-        // Don't add if it's already in the list
-        if (!weeks.find(w => w.dateRange === weekRange) && !missingWeeks.includes(weekRange)) {
-          missingWeeks.push(weekRange);
-        }
-        nextWeekStart.setDate(nextWeekStart.getDate() + 7);
-      }
-    }
-    
-    // Find weeks without sales data (incomplete), excluding current week since it's not finished yet
-    const incompleteWeeks = weeks.filter(w => !w.hasData && w.dateRange !== currentWeekRange);
+    // Categorize weeks
+    const weeksNeedingRetailSales = weeks.filter(w => !w.hasRetailSales && !w.isCurrentWeek);
+    const weeksNeedingCoffeeUsage = weeks.filter(w => w.hasRetailSales && !w.hasCoffeeUsage && !w.isCurrentWeek);
+    const weeksReadyForInvoice = weeks.filter(w => w.readyForInvoice);
+    const recentWeeksWithSales = weeks.filter(w => w.hasRetailSales).slice(-3).reverse();
     
     res.json({
+      success: true,
       products,
       weeks,
-      missingWeeks,
-      incompleteWeeks,
+      weeksNeedingRetailSales,
+      weeksNeedingCoffeeUsage,
+      weeksReadyForInvoice,
+      recentWeeksWithSales,
       currentWeek: currentWeekRange,
       totalColIndex,
-      productStartColIndex,
-      lastDataRow: weeks.length > 0 ? weeks[weeks.length - 1].rowIndex : 2
+      usageStartColIndex,
+      invoiceSentColIndex
     });
     
   } catch (error) {

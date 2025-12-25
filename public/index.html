@@ -637,7 +637,7 @@
                         <span>View pending tasks and alerts</span>
                     </div>
                     <div class="example-prompt" onclick="checkCurrentInventory()">
-                        <strong>☕ Check Current Inventory</strong>
+                        <strong>📝 Check Current Inventory</strong>
                         <span>View all coffee stock levels</span>
                     </div>
                     <div class="example-prompt" onclick="openManageInventory()">
@@ -724,6 +724,16 @@
                 <div style="color: #666; font-size: 10px; margin-bottom: 8px;">Name | Weight (lb) | Type (recipe for blends)</div>
                 <div id="roastedCoffeeList"></div>
                 <button class="modal-btn send" onclick="openAddRoastedCoffeeModal()" style="margin-top: 10px; width: auto; padding: 8px 16px;">+ Add Roasted Coffee</button>
+            </div>
+            
+            <div style="margin-bottom: 20px; padding: 12px; background: #1a2a2a; border-radius: 8px; border-left: 3px solid #5b7aa4;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <div>
+                        <div style="font-weight: 600; color: #5b7aa4;">📊 Inventory Log</div>
+                        <div style="font-size: 11px; color: #888;">Track weekly roasted inventory counts</div>
+                    </div>
+                    <button class="modal-btn send" onclick="closeInventoryModal(); showInventoryLog();" style="width: auto; padding: 8px 16px;">View Log</button>
+                </div>
             </div>
             
             <div class="modal-buttons">
@@ -3986,7 +3996,7 @@ Archives of Us Coffee`;
             let html = '<div style="margin-bottom: 12px;">What would you like to do next?</div>';
             html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
             html += '<button class="action-btn" onclick="startRoastOrder()">🔥 Order Roast</button>';
-            html += '<button class="action-btn" onclick="checkCurrentInventory()">☕ Check Inventory</button>';
+            html += '<button class="action-btn" onclick="checkCurrentInventory()">📝 Check Inventory</button>';
             html += '<button class="action-btn" onclick="addFollowUpMessage()">Something Else</button>';
             html += '</div>';
             
@@ -6013,8 +6023,10 @@ Archives of Us Coffee`;
         
         let retailProducts = [];
         let retailWeeks = [];
-        let retailMissingWeeks = [];
-        let retailIncompleteWeeks = [];
+        let weeksNeedingRetailSales = [];
+        let weeksNeedingCoffeeUsage = [];
+        let weeksReadyForInvoice = [];
+        let recentWeeksWithSales = [];
         
         async function manageAOUCafe() {
             // Clear welcome message
@@ -6046,8 +6058,10 @@ Archives of Us Coffee`;
                 
                 retailProducts = data.products || [];
                 retailWeeks = data.weeks || [];
-                retailMissingWeeks = data.missingWeeks || [];
-                retailIncompleteWeeks = data.incompleteWeeks || [];
+                weeksNeedingRetailSales = data.weeksNeedingRetailSales || [];
+                weeksNeedingCoffeeUsage = data.weeksNeedingCoffeeUsage || [];
+                weeksReadyForInvoice = data.weeksReadyForInvoice || [];
+                recentWeeksWithSales = data.recentWeeksWithSales || [];
                 
                 // Show retail management UI
                 showRetailManagementUI(data);
@@ -6065,77 +6079,110 @@ Archives of Us Coffee`;
         
         function showRetailManagementUI(data) {
             let html = '<strong>☕ AOU Cafe Activity</strong><br>';
-            html += '<span style="color: #888; font-size: 12px;">Retail sales and coffee usage</span><br><br>';
+            html += '<span style="color: #888; font-size: 12px;">Track retail sales, coffee usage, and invoicing</span><br><br>';
             
-            // Current products
-            html += '<div style="margin-bottom: 16px;">';
-            html += '<strong>Retail Products:</strong> ';
-            if (retailProducts.length > 0) {
-                html += retailProducts.map(p => p.name).join(', ');
+            // ========== SECTION 1: RETAIL SALES ==========
+            html += '<div style="background: #1a2a1a; padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 3px solid #4a6741;">';
+            html += '<div style="font-weight: 600; margin-bottom: 8px;">💰 Retail Sales</div>';
+            
+            // Weeks needing sales data
+            if (weeksNeedingRetailSales.length > 0) {
+                html += `<div style="color: #f0ad4e; font-size: 12px; margin-bottom: 8px;">⚠️ ${weeksNeedingRetailSales.length} week(s) need sales data:</div>`;
+                weeksNeedingRetailSales.slice(0, 3).forEach(week => {
+                    html += `<div style="display: flex; justify-content: space-between; align-items: center; margin: 4px 0; font-size: 12px;">`;
+                    html += `<span>${week.dateRange}</span>`;
+                    html += `<button class="action-btn" style="padding: 2px 8px; font-size: 10px;" onclick="enterWeekSales(${week.rowIndex}, '${week.dateRange}')">Enter Sales</button>`;
+                    html += `</div>`;
+                });
+                if (weeksNeedingRetailSales.length > 3) {
+                    html += `<div style="color: #666; font-size: 10px;">+${weeksNeedingRetailSales.length - 3} more</div>`;
+                }
             } else {
-                html += 'No products found';
+                html += '<div style="color: #4a6741; font-size: 12px;">✓ All retail sales up to date</div>';
             }
+            
+            // Recent weeks with sales
+            if (recentWeeksWithSales.length > 0) {
+                html += '<div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #333;">';
+                html += '<div style="color: #888; font-size: 11px; margin-bottom: 4px;">Recent Sales:</div>';
+                recentWeeksWithSales.forEach(week => {
+                    html += `<div style="font-size: 12px; color: #ccc; margin: 2px 0;">`;
+                    html += `${week.dateRange}: $${week.totalSales?.toFixed(2) || '0.00'} <span style="color: #888;">(net: $${week.netPayout?.toFixed(2) || '0.00'})</span>`;
+                    html += `</div>`;
+                });
+                html += '</div>';
+            }
+            
+            html += `<div style="margin-top: 8px;">`;
+            html += `<button class="action-btn" style="font-size: 11px; padding: 4px 10px;" onclick="showRetailProductsManager()">Manage Products</button>`;
+            html += `</div>`;
             html += '</div>';
             
-            // Missing weeks alert
-            if (retailMissingWeeks.length > 0) {
-                html += `<div style="background: #3a3a20; padding: 10px; border-radius: 8px; margin-bottom: 12px;">`;
-                html += `<strong>📅 ${retailMissingWeeks.length} new week(s) to add:</strong><br>`;
-                html += retailMissingWeeks.join(', ');
-                html += `<br><button class="action-btn" style="margin-top: 8px;" onclick="addMissingRetailWeeks()">Add Missing Weeks</button>`;
-                html += `</div>`;
-            }
+            // ========== SECTION 2: COFFEE USAGE ==========
+            html += '<div style="background: #1a1a2a; padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 3px solid #5b7aa4;">';
+            html += '<div style="font-weight: 600; margin-bottom: 8px;">📦 Coffee Usage</div>';
             
-            // Weeks needing coffee usage tracking
-            const weeksNeedingUsage = retailWeeks.filter(w => w.hasData && !w.hasWholesaleUsage);
-            if (weeksNeedingUsage.length > 0) {
-                html += `<div style="background: #2a3a3a; padding: 10px; border-radius: 8px; margin-bottom: 12px;">`;
-                html += `<strong>📦 ${weeksNeedingUsage.length} week(s) need coffee usage:</strong><br>`;
-                weeksNeedingUsage.slice(0, 3).forEach(week => {
-                    html += `<div style="margin: 4px 0; font-size: 12px;">`;
-                    html += `${week.dateRange} `;
-                    html += `<button class="action-btn" style="padding: 2px 6px; font-size: 10px;" onclick="trackCoffeeUsage('${week.dateRange}', ${week.rowIndex})">Track Usage</button>`;
+            // Weeks needing coffee usage
+            if (weeksNeedingCoffeeUsage.length > 0) {
+                html += `<div style="color: #f0ad4e; font-size: 12px; margin-bottom: 8px;">⚠️ ${weeksNeedingCoffeeUsage.length} week(s) need coffee usage:</div>`;
+                weeksNeedingCoffeeUsage.slice(0, 3).forEach(week => {
+                    html += `<div style="display: flex; justify-content: space-between; align-items: center; margin: 4px 0; font-size: 12px;">`;
+                    html += `<span>${week.dateRange}</span>`;
+                    html += `<button class="action-btn" style="padding: 2px 8px; font-size: 10px;" onclick="trackCoffeeUsage('${week.dateRange}', ${week.rowIndex})">Track Usage</button>`;
                     html += `</div>`;
                 });
-                html += `</div>`;
-            }
-            
-            // Incomplete weeks (no sales data)
-            if (retailIncompleteWeeks.length > 0) {
-                html += `<div style="background: #3a2020; padding: 10px; border-radius: 8px; margin-bottom: 12px;">`;
-                html += `<strong>⚠️ ${retailIncompleteWeeks.length} week(s) need sales data:</strong><br>`;
-                retailIncompleteWeeks.slice(0, 5).forEach(week => {
-                    html += `<div style="margin: 8px 0;">`;
-                    html += `<span style="font-weight: bold;">${week.dateRange}</span> `;
-                    html += `<button class="action-btn" style="padding: 4px 8px; font-size: 11px;" onclick="enterWeekSales(${week.rowIndex}, '${week.dateRange}')">Enter Sales</button>`;
-                    html += `</div>`;
-                });
-                if (retailIncompleteWeeks.length > 5) {
-                    html += `<div style="color: #888; font-size: 11px;">...and ${retailIncompleteWeeks.length - 5} more</div>`;
+                if (weeksNeedingCoffeeUsage.length > 3) {
+                    html += `<div style="color: #666; font-size: 10px;">+${weeksNeedingCoffeeUsage.length - 3} more</div>`;
                 }
-                html += `</div>`;
+            } else {
+                html += '<div style="color: #5b7aa4; font-size: 12px;">✓ All coffee usage tracked</div>';
             }
             
-            // Recent weeks with data
-            const weeksWithData = retailWeeks.filter(w => w.hasData).slice(-3).reverse();
-            if (weeksWithData.length > 0) {
-                html += `<div style="margin-bottom: 12px;">`;
-                html += `<strong>Recent Sales:</strong><br>`;
-                weeksWithData.forEach(week => {
-                    html += `<div style="margin: 4px 0; font-size: 12px;">`;
-                    html += `${week.dateRange}: $${week.totalSales?.toFixed(2) || '0.00'} (net: $${week.netPayout?.toFixed(2) || '0.00'})`;
+            html += `<div style="margin-top: 8px;">`;
+            html += `<button class="action-btn" style="font-size: 11px; padding: 4px 10px;" onclick="showTrackCoffeeUsage()">Add Coffee Drop-off</button>`;
+            html += `</div>`;
+            html += '</div>';
+            
+            // ========== SECTION 3: INVOICES ==========
+            html += '<div style="background: #2a1a2a; padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 3px solid #8a5a9a;">';
+            html += '<div style="font-weight: 600; margin-bottom: 8px;">📄 Invoices</div>';
+            
+            // Weeks ready for invoicing
+            if (weeksReadyForInvoice.length > 0) {
+                html += `<div style="color: #90EE90; font-size: 12px; margin-bottom: 8px;">✓ ${weeksReadyForInvoice.length} week(s) ready to invoice:</div>`;
+                weeksReadyForInvoice.forEach(week => {
+                    html += `<div style="display: flex; justify-content: space-between; align-items: center; margin: 4px 0; font-size: 12px;">`;
+                    html += `<span>${week.dateRange}</span>`;
+                    html += `<button class="action-btn" style="padding: 2px 8px; font-size: 10px;" onclick="sendAOUInvoice(${week.rowIndex}, '${week.dateRange}')">Generate Invoice</button>`;
                     html += `</div>`;
                 });
-                html += `</div>`;
+            } else {
+                const reason = weeksNeedingRetailSales.length > 0 ? 'Need retail sales first' :
+                              weeksNeedingCoffeeUsage.length > 0 ? 'Need coffee usage first' : 'All invoices sent';
+                html += `<div style="color: #888; font-size: 12px;">${reason}</div>`;
             }
             
-            // Action buttons
+            // Recent sent invoices
+            const sentInvoices = retailWeeks.filter(w => w.invoiceSent).slice(-3).reverse();
+            if (sentInvoices.length > 0) {
+                html += '<div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #333;">';
+                html += '<div style="color: #888; font-size: 11px; margin-bottom: 4px;">Recent Invoices Sent:</div>';
+                sentInvoices.forEach(week => {
+                    html += `<div style="font-size: 12px; color: #ccc; margin: 2px 0;">`;
+                    html += `${week.dateRange} <span style="color: #4a6741;">✓</span>`;
+                    html += `</div>`;
+                });
+                html += '</div>';
+            }
+            
+            html += `<div style="margin-top: 8px;">`;
+            html += `<button class="action-btn" style="font-size: 11px; padding: 4px 10px;" onclick="viewAOUInvoices()">View All Invoices</button>`;
+            html += `</div>`;
+            html += '</div>';
+            
+            // Done button only
             html += '<div class="response-buttons" style="margin-top: 12px;">';
-            html += '<button class="action-btn" onclick="checkUninvoicedRetailWeeks()">Send Invoices</button>';
-            html += '<button class="action-btn" onclick="showTrackCoffeeUsage()">Track Coffee Usage</button>';
-            html += '<button class="action-btn" onclick="showInventoryLog()">Inventory Log</button>';
-            html += '<button class="action-btn" onclick="showRetailProductsManager()">Manage Products</button>';
-            html += '<button class="action-btn" onclick="cancelRetailMode()">Done</button>';
+            html += '<button class="action-btn" onclick="addFollowUpMessage()">Done</button>';
             html += '</div>';
             
             const messages = chatContainer.querySelectorAll('.message');
@@ -6174,8 +6221,7 @@ Archives of Us Coffee`;
                     }
                     
                     html += `<div class="response-buttons" style="margin-top: 12px;">`;
-                    html += `<button class="action-btn" onclick="manageAOUCafe()">Back to Retail</button>`;
-                    html += `<button class="action-btn" onclick="addConversationalFollowUp('completed')">Done</button>`;
+                    html += `<button class="action-btn" onclick="manageAOUCafe()">Go Back</button>`;
                     html += `</div>`;
                     
                     content.innerHTML = html;
@@ -6217,12 +6263,13 @@ Archives of Us Coffee`;
         }
         
         function enterWeekSales(rowIndex, dateRange) {
-            let html = `<strong>Enter Sales for ${dateRange}</strong><br><br>`;
+            let html = `<strong>💰 Enter Sales for ${dateRange}</strong><br><br>`;
             html += '<div style="margin-bottom: 12px;">';
             
             retailProducts.forEach(product => {
                 html += `<div style="margin: 8px 0; display: flex; align-items: center; gap: 8px;">`;
                 html += `<label style="min-width: 150px;">${product.name}:</label>`;
+                html += `<span style="color: #888;">$</span>`;
                 html += `<input type="number" step="0.01" min="0" id="retail-${product.index}" 
                          style="width: 80px; padding: 6px; background: #2a2a2a; border: 1px solid #404040; color: #fff; border-radius: 4px;"
                          placeholder="0.00">`;
@@ -6232,7 +6279,7 @@ Archives of Us Coffee`;
             html += '</div>';
             html += '<div class="response-buttons">';
             html += `<button class="action-btn" onclick="saveWeekSales(${rowIndex}, '${dateRange}')">Save</button>`;
-            html += '<button class="action-btn" onclick="manageAOUCafe()">Cancel</button>';
+            html += '<button class="action-btn" onclick="manageAOUCafe()">Go Back</button>';
             html += '</div>';
             
             addMessage(html, false);
@@ -6340,7 +6387,7 @@ Archives of Us Coffee`;
             html += '</div>';
             
             html += '<div class="response-buttons" style="margin-top: 12px;">';
-            html += '<button class="action-btn" onclick="manageAOUCafe()">Back</button>';
+            html += '<button class="action-btn" onclick="manageAOUCafe()">Go Back</button>';
             html += '</div>';
             
             addMessage(html, false);
@@ -6485,17 +6532,17 @@ Archives of Us Coffee`;
                 html += '</div>';
                 
                 // Show weeks needing usage data
-                const weeksNeedingUsage = (retailData.weeks || []).filter(w => w.hasData && !w.hasWholesaleUsage);
-                if (weeksNeedingUsage.length > 0) {
+                const weeksNeedingUsageLocal = (retailData.weeksNeedingCoffeeUsage || []);
+                if (weeksNeedingUsageLocal.length > 0) {
                     html += '<div style="margin-bottom: 12px; padding: 8px; background: #3a3a20; border-radius: 6px;">';
-                    html += `<div style="font-size: 11px; color: #888; margin-bottom: 4px;">⚠️ ${weeksNeedingUsage.length} week(s) need usage data:</div>`;
-                    html += `<div style="font-size: 12px;">${weeksNeedingUsage.map(w => w.dateRange).join(', ')}</div>`;
+                    html += `<div style="font-size: 11px; color: #888; margin-bottom: 4px;">⚠️ ${weeksNeedingUsageLocal.length} week(s) need usage data:</div>`;
+                    html += `<div style="font-size: 12px;">${weeksNeedingUsageLocal.map(w => w.dateRange).join(', ')}</div>`;
                     html += '</div>';
                 }
                 
                 html += '<div class="response-buttons">';
                 html += '<button class="action-btn" onclick="submitCoffeeUsage()">Save Usage</button>';
-                html += '<button class="action-btn" onclick="manageAOUCafe()">Cancel</button>';
+                html += '<button class="action-btn" onclick="manageAOUCafe()">Go Back</button>';
                 html += '</div>';
                 
                 content.innerHTML = html;
@@ -6605,7 +6652,7 @@ Archives of Us Coffee`;
             html += '</div>';
             html += '<div class="response-buttons">';
             html += `<button class="action-btn" onclick="saveWeekCoffeeUsage('${dateRange}')">Save</button>`;
-            html += '<button class="action-btn" onclick="manageAOUCafe()">Cancel</button>';
+            html += '<button class="action-btn" onclick="manageAOUCafe()">Go Back</button>';
             html += '</div>';
             
             addMessage(html, false);
@@ -6734,7 +6781,6 @@ Archives of Us Coffee`;
                 }
                 
                 html += '<div class="response-buttons" style="margin-top: 12px;">';
-                html += '<button class="action-btn" onclick="manageAOUCafe()">← Back</button>';
                 html += '<button class="action-btn" onclick="addFollowUpMessage()">Done</button>';
                 html += '</div>';
                 
@@ -6782,7 +6828,7 @@ Archives of Us Coffee`;
             
             html += '<div class="response-buttons">';
             html += `<button class="action-btn" onclick="saveInventoryEntry('${weekDate}')">Save</button>`;
-            html += '<button class="action-btn" onclick="showInventoryLog()">Cancel</button>';
+            html += '<button class="action-btn" onclick="showInventoryLog()">Go Back</button>';
             html += '</div>';
             
             addMessage(html, false);

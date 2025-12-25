@@ -638,11 +638,11 @@
                     </div>
                     <div class="example-prompt" onclick="checkCurrentInventory()">
                         <strong>📝 Check Current Inventory</strong>
-                        <span>View all coffee stock levels</span>
+                        <span>Enter counts & recalibrate</span>
                     </div>
                     <div class="example-prompt" onclick="openManageInventory()">
                         <strong>📦 Manage Inventory</strong>
-                        <span>Edit green and roasted coffee</span>
+                        <span>Inventory log & settings</span>
                     </div>
                     <div class="example-prompt" onclick="startRoastOrder()">
                         <strong>🔥 Order Roast</strong>
@@ -726,18 +726,8 @@
                 <button class="modal-btn send" onclick="openAddRoastedCoffeeModal()" style="margin-top: 10px; width: auto; padding: 8px 16px;">+ Add Roasted Coffee</button>
             </div>
             
-            <div style="margin-bottom: 20px; padding: 12px; background: #1a2a2a; border-radius: 8px; border-left: 3px solid #5b7aa4;">
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div>
-                        <div style="font-weight: 600; color: #5b7aa4;">📊 Inventory Log</div>
-                        <div style="font-size: 11px; color: #888;">Track weekly roasted inventory counts</div>
-                    </div>
-                    <button class="modal-btn send" onclick="closeInventoryModal(); showInventoryLog();" style="width: auto; padding: 8px 16px;">View Log</button>
-                </div>
-            </div>
-            
             <div class="modal-buttons">
-                <button class="modal-btn cancel" onclick="closeInventoryModal()">Cancel</button>
+                <button class="modal-btn cancel" onclick="closeInventoryModal(); showInventoryLog();">Go Back</button>
                 <button class="modal-btn send" onclick="saveInventoryChanges()">Save Changes</button>
             </div>
         </div>
@@ -1281,76 +1271,168 @@
             if (welcomeMsg) welcomeMsg.remove();
 
             // Show user's request first
-            addMessage('View all coffee stock levels', true);
-            addMessage('Checking current coffee inventory...', false);
+            addMessage('Check current inventory', true);
+            addMessage('Loading inventory data...', false);
             
             try {
-                // Fetch full inventory data
+                // Fetch current inventory to show expected values
                 const invResponse = await fetch('/api/inventory');
                 const inv = await invResponse.json();
                 
-                // Handle error response
                 if (inv.error) {
                     throw new Error(inv.error);
                 }
                 
-                // Ensure arrays exist
-                const green = inv.green || [];
                 const roasted = inv.roasted || [];
-                const enRoute = inv.enRoute || [];
                 
-                greenCoffeeInventory = green;
-                roastedCoffeeInventory = roasted;
-                enRouteCoffeeInventory = enRoute;
+                // Get today's date
+                const today = new Date();
+                const dateStr = today.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
                 
-                // Build the summary text - clean and simple
-                let summary = 'Current Coffee Inventory\n\n';
-                
-                summary += 'GREEN COFFEE\n';
-                if (green.length > 0) {
-                    green.forEach(coffee => {
-                        summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
-                    });
-                } else {
-                    summary += '   None\n';
-                }
-                
-                summary += '\nROASTED COFFEE\n';
-                if (roasted.length > 0) {
-                    roasted.forEach(coffee => {
-                        summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
-                    });
-                } else {
-                    summary += '   None\n';
-                }
-                
-                summary += '\nEN ROUTE\n';
-                if (enRoute.length > 0) {
-                    enRoute.forEach(coffee => {
-                        summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
-                    });
-                } else {
-                    summary += '   None\n';
-                }
-                
-                // Get the last message and type into it
+                // Get the last message and update it
                 const messages = chatContainer.querySelectorAll('.message');
                 const lastMsg = messages[messages.length - 1];
-                if (lastMsg) {
-                    const content = lastMsg.querySelector('.message-content') || lastMsg;
-                    content.style.whiteSpace = 'pre-wrap';
-                    content.style.fontFamily = 'monospace';
-                    await typeText(content, summary, 8);
-                }
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
                 
-                // Add follow-up suggestions
-                setTimeout(() => {
-                    addConversationalFollowUp('inventory_checked');
-                }, 300);
+                let html = `<strong>📝 Check Roasted Inventory</strong><br>`;
+                html += `<span style="color: #888; font-size: 12px;">${dateStr}</span><br><br>`;
+                
+                html += '<div style="background: #2a2a2a; padding: 12px; border-radius: 8px; margin-bottom: 12px;">';
+                html += '<div style="font-size: 11px; color: #888; margin-bottom: 8px;">Enter your actual inventory counts:</div>';
+                
+                // Show each roasted coffee with input
+                const roastedCoffees = ['Archives Blend', 'Ethiopia Gera', 'Colombia Decaf'];
+                roastedCoffees.forEach(coffeeName => {
+                    const coffee = roasted.find(c => c.name === coffeeName);
+                    const currentWeight = coffee?.weight || 0;
+                    const safeName = coffeeName.toLowerCase().replace(/\s+/g, '-');
+                    
+                    html += `<div style="display: flex; align-items: center; gap: 8px; margin: 8px 0;">`;
+                    html += `<label style="min-width: 120px; font-size: 13px;">${coffeeName}:</label>`;
+                    html += `<input type="number" step="0.1" min="0" id="recal-${safeName}" placeholder="${currentWeight}" 
+                             style="width: 80px; padding: 6px; background: #1a1a1a; border: 1px solid #404040; color: #fff; border-radius: 4px;">`;
+                    html += `<span style="color: #666; font-size: 11px;">lb</span>`;
+                    html += `<span style="color: #555; font-size: 10px;">(expected: ${currentWeight})</span>`;
+                    html += `</div>`;
+                });
+                
+                html += '</div>';
+                
+                html += '<div style="background: #1a2a1a; padding: 10px; border-radius: 6px; margin-bottom: 12px; border-left: 3px solid #4a6741;">';
+                html += '<div style="font-size: 11px; color: #90EE90;">💡 This will:</div>';
+                html += '<div style="font-size: 11px; color: #888; margin-top: 4px;">• Update the Inventory sheet</div>';
+                html += '<div style="font-size: 11px; color: #888;">• Log this count in Inventory Log</div>';
+                html += '<div style="font-size: 11px; color: #888;">• Add any discrepancy >1lb to AOU wholesale usage</div>';
+                html += '</div>';
+                
+                html += '<div class="response-buttons">';
+                html += '<button class="action-btn" onclick="submitInventoryRecalibration()" style="background: #4a6741;">Save & Recalibrate</button>';
+                html += '<button class="action-btn" onclick="addFollowUpMessage()">Cancel</button>';
+                html += '</div>';
+                
+                content.innerHTML = html;
                 
             } catch (error) {
                 console.error('Error:', error);
                 addMessage('Error loading inventory: ' + error.message, false);
+            }
+        }
+        
+        async function submitInventoryRecalibration() {
+            // Collect the entered values
+            const actualInventory = {};
+            const roastedCoffees = ['Archives Blend', 'Ethiopia Gera', 'Colombia Decaf'];
+            
+            let hasValues = false;
+            roastedCoffees.forEach(coffeeName => {
+                const safeName = coffeeName.toLowerCase().replace(/\s+/g, '-');
+                const input = document.getElementById(`recal-${safeName}`);
+                const value = parseFloat(input?.value);
+                
+                if (!isNaN(value)) {
+                    actualInventory[coffeeName] = value;
+                    hasValues = true;
+                } else if (input?.placeholder) {
+                    // Use expected value if nothing entered
+                    actualInventory[coffeeName] = parseFloat(input.placeholder) || 0;
+                }
+            });
+            
+            if (!hasValues) {
+                alert('Please enter at least one inventory value');
+                return;
+            }
+            
+            addMessage('Recalibrating inventory...', false);
+            
+            try {
+                const response = await fetch('/api/inventory/recalibrate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ actualInventory })
+                });
+                
+                const data = await response.json();
+                
+                if (!data.success) {
+                    throw new Error(data.error);
+                }
+                
+                // Show results
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                let html = '<strong>✅ Inventory Recalibrated</strong><br><br>';
+                
+                // Show discrepancies
+                const discrepancies = data.discrepancies || {};
+                let hasDiscrepancy = false;
+                
+                for (const [coffee, info] of Object.entries(discrepancies)) {
+                    if (Math.abs(info.difference) > 0.5) {
+                        hasDiscrepancy = true;
+                        const direction = info.difference > 0 ? 'less' : 'more';
+                        const color = info.difference > 0 ? '#f0ad4e' : '#90EE90';
+                        html += `<div style="margin-bottom: 4px;">`;
+                        html += `<span style="color: ${color};">${coffee}</span>: `;
+                        html += `Expected ${info.expected}lb → Found ${info.actual}lb `;
+                        html += `<span style="color: #888;">(${Math.abs(info.difference).toFixed(1)}lb ${direction})</span>`;
+                        html += `</div>`;
+                    }
+                }
+                
+                if (!hasDiscrepancy) {
+                    html += '<div style="color: #90EE90; margin-bottom: 8px;">✓ No significant discrepancies found</div>';
+                }
+                
+                // Show AOU adjustments
+                const adjustments = data.adjustments || {};
+                if (data.aouUpdated && Object.keys(adjustments).length > 0) {
+                    html += '<div style="background: #2a3a2a; padding: 10px; border-radius: 6px; margin-top: 12px; border-left: 3px solid #4a6741;">';
+                    html += `<div style="font-size: 12px; color: #90EE90; margin-bottom: 6px;">📋 Added to AOU Wholesale Usage (${data.aouWeekRange}):</div>`;
+                    
+                    for (const [coffee, amount] of Object.entries(adjustments)) {
+                        html += `<div style="font-size: 11px; color: #ccc;">• ${coffee}: +${amount}lb</div>`;
+                    }
+                    
+                    html += '<div style="font-size: 10px; color: #888; margin-top: 6px;">This will be included in the next AOU invoice.</div>';
+                    html += '</div>';
+                }
+                
+                html += '<div style="margin-top: 12px; font-size: 11px; color: #888;">';
+                html += `Logged to Inventory Log for ${data.date}`;
+                html += '</div>';
+                
+                html += '<div class="response-buttons" style="margin-top: 12px;">';
+                html += '<button class="action-btn" onclick="addFollowUpMessage()">Done</button>';
+                html += '</div>';
+                
+                content.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Error:', error);
+                addMessage('Error: ' + error.message, false);
             }
         }
 
@@ -2885,13 +2967,12 @@
         // ============ Manage Inventory Modal ============
 
         function openManageInventory() {
-            // Clear welcome message
-            const welcomeMsg = chatContainer.querySelector('.welcome-message');
-            if (welcomeMsg) welcomeMsg.remove();
-            
-            // Show user's request first
-            addMessage('Edit green and roasted coffee', true);
-            
+            // Main entry point - shows Inventory Log
+            showInventoryLog();
+        }
+
+        function openManageInventoryModal() {
+            // Opens the modal for editing green/roasted coffee
             loadInventory().then(() => {
                 renderInventoryModal();
                 document.getElementById('inventoryModal').style.display = 'flex';
@@ -3371,8 +3452,8 @@
                 }
                 
                 closeInventoryModal();
-                addMessage('Inventory updated successfully.', false);
-                addConversationalFollowUp('inventory_updated');
+                addMessage('✅ Inventory updated!', false);
+                setTimeout(() => showInventoryLog(), 1000);
             } catch (error) {
                 console.error('Error saving inventory:', error);
                 alert('Error saving inventory: ' + error.message);
@@ -3381,8 +3462,6 @@
 
         function closeInventoryModal() {
             document.getElementById('inventoryModal').style.display = 'none';
-            // Show follow-up after closing modal (exclude manage_inventory since that's what was just done)
-            addConversationalFollowUp('cancelled');
         }
 
         // ============ To Do Feature ============
@@ -4012,84 +4091,220 @@ Archives of Us Coffee`;
             
             // Show user's request first
             addMessage('View and manage shipments', true);
+            addMessage('Loading en route orders...', false);
             
-            await loadInventory();
-            
-            if (enRouteCoffeeInventory.length === 0) {
-                addMessage('No coffee currently en route.', false);
-                setTimeout(() => {
-                    addConversationalFollowUp('en_route_empty');
-                }, 300);
-                return;
-            }
-            
-            // Group items by dateOrdered (same date/time = same roast order)
-            const orderGroups = {};
-            enRouteCoffeeInventory.forEach(item => {
-                const orderKey = item.dateOrdered || 'unknown';
-                if (!orderGroups[orderKey]) {
-                    orderGroups[orderKey] = [];
-                }
-                orderGroups[orderKey].push(item);
-            });
-            
-            let html = '<strong>🚚 En Route Coffee</strong><br><br>';
-            
-            Object.keys(orderGroups).forEach((orderDate, groupIndex) => {
-                const items = orderGroups[orderDate];
-                const firstItem = items[0];
+            try {
+                const response = await fetch('/api/roast-log/en-route');
+                const data = await response.json();
                 
-                // Format order date - handle mm/dd/yy format
-                let orderDateStr = orderDate;
-                if (orderDate && orderDate !== 'unknown' && !orderDate.match(/^\d{2}\/\d{2}\/\d{2}$/)) {
-                    const date = new Date(orderDate);
-                    if (!isNaN(date.getTime())) {
-                        const m = String(date.getMonth() + 1).padStart(2, '0');
-                        const d = String(date.getDate()).padStart(2, '0');
-                        const y = String(date.getFullYear()).slice(-2);
-                        orderDateStr = `${m}/${d}/${y}`;
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                if (!data.success) {
+                    content.innerHTML = `<div style="color: #ff6b6b;">Error: ${data.error}</div>`;
+                    return;
+                }
+                
+                const items = data.items || [];
+                
+                if (items.length === 0) {
+                    content.innerHTML = 'No coffee currently en route.';
+                    setTimeout(() => {
+                        addConversationalFollowUp('en_route_empty');
+                    }, 300);
+                    return;
+                }
+                
+                // Group items by dateOrdered (same date = same roast order)
+                const orderGroups = {};
+                items.forEach(item => {
+                    const orderKey = item.dateOrdered || 'unknown';
+                    if (!orderGroups[orderKey]) {
+                        orderGroups[orderKey] = {
+                            items: [],
+                            rowIndex: item.rowIndex,
+                            trackingNumber: item.trackingNumber,
+                            status: item.status
+                        };
                     }
-                }
+                    orderGroups[orderKey].items.push(item);
+                });
                 
-                // Check if this group has tracking
-                const hasTracking = firstItem.trackingNumber && firstItem.trackingNumber.trim() !== '';
+                let html = '<strong>🚚 En Route Coffee</strong><br><br>';
                 
-                html += `<div style="background:#1a1a1a; padding:12px; border-radius:8px; margin-bottom:10px;">`;
-                
-                // Show all items in this order group
-                items.forEach((item, idx) => {
-                    html += `<div style="margin-bottom:${idx < items.length - 1 ? '4px' : '8px'};">`;
-                    html += `<strong style="color:#90EE90;">${item.name}</strong> - ${item.weight}lb`;
+                Object.keys(orderGroups).forEach((orderDate) => {
+                    const group = orderGroups[orderDate];
+                    const items = group.items;
+                    
+                    // Determine status color
+                    const statusColors = {
+                        'needs_tracking': { bg: '#3a3a20', border: '#f0ad4e', icon: '📦' },
+                        'awaiting_delivery': { bg: '#1a2a3a', border: '#5b7aa4', icon: '🚚' },
+                        'needs_confirmation': { bg: '#2a3a2a', border: '#4a6741', icon: '✓' }
+                    };
+                    const style = statusColors[group.status] || statusColors['awaiting_delivery'];
+                    
+                    html += `<div style="background:${style.bg}; padding:12px; border-radius:8px; margin-bottom:10px; border-left:3px solid ${style.border};">`;
+                    
+                    // Status badge
+                    const statusText = group.status === 'needs_tracking' ? 'Needs Tracking' :
+                                       group.status === 'awaiting_delivery' ? 'In Transit' : 'Confirm Delivery';
+                    html += `<div style="font-size:10px; color:${style.border}; margin-bottom:6px;">${style.icon} ${statusText}</div>`;
+                    
+                    // Show all items in this order group
+                    items.forEach((item, idx) => {
+                        html += `<div style="margin-bottom:${idx < items.length - 1 ? '4px' : '8px'};">`;
+                        html += `<strong style="color:#90EE90;">${item.name}</strong> - ${item.weight}lb`;
+                        html += `</div>`;
+                    });
+                    
+                    html += `<div style="font-size:12px; color:#888; margin-bottom:8px;">Ordered: ${orderDate}</div>`;
+                    
+                    // Show tracking if available
+                    if (group.trackingNumber) {
+                        html += `<div style="font-size:11px; color:#888; margin-bottom:8px;">Tracking: ${group.trackingNumber}</div>`;
+                    }
+                    
+                    html += `<div style="display:flex; gap:8px; flex-wrap:wrap;">`;
+                    
+                    if (group.status === 'needs_tracking') {
+                        html += `<button class="action-btn" onclick="enterTrackingNumber(${group.rowIndex}, '${orderDate}')" style="font-size:12px; padding:6px 10px;">Add Tracking</button>`;
+                    } else if (group.status === 'awaiting_delivery') {
+                        html += `<button class="action-btn" onclick="viewUPSTracking('${group.trackingNumber}')" style="font-size:12px; padding:6px 10px;">View Tracking</button>`;
+                        html += `<button class="action-btn" onclick="markOrderDelivered(${group.rowIndex}, '${orderDate}')" style="font-size:12px; padding:6px 10px; background:#4a6741;">Mark Delivered</button>`;
+                    } else if (group.status === 'needs_confirmation') {
+                        html += `<button class="action-btn" onclick="confirmDelivery(${group.rowIndex}, '${orderDate}')" style="font-size:12px; padding:6px 10px; background:#4a6741;">Confirm Receipt</button>`;
+                    }
+                    
+                    html += `</div>`;
                     html += `</div>`;
                 });
                 
-                if (orderDateStr && orderDateStr !== 'unknown') {
-                    html += `<div style="font-size:12px; color:#888; margin-bottom:8px;">Ordered: ${orderDateStr}</div>`;
-                }
-                
-                // Show estimated delivery prominently if available
-                if (firstItem.estimatedDelivery) {
-                    html += `<div style="padding:8px; background:#2a3a2a; border-radius:4px; margin-bottom:8px;">`;
-                    html += `<span style="color:#90EE90; font-weight:bold;">📦 Est. Delivery: ${firstItem.estimatedDelivery}</span>`;
-                    html += `</div>`;
-                }
-                
-                html += `<div style="display:flex; gap:8px; flex-wrap:wrap;">`;
-                // Use first item's ID and tracking for the group
-                html += `<button class="action-btn" onclick="viewTracking('${firstItem.id}', '${firstItem.trackingNumber || ''}')" style="font-size:12px; padding:6px 10px;">Tracking</button>`;
-                html += `<button class="action-btn" onclick="startMarkDeliveredGroup('${orderDate}')" style="font-size:12px; padding:6px 10px; background:#4a6741;">Mark Delivered</button>`;
+                // Add Done button at the end
+                html += `<div style="margin-top: 12px;">`;
+                html += `<button class="action-btn" onclick="addFollowUpMessage()">Done</button>`;
                 html += `</div>`;
-                html += `</div>`;
-            });
+                
+                content.innerHTML = html;
+                
+            } catch (error) {
+                console.error('Error loading en route:', error);
+                addMessage(`Error: ${error.message}`, false);
+            }
+        }
+        
+        function enterTrackingNumber(rowIndex, orderDate) {
+            let html = `<strong>Add Tracking Number</strong><br>`;
+            html += `<span style="color:#888; font-size:12px;">Order from ${orderDate}</span><br><br>`;
             
-            // Add Done button at the end
-            html += `<div style="margin-top: 12px;">`;
-            html += `<button class="action-btn" onclick="addFollowUpMessage()">Done</button>`;
+            html += `<div style="display:flex; gap:8px; align-items:center;">`;
+            html += `<input type="text" id="trackingInput" placeholder="1Z..." style="flex:1; padding:8px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px;">`;
+            html += `<button class="action-btn" onclick="saveTrackingNumber(${rowIndex})">Save</button>`;
+            html += `</div>`;
+            
+            html += `<div class="response-buttons" style="margin-top:12px;">`;
+            html += `<button class="action-btn" onclick="viewEnRoute()">Go Back</button>`;
             html += `</div>`;
             
             addMessage(html, false);
         }
         
+        async function saveTrackingNumber(rowIndex) {
+            const input = document.getElementById('trackingInput');
+            const trackingNumber = input?.value?.trim();
+            
+            if (!trackingNumber) {
+                alert('Please enter a tracking number');
+                return;
+            }
+            
+            addMessage('Saving tracking number...', false);
+            
+            try {
+                const response = await fetch('/api/roast-log/tracking', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rowIndex, trackingNumber })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addMessage(`✅ Tracking number saved: ${trackingNumber}`, false);
+                    setTimeout(() => viewEnRoute(), 1000);
+                } else {
+                    throw new Error(data.error);
+                }
+            } catch (error) {
+                addMessage(`Error: ${error.message}`, false);
+            }
+        }
+        
+        function viewUPSTracking(trackingNumber) {
+            window.open(`https://www.ups.com/track?tracknum=${trackingNumber}`, '_blank');
+        }
+        
+        function markOrderDelivered(rowIndex, orderDate) {
+            const today = new Date().toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+            
+            let html = `<strong>Mark Order Delivered</strong><br>`;
+            html += `<span style="color:#888; font-size:12px;">Order from ${orderDate}</span><br><br>`;
+            
+            html += `<div style="margin-bottom:12px;">`;
+            html += `<label style="color:#888; font-size:12px;">Arrival Date:</label><br>`;
+            html += `<input type="text" id="arrivalDateInput" value="${today}" style="padding:8px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px; width:120px;">`;
+            html += `</div>`;
+            
+            html += `<div style="margin-bottom:12px;">`;
+            html += `<label style="color:#888; font-size:12px;">Received by (initials):</label><br>`;
+            html += `<input type="text" id="confirmationInput" value="RP" style="padding:8px; background:#2a2a2a; border:1px solid #444; color:white; border-radius:4px; width:80px;">`;
+            html += `</div>`;
+            
+            html += `<div class="response-buttons">`;
+            html += `<button class="action-btn" onclick="saveDeliveryConfirmation(${rowIndex})" style="background:#4a6741;">Confirm Delivered</button>`;
+            html += `<button class="action-btn" onclick="viewEnRoute()">Go Back</button>`;
+            html += `</div>`;
+            
+            addMessage(html, false);
+        }
+        
+        function confirmDelivery(rowIndex, orderDate) {
+            // Same as markOrderDelivered for items needing confirmation
+            markOrderDelivered(rowIndex, orderDate);
+        }
+        
+        async function saveDeliveryConfirmation(rowIndex) {
+            const arrivalDate = document.getElementById('arrivalDateInput')?.value?.trim();
+            const confirmation = document.getElementById('confirmationInput')?.value?.trim() || 'RP';
+            
+            if (!arrivalDate) {
+                alert('Please enter arrival date');
+                return;
+            }
+            
+            addMessage('Marking as delivered...', false);
+            
+            try {
+                const response = await fetch('/api/roast-log/delivered', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rowIndex, arrivalDate, confirmation })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    addMessage(`✅ Order marked as delivered on ${arrivalDate}`, false);
+                    setTimeout(() => viewEnRoute(), 1000);
+                } else {
+                    throw new Error(data.error);
+                }
+            } catch (error) {
+                addMessage(`Error: ${error.message}`, false);
+            }
+        }
+
         async function viewTracking(itemId, trackingNumber) {
             if (!trackingNumber || trackingNumber.trim() === '') {
                 // No tracking - check how many orders need tracking
@@ -6706,7 +6921,11 @@ Archives of Us Coffee`;
         let inventoryLogData = null;
         
         async function showInventoryLog() {
-            addMessage('View Inventory Log', true);
+            // Clear welcome message
+            const welcomeMsg = chatContainer.querySelector('.welcome-message');
+            if (welcomeMsg) welcomeMsg.remove();
+            
+            addMessage('Inventory Log', true);
             addMessage('Loading inventory log...', false);
             
             try {
@@ -6723,50 +6942,39 @@ Archives of Us Coffee`;
                 }
                 
                 let html = '<strong>📊 Inventory Log</strong><br>';
-                html += '<span style="color: #888; font-size: 12px;">Weekly inventory snapshots</span><br><br>';
+                html += '<span style="color: #888; font-size: 12px;">Weekly roasted coffee inventory</span><br><br>';
                 
                 const entries = inventoryLogData.entries || [];
                 const roastedCoffees = inventoryLogData.roastedCoffees || [];
-                const greenCoffees = inventoryLogData.greenCoffees || [];
                 
                 if (entries.length === 0) {
                     html += '<div style="color: #888;">No entries yet.</div>';
                 } else {
-                    // Show recent entries (newest first)
+                    // Show entries oldest to newest
                     html += '<div style="max-height: 350px; overflow-y: auto;">';
                     
-                    entries.slice().reverse().forEach(entry => {
+                    entries.forEach(entry => {
                         const hasRoasted = Object.values(entry.roasted).some(v => v !== null);
-                        const hasGreen = Object.values(entry.green).some(v => v !== null);
-                        const isComplete = hasRoasted && hasGreen;
                         
-                        html += `<div style="background: #1a1a1a; padding: 10px; border-radius: 6px; margin-bottom: 8px; border-left: 3px solid ${isComplete ? '#4a6741' : '#6a4a41'};">`;
-                        html += `<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">`;
+                        html += `<div style="background: #1a1a1a; padding: 10px; border-radius: 6px; margin-bottom: 8px; border-left: 3px solid ${hasRoasted ? '#4a6741' : '#6a4a41'};">`;
+                        html += `<div style="display: flex; justify-content: space-between; align-items: center;">`;
                         html += `<strong>${entry.date}</strong>`;
+                        
+                        // Show roasted values inline or "Not entered"
+                        if (hasRoasted) {
+                            const roastedParts = [];
+                            roastedCoffees.forEach(c => {
+                                const val = entry.roasted[c];
+                                if (val !== null) roastedParts.push(`${c.split(' ')[0]} ${val}lb`);
+                            });
+                            html += `<span style="font-size: 11px; color: #888;">${roastedParts.join(', ')}</span>`;
+                        } else {
+                            html += `<span style="font-size: 11px; color: #6a4a41;">Not entered</span>`;
+                        }
+                        
                         html += `<button class="action-btn" style="padding: 2px 8px; font-size: 10px;" onclick="editInventoryEntry('${entry.date}', ${entry.rowIndex})">Edit</button>`;
                         html += `</div>`;
-                        
-                        // Roasted
-                        html += '<div style="font-size: 11px; color: #888;">Roasted: ';
-                        const roastedParts = [];
-                        roastedCoffees.forEach(c => {
-                            const val = entry.roasted[c];
-                            if (val !== null) roastedParts.push(`${c.split(' ')[0]} ${val}lb`);
-                        });
-                        html += roastedParts.length > 0 ? roastedParts.join(', ') : '<span style="color: #6a4a41;">Not entered</span>';
-                        html += '</div>';
-                        
-                        // Green
-                        html += '<div style="font-size: 11px; color: #888;">Green: ';
-                        const greenParts = [];
-                        greenCoffees.forEach(c => {
-                            const val = entry.green[c];
-                            if (val !== null) greenParts.push(`${c.split(' ')[0]} ${val}lb`);
-                        });
-                        html += greenParts.length > 0 ? greenParts.join(', ') : '<span style="color: #6a4a41;">Not entered</span>';
-                        html += '</div>';
-                        
-                        html += '</div>';
+                        html += `</div>`;
                     });
                     
                     html += '</div>';
@@ -6776,11 +6984,13 @@ Archives of Us Coffee`;
                 const weeksNeedingRoasted = entries.filter(e => !Object.values(e.roasted).some(v => v !== null));
                 if (weeksNeedingRoasted.length > 0) {
                     html += `<div style="background: #3a2a20; padding: 8px; border-radius: 6px; margin: 12px 0;">`;
-                    html += `<div style="font-size: 11px;">⚠️ ${weeksNeedingRoasted.length} week(s) need roasted inventory</div>`;
+                    html += `<div style="font-size: 11px;">⚠️ ${weeksNeedingRoasted.length} week(s) need inventory counts</div>`;
                     html += `</div>`;
                 }
                 
                 html += '<div class="response-buttons" style="margin-top: 12px;">';
+                html += '<button class="action-btn" onclick="viewAllInventory()">View All Inventory</button>';
+                html += '<button class="action-btn" onclick="openManageInventoryModal()">Edit Coffee Types</button>';
                 html += '<button class="action-btn" onclick="addFollowUpMessage()">Done</button>';
                 html += '</div>';
                 
@@ -6789,6 +6999,60 @@ Archives of Us Coffee`;
             } catch (error) {
                 console.error('Error loading inventory log:', error);
                 addMessage(`Error: ${error.message}`, false);
+            }
+        }
+        
+        async function viewAllInventory() {
+            addMessage('View all inventory', true);
+            addMessage('Loading...', false);
+            
+            try {
+                const response = await fetch('/api/inventory');
+                const inv = await response.json();
+                
+                if (inv.error) throw new Error(inv.error);
+                
+                const green = inv.green || [];
+                const roasted = inv.roasted || [];
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                let html = '<strong>📦 Current Inventory</strong><br><br>';
+                
+                // Green Coffee
+                html += '<div style="margin-bottom: 12px;">';
+                html += '<div style="color: #90EE90; font-size: 12px; margin-bottom: 4px;">GREEN COFFEE</div>';
+                if (green.length > 0) {
+                    green.forEach(coffee => {
+                        html += `<div style="color: #ccc; font-size: 13px; margin-left: 8px;">${coffee.name}: ${coffee.weight}lb</div>`;
+                    });
+                } else {
+                    html += '<div style="color: #666; font-size: 13px; margin-left: 8px;">None</div>';
+                }
+                html += '</div>';
+                
+                // Roasted Coffee
+                html += '<div style="margin-bottom: 12px;">';
+                html += '<div style="color: #f0ad4e; font-size: 12px; margin-bottom: 4px;">ROASTED COFFEE</div>';
+                if (roasted.length > 0) {
+                    roasted.forEach(coffee => {
+                        html += `<div style="color: #ccc; font-size: 13px; margin-left: 8px;">${coffee.name}: ${coffee.weight}lb</div>`;
+                    });
+                } else {
+                    html += '<div style="color: #666; font-size: 13px; margin-left: 8px;">None</div>';
+                }
+                html += '</div>';
+                
+                html += '<div class="response-buttons" style="margin-top: 12px;">';
+                html += '<button class="action-btn" onclick="showInventoryLog()">Go Back</button>';
+                html += '</div>';
+                
+                content.innerHTML = html;
+                
+            } catch (error) {
+                addMessage('Error: ' + error.message, false);
             }
         }
         
@@ -6807,7 +7071,7 @@ Archives of Us Coffee`;
             const entry = data.entries.find(e => e.date === weekDate);
             const roastedCoffees = data.roastedCoffees || [];
             
-            let html = `<strong>Edit Roasted Inventory for ${weekDate}</strong><br><br>`;
+            let html = `<strong>📊 Inventory for ${weekDate}</strong><br><br>`;
             html += '<div style="background: #2a2a2a; padding: 12px; border-radius: 8px; margin-bottom: 12px;">';
             
             roastedCoffees.forEach(coffee => {
@@ -6822,9 +7086,6 @@ Archives of Us Coffee`;
             });
             
             html += '</div>';
-            
-            // Auto-fill green button
-            html += `<button class="action-btn" style="font-size: 11px; margin-bottom: 12px;" onclick="autoFillGreenInventory('${weekDate}')">📋 Auto-fill Green from Inventory Sheet</button><br>`;
             
             html += '<div class="response-buttons">';
             html += `<button class="action-btn" onclick="saveInventoryEntry('${weekDate}')">Save</button>`;
@@ -6854,6 +7115,7 @@ Archives of Us Coffee`;
             addMessage('Saving inventory...', false);
             
             try {
+                // Save roasted inventory
                 const response = await fetch('/api/inventory-log/save-roasted', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -6863,6 +7125,13 @@ Archives of Us Coffee`;
                 const data = await response.json();
                 
                 if (data.success) {
+                    // Auto-fill green coffee from main inventory sheet
+                    await fetch('/api/inventory-log/auto-green', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ weekEndDate: weekDate })
+                    });
+                    
                     addMessage('✅ Inventory saved!', false);
                     setTimeout(() => showInventoryLog(), 1000);
                 } else {

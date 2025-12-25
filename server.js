@@ -6121,7 +6121,169 @@ app.post('/api/inventory/roasted/remove', async (req, res) => {
   res.json({ success: true });
 });
 
-// Get en route inventory
+// Get en route inventory from Roast Log (primary source)
+app.get('/api/roast-log/en-route', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Roast Log!A:H',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const rows = response.data.values || [];
+    // Structure: B=Date Ordered(1), C=Tracking#(2), D=Archives(3), E=Ethiopia(4), F=Decaf(5), G=Arrival Date(6), H=Confirmation(7)
+    
+    const enRouteItems = [];
+    
+    // Helper to format Excel dates
+    const formatExcelDate = (dateVal) => {
+      if (!dateVal) return '';
+      if (typeof dateVal === 'number') {
+        const excelEpoch = new Date(1899, 11, 30);
+        const date = new Date(excelEpoch.getTime() + dateVal * 24 * 60 * 60 * 1000);
+        return date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+      }
+      return String(dateVal);
+    };
+    
+    for (let i = 2; i < rows.length; i++) {
+      const row = rows[i];
+      if (!row || !row[1]) continue; // Skip if no date ordered
+      
+      const dateOrdered = row[1];
+      const trackingNumber = row[2] || '';
+      const archivesWeight = parseFloat(row[3]) || 0;
+      const ethiopiaWeight = parseFloat(row[4]) || 0;
+      const decafWeight = parseFloat(row[5]) || 0;
+      const arrivalDate = row[6];
+      const confirmation = row[7];
+      
+      // Calculate total weight
+      const totalWeight = archivesWeight + ethiopiaWeight + decafWeight;
+      if (totalWeight === 0) continue;
+      
+      // Skip if already delivered AND confirmed
+      if (arrivalDate && confirmation) continue;
+      
+      const dateStr = formatExcelDate(dateOrdered);
+      
+      // Build list of items in this order
+      const orderItems = [];
+      if (archivesWeight > 0) {
+        orderItems.push({
+          id: `roast-log-${i}-archives`,
+          name: 'Archives Blend',
+          weight: archivesWeight,
+          trackingNumber: String(trackingNumber).trim(),
+          dateOrdered: dateStr,
+          estimatedDelivery: '',
+          rowIndex: i + 1,
+          status: !trackingNumber ? 'needs_tracking' : !arrivalDate ? 'awaiting_delivery' : 'needs_confirmation'
+        });
+      }
+      if (ethiopiaWeight > 0) {
+        orderItems.push({
+          id: `roast-log-${i}-ethiopia`,
+          name: 'Ethiopia Gera',
+          weight: ethiopiaWeight,
+          trackingNumber: String(trackingNumber).trim(),
+          dateOrdered: dateStr,
+          estimatedDelivery: '',
+          rowIndex: i + 1,
+          status: !trackingNumber ? 'needs_tracking' : !arrivalDate ? 'awaiting_delivery' : 'needs_confirmation'
+        });
+      }
+      if (decafWeight > 0) {
+        orderItems.push({
+          id: `roast-log-${i}-decaf`,
+          name: 'Colombia Decaf',
+          weight: decafWeight,
+          trackingNumber: String(trackingNumber).trim(),
+          dateOrdered: dateStr,
+          estimatedDelivery: '',
+          rowIndex: i + 1,
+          status: !trackingNumber ? 'needs_tracking' : !arrivalDate ? 'awaiting_delivery' : 'needs_confirmation'
+        });
+      }
+      
+      enRouteItems.push(...orderItems);
+    }
+    
+    res.json({
+      success: true,
+      items: enRouteItems
+    });
+    
+  } catch (error) {
+    console.error('Roast Log en route fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch en route data: ' + error.message });
+  }
+});
+
+// Update tracking number in Roast Log
+app.post('/api/roast-log/tracking', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { rowIndex, trackingNumber } = req.body;
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Update tracking number in column C
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Roast Log!C${rowIndex}`,
+      valueInputOption: 'USER_ENTERED',
+      resource: { values: [[trackingNumber]] }
+    });
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('Update tracking error:', error);
+    res.status(500).json({ error: 'Failed to update tracking: ' + error.message });
+  }
+});
+
+// Mark order as delivered in Roast Log
+app.post('/api/roast-log/delivered', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { rowIndex, arrivalDate, confirmation } = req.body;
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Update arrival date (G) and confirmation (H)
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SPREADSHEET_ID,
+      range: `Roast Log!G${rowIndex}:H${rowIndex}`,
+      valueInputOption: 'USER_ENTERED',
+      resource: { values: [[arrivalDate || new Date().toLocaleDateString('en-US'), confirmation || 'RP']] }
+    });
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('Mark delivered error:', error);
+    res.status(500).json({ error: 'Failed to mark delivered: ' + error.message });
+  }
+});
+
+// Get en route inventory (legacy - from Inventory sheet)
 app.get('/api/inventory/enroute', async (req, res) => {
   await ensureFreshInventory();
   res.json(enRouteCoffeeInventory);
@@ -7206,6 +7368,217 @@ app.post('/api/inventory-log/auto-green', async (req, res) => {
     
   } catch (error) {
     console.error('Error auto-populating green inventory:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Recalibrate inventory - compare actual vs expected, update sheets, log discrepancies
+app.post('/api/inventory/recalibrate', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { actualInventory } = req.body;
+  // actualInventory: { 'Archives Blend': number, 'Ethiopia Gera': number, 'Colombia Decaf': number }
+  
+  if (!actualInventory) {
+    return res.status(400).json({ error: 'Actual inventory required' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Step 1: Get current roasted inventory from Inventory sheet
+    await ensureFreshInventory();
+    
+    const currentInventory = {};
+    roastedCoffeeInventory.forEach(coffee => {
+      currentInventory[coffee.name] = coffee.weight || 0;
+    });
+    
+    console.log('Current inventory from sheet:', currentInventory);
+    console.log('Actual inventory entered:', actualInventory);
+    
+    // Step 2: Calculate discrepancies
+    // Positive discrepancy = we used more than tracked (need to add to AOU usage)
+    // Negative discrepancy = we have more than expected (adjustment error)
+    const discrepancies = {};
+    const adjustments = {};
+    
+    for (const [coffeeName, actualWeight] of Object.entries(actualInventory)) {
+      const expectedWeight = currentInventory[coffeeName] || 0;
+      const diff = expectedWeight - actualWeight;
+      
+      discrepancies[coffeeName] = {
+        expected: expectedWeight,
+        actual: actualWeight,
+        difference: diff
+      };
+      
+      // Only add to AOU usage if discrepancy > 1lb (floor to nearest pound)
+      if (diff > 1) {
+        adjustments[coffeeName] = Math.floor(diff);
+      }
+    }
+    
+    console.log('Discrepancies:', discrepancies);
+    console.log('Adjustments to add to AOU:', adjustments);
+    
+    // Step 3: If there are adjustments, add to AOU Cafe Activity wholesale usage
+    let aouUpdated = false;
+    let aouWeekRange = null;
+    
+    if (Object.keys(adjustments).length > 0) {
+      // Find the most recent uninvoiced week in AOU Cafe Activity
+      const aouResponse = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'AOU Cafe Activity!A1:M50',
+        valueRenderOption: 'UNFORMATTED_VALUE'
+      });
+      
+      const aouRows = aouResponse.data.values || [];
+      
+      // Find the most recent week that doesn't have invoice sent (column M)
+      let targetAouRow = -1;
+      for (let i = aouRows.length - 1; i >= 9; i--) { // Data starts row 10 (index 9)
+        const row = aouRows[i];
+        if (!row || !row[1]) continue; // Skip if no date
+        
+        const invoiceSent = row[12]; // Column M (index 12)
+        if (!invoiceSent || String(invoiceSent).toLowerCase() !== 'x') {
+          targetAouRow = i + 1; // 1-indexed
+          aouWeekRange = row[1]; // Date column B
+          break;
+        }
+      }
+      
+      if (targetAouRow > 0) {
+        // Get current values in columns J, K, L and add adjustments
+        const currentRow = aouRows[targetAouRow - 1];
+        const currentArchives = parseFloat(currentRow[9]) || 0;  // Column J
+        const currentEthiopia = parseFloat(currentRow[10]) || 0; // Column K
+        const currentDecaf = parseFloat(currentRow[11]) || 0;    // Column L
+        
+        const newArchives = currentArchives + (adjustments['Archives Blend'] || 0);
+        const newEthiopia = currentEthiopia + (adjustments['Ethiopia Gera'] || 0);
+        const newDecaf = currentDecaf + (adjustments['Colombia Decaf'] || 0);
+        
+        // Update AOU wholesale usage columns
+        await sheets.spreadsheets.values.update({
+          spreadsheetId: SPREADSHEET_ID,
+          range: `AOU Cafe Activity!J${targetAouRow}:L${targetAouRow}`,
+          valueInputOption: 'USER_ENTERED',
+          resource: { values: [[newArchives || '', newEthiopia || '', newDecaf || '']] }
+        });
+        
+        aouUpdated = true;
+        console.log(`Updated AOU week ${aouWeekRange}: Archives ${currentArchives} -> ${newArchives}, Ethiopia ${currentEthiopia} -> ${newEthiopia}, Decaf ${currentDecaf} -> ${newDecaf}`);
+      }
+    }
+    
+    // Step 4: Update main Inventory sheet with new roasted values
+    for (const coffee of roastedCoffeeInventory) {
+      if (actualInventory[coffee.name] !== undefined) {
+        coffee.weight = actualInventory[coffee.name];
+      }
+    }
+    await syncInventoryToSheets();
+    
+    // Step 5: Add new row to Inventory Log
+    const today = new Date();
+    const dateStr = today.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+    
+    // Read Inventory Log to get structure and find insert position
+    const logResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Inventory Log!A1:Z50',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const logRows = logResponse.data.values || [];
+    const headers = logRows[2] || []; // Row 3 has headers
+    
+    // Find column indices for roasted coffees
+    const roastedColIndices = {};
+    for (let i = 0; i < headers.length; i++) {
+      const header = String(headers[i] || '');
+      if (header === 'Archives Blend') roastedColIndices['Archives Blend'] = i;
+      if (header === 'Ethiopia Gera') roastedColIndices['Ethiopia Gera'] = i;
+      if (header === 'Colombia Decaf') roastedColIndices['Colombia Decaf'] = i;
+    }
+    
+    // Find the next empty row or row to insert (maintain chronological order)
+    let insertRow = logRows.length + 1;
+    
+    // Build the new row
+    const newRow = new Array(headers.length).fill('');
+    newRow[1] = dateStr; // Column B = Date
+    
+    for (const [coffeeName, colIndex] of Object.entries(roastedColIndices)) {
+      if (actualInventory[coffeeName] !== undefined) {
+        newRow[colIndex] = actualInventory[coffeeName];
+      }
+    }
+    
+    // Append to Inventory Log
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Inventory Log!B:Z',
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      resource: { values: [newRow.slice(1)] } // Skip column A
+    });
+    
+    // Step 6: Auto-fill green coffee from current inventory
+    const greenInventory = {};
+    greenCoffeeInventory.forEach(coffee => {
+      greenInventory[coffee.name] = coffee.weight || 0;
+    });
+    
+    // Build response with explanation
+    const response = {
+      success: true,
+      date: dateStr,
+      discrepancies,
+      adjustments,
+      aouUpdated,
+      aouWeekRange,
+      message: ''
+    };
+    
+    // Build explanation message
+    let message = `Inventory recalibrated for ${dateStr}.\n\n`;
+    
+    // Show discrepancies
+    let hasSignificantDiscrepancy = false;
+    for (const [coffee, data] of Object.entries(discrepancies)) {
+      if (Math.abs(data.difference) > 0.5) {
+        hasSignificantDiscrepancy = true;
+        const direction = data.difference > 0 ? 'less' : 'more';
+        message += `${coffee}: Expected ${data.expected}lb, found ${data.actual}lb (${Math.abs(data.difference).toFixed(1)}lb ${direction})\n`;
+      }
+    }
+    
+    if (!hasSignificantDiscrepancy) {
+      message += 'No significant discrepancies found.\n';
+    }
+    
+    // Show AOU adjustments
+    if (aouUpdated && Object.keys(adjustments).length > 0) {
+      message += `\n📋 Wholesale usage adjustments added to AOU Cafe (week of ${aouWeekRange}):\n`;
+      for (const [coffee, amount] of Object.entries(adjustments)) {
+        message += `  • ${coffee}: +${amount}lb\n`;
+      }
+      message += '\nThis will be included in the next AOU invoice.';
+    }
+    
+    response.message = message;
+    
+    res.json(response);
+    
+  } catch (error) {
+    console.error('Error recalibrating inventory:', error);
     res.status(500).json({ error: error.message });
   }
 });

@@ -2504,7 +2504,7 @@ If no valid emails found, return: {"emails": []}`;
 
 // Add new wholesale customer
 app.post('/api/customers/wholesale/add', async (req, res) => {
-  const { code, name, emails, terms, pricingTier } = req.body;
+  const { code, name, emails, terms, pricingType, pricingTier, priceMultiplier } = req.body;
   
   if (!name || !code) {
     return res.status(400).json({ error: 'Name and code are required' });
@@ -2527,13 +2527,83 @@ app.post('/api/customers/wholesale/add', async (req, res) => {
   }
   
   try {
+    let finalPricingTier = pricingTier || 'Wholesale Tier 1';
+    let pricingCreated = false;
+    
+    // If custom pricing, create a new pricing table in Google Sheets
+    if (pricingType === 'custom' && priceMultiplier && userTokens) {
+      oauth2Client.setCredentials(userTokens);
+      const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+      
+      // Read Tier 1 prices
+      const pricingResponse = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Wholesale Pricing!A:D'
+      });
+      
+      const pricingRows = pricingResponse.data.values || [];
+      
+      // Extract Tier 1 coffees and prices
+      let tier1Coffees = [];
+      let inTier1Section = false;
+      
+      for (let i = 0; i < pricingRows.length; i++) {
+        const cellB = (pricingRows[i][1] || '').toString().toLowerCase();
+        
+        if (cellB === 'wholesale tier 1') {
+          inTier1Section = true;
+          continue;
+        }
+        
+        if (inTier1Section && cellB.startsWith('wholesale')) {
+          break; // End of Tier 1 section
+        }
+        
+        if (inTier1Section && pricingRows[i][1] && pricingRows[i][3]) {
+          const coffeeName = pricingRows[i][1].toString();
+          const price = parseFloat(pricingRows[i][3]) || 0;
+          if (coffeeName && coffeeName.toLowerCase() !== 'coffee' && price > 0) {
+            tier1Coffees.push({ name: coffeeName, price: price });
+          }
+        }
+      }
+      
+      // Create new pricing table data
+      const customTableName = `Wholesale ${name}`;
+      const newTableData = [
+        ['', '', '', ''],
+        ['', customTableName, '', ''],
+        ['', 'Coffee', '', 'Price']
+      ];
+      
+      tier1Coffees.forEach(coffee => {
+        const customPrice = Math.round(coffee.price * priceMultiplier * 100) / 100;
+        newTableData.push(['', coffee.name, '', customPrice]);
+      });
+      
+      // Append the new table to the end of the sheet
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Wholesale Pricing!A:D',
+        valueInputOption: 'USER_ENTERED',
+        requestBody: {
+          values: newTableData
+        }
+      });
+      
+      finalPricingTier = customTableName;
+      pricingCreated = true;
+      
+      console.log(`✅ Created custom pricing table "${customTableName}" with multiplier ${priceMultiplier}×`);
+    }
+    
     // Add to local customer directory
     customerDirectory[lower] = {
       name: name,
       code: code,
       emails: emails || [],
       terms: terms || 'Net 15',
-      pricingTable: pricingTier || 'Wholesale Tier 1'
+      pricingTable: finalPricingTier
     };
     
     // Save to Google Sheets Customer Directory
@@ -2542,13 +2612,14 @@ app.post('/api/customers/wholesale/add', async (req, res) => {
       name: name,
       emails: emails || [],
       terms: terms || 'Net 15',
-      pricingTier: pricingTier || 'Wholesale Tier 1'
+      pricingTier: finalPricingTier
     });
     
-    console.log(`✅ Added wholesale customer: ${name} (${code}), pricing: ${pricingTier || 'Wholesale Tier 1'}`);
+    console.log(`✅ Added wholesale customer: ${name} (${code}), pricing: ${finalPricingTier}`);
     
     res.json({ 
-      success: true, 
+      success: true,
+      pricingCreated,
       message: `Added ${name} (${code}) to Customer Directory`
     });
     
@@ -6223,6 +6294,84 @@ async function getSheetId(sheets, sheetName) {
 }
 
 // Get At-Cost prices for margin calculation
+// Get all pricing tiers for comparison
+app.get('/api/pricing/all-tiers', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Wholesale Pricing!A:H'
+    });
+    
+    const rows = response.data.values || [];
+    
+    // Parse all pricing sections
+    const tiers = ['Tier 1', 'Dex', 'CED', 'Junia', 'At-Cost'];
+    const products = {};
+    
+    let currentSection = null;
+    
+    for (let i = 0; i < rows.length; i++) {
+      const cellB = (rows[i][1] || '').toString();
+      const cellBLower = cellB.toLowerCase();
+      
+      // Detect section headers
+      if (cellBLower === 'wholesale tier 1') {
+        currentSection = 'Tier 1';
+        continue;
+      } else if (cellBLower === 'wholesale dex') {
+        currentSection = 'Dex';
+        continue;
+      } else if (cellBLower === 'wholesale ced') {
+        currentSection = 'CED';
+        continue;
+      } else if (cellBLower === 'wholesale junia') {
+        currentSection = 'Junia';
+        continue;
+      } else if (cellBLower === 'at-cost') {
+        currentSection = 'At-Cost';
+        continue;
+      }
+      
+      // Skip header rows (Coffee, Price)
+      if (cellBLower === 'coffee' || cellBLower === '') continue;
+      
+      // Extract prices - column D (index 3) for most tiers, column H (index 7) for at-cost
+      if (currentSection && cellB) {
+        const price = currentSection === 'At-Cost' 
+          ? (parseFloat(rows[i][7]) || 0)  // Column H for at-cost
+          : (parseFloat(rows[i][3]) || 0);  // Column D for others
+        
+        if (price > 0) {
+          if (!products[cellB]) {
+            products[cellB] = { name: cellB, prices: {} };
+          }
+          products[cellB].prices[currentSection] = price;
+        }
+      }
+    }
+    
+    // Convert to array and sort
+    const productList = Object.values(products).sort((a, b) => a.name.localeCompare(b.name));
+    
+    res.json({ 
+      success: true, 
+      tiers,
+      products: productList
+    });
+    
+  } catch (error) {
+    console.error('Error fetching pricing tiers:', error);
+    res.status(500).json({ error: 'Failed to fetch pricing: ' + error.message });
+  }
+});
+
 app.get('/api/pricing/at-cost-prices', async (req, res) => {
   if (!userTokens) {
     return res.status(401).json({ error: 'Google not connected' });

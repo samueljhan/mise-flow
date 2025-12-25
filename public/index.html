@@ -855,7 +855,7 @@
 
     <!-- Add New Customer Modal -->
     <div class="modal-overlay" id="addCustomerModal">
-        <div class="modal" style="max-width: 500px;">
+        <div class="modal" style="max-width: 700px; max-height: 90vh; overflow-y: auto;">
             <h3>Add New Wholesale Customer</h3>
             <p style="color: #888; margin-bottom: 15px; font-size: 12px;">Add a new customer to the Customer Directory.</p>
             
@@ -887,15 +887,36 @@
                     </select>
                 </div>
                 <div style="flex: 1;">
-                    <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Pricing Tier</label>
-                    <select id="newCustomerPricingTier" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;">
-                        <option value="Wholesale Tier 1">Wholesale Tier 1</option>
-                        <option value="Wholesale Dex">Wholesale Dex</option>
-                        <option value="Wholesale CED">Wholesale CED</option>
-                        <option value="Wholesale Junia">Wholesale Junia</option>
-                        <option value="At-Cost">At-Cost</option>
+                    <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Pricing</label>
+                    <select id="newCustomerPricingType" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;" onchange="updatePricingTypeUI()">
+                        <option value="existing">Use Existing Tier</option>
+                        <option value="custom">Create Custom Pricing</option>
                     </select>
                 </div>
+            </div>
+            
+            <div id="existingPricingSection" style="margin-bottom: 12px;">
+                <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Select Pricing Tier</label>
+                <select id="newCustomerPricingTier" style="width: 100%; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;" onchange="updatePricingPreview()">
+                    <option value="Wholesale Tier 1">Wholesale Tier 1</option>
+                    <option value="Wholesale Dex">Wholesale Dex</option>
+                    <option value="Wholesale CED">Wholesale CED</option>
+                    <option value="Wholesale Junia">Wholesale Junia</option>
+                    <option value="At-Cost">At-Cost</option>
+                </select>
+            </div>
+            
+            <div id="customPricingSection" style="display: none; margin-bottom: 12px;">
+                <label style="color: #888; font-size: 12px; display: block; margin-bottom: 4px;">Price Multiplier (vs Tier 1)</label>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="number" id="newCustomerPriceMultiplier" placeholder="1.00" step="0.01" min="0.5" max="2.0" value="1.00" style="width: 100px; padding: 8px; background: #2a2a2a; border: 1px solid #444; color: white; border-radius: 4px;" oninput="updatePricingPreview()">
+                    <span style="color: #888; font-size: 12px;">× Tier 1 prices (e.g., 0.95 = 5% discount, 1.10 = 10% markup)</span>
+                </div>
+            </div>
+            
+            <div id="pricingPreviewSection" style="background: #1a1a1a; border-radius: 8px; padding: 12px; margin-bottom: 15px;">
+                <div style="color: #888; font-size: 11px; margin-bottom: 8px; font-weight: 500;">PRICING COMPARISON</div>
+                <div id="pricingPreviewTable" style="font-size: 12px;">Loading pricing data...</div>
             </div>
             
             <div class="modal-buttons" style="margin-top: 20px;">
@@ -2637,13 +2658,13 @@
                 wholesaleCustomers.forEach(customer => {
                     const emailsDisplay = customer.emails && customer.emails.length > 0 
                         ? customer.emails.join(', ') 
-                        : '<span style="color: #666;">—</span>';
-                    html += `<div style="display: grid; grid-template-columns: 1fr 2fr 2.5fr 1fr 1.5fr; gap: 8px; padding: 12px; background: #1a1a1a; border-radius: 8px; margin-bottom: 8px; align-items: center;">`;
-                    html += `<div style="color: #90EE90; font-family: monospace; font-weight: 600;">${customer.code}</div>`;
-                    html += `<div style="font-weight: 500;">${customer.name}</div>`;
-                    html += `<div style="color: #888; font-size: 11px; overflow: hidden; text-overflow: ellipsis;">${emailsDisplay}</div>`;
-                    html += `<div style="color: #888; font-size: 12px;">${customer.terms || 'Net 15'}</div>`;
-                    html += `<div style="color: #888; font-size: 12px;">${customer.pricingTier || 'Tier 1'}</div>`;
+                        : '—';
+                    html += `<div style="display: grid; grid-template-columns: 1fr 2fr 2.5fr 1fr 1.5fr; gap: 8px; padding: 12px; background: #1a1a1a; border-radius: 8px; margin-bottom: 8px; align-items: center; color: #ccc; font-size: 13px;">`;
+                    html += `<div>${customer.code}</div>`;
+                    html += `<div>${customer.name}</div>`;
+                    html += `<div style="overflow: hidden; text-overflow: ellipsis;">${emailsDisplay}</div>`;
+                    html += `<div>${customer.terms || 'Net 15'}</div>`;
+                    html += `<div>${customer.pricingTier || 'Tier 1'}</div>`;
                     html += `</div>`;
                 });
                 
@@ -2661,11 +2682,100 @@
             document.getElementById('newCustomerName').value = '';
             document.getElementById('newCustomerEmails').value = '';
             document.getElementById('newCustomerTerms').value = 'Net 15';
+            document.getElementById('newCustomerPricingType').value = 'existing';
             document.getElementById('newCustomerPricingTier').value = 'Wholesale Tier 1';
+            document.getElementById('newCustomerPriceMultiplier').value = '1.00';
             document.getElementById('codeValidation').textContent = '';
             document.getElementById('codeValidation').style.color = '#888';
             
+            // Reset pricing type UI
+            updatePricingTypeUI();
+            
+            // Load pricing data and show preview
+            loadPricingData();
+            
             document.getElementById('addCustomerModal').style.display = 'flex';
+        }
+        
+        let allPricingData = {};
+        
+        async function loadPricingData() {
+            try {
+                const response = await fetch('/api/pricing/all-tiers');
+                if (response.ok) {
+                    allPricingData = await response.json();
+                    updatePricingPreview();
+                } else {
+                    document.getElementById('pricingPreviewTable').innerHTML = '<span style="color: #666;">Could not load pricing data</span>';
+                }
+            } catch (error) {
+                console.error('Error loading pricing:', error);
+                document.getElementById('pricingPreviewTable').innerHTML = '<span style="color: #666;">Could not load pricing data</span>';
+            }
+        }
+        
+        function updatePricingTypeUI() {
+            const pricingType = document.getElementById('newCustomerPricingType').value;
+            document.getElementById('existingPricingSection').style.display = pricingType === 'existing' ? 'block' : 'none';
+            document.getElementById('customPricingSection').style.display = pricingType === 'custom' ? 'block' : 'none';
+            updatePricingPreview();
+        }
+        
+        function updatePricingPreview() {
+            const previewDiv = document.getElementById('pricingPreviewTable');
+            
+            if (!allPricingData.products || allPricingData.products.length === 0) {
+                previewDiv.innerHTML = '<span style="color: #666;">Loading...</span>';
+                return;
+            }
+            
+            const pricingType = document.getElementById('newCustomerPricingType').value;
+            const selectedTier = document.getElementById('newCustomerPricingTier').value;
+            const multiplier = parseFloat(document.getElementById('newCustomerPriceMultiplier').value) || 1.0;
+            
+            // Build comparison table
+            let html = '<table style="width: 100%; border-collapse: collapse; font-size: 11px;">';
+            html += '<tr style="color: #888; border-bottom: 1px solid #333;">';
+            html += '<th style="text-align: left; padding: 4px 8px;">Product</th>';
+            
+            // Show all tiers as columns
+            const tiers = allPricingData.tiers || ['Tier 1', 'Dex', 'CED', 'Junia', 'At-Cost'];
+            tiers.forEach(tier => {
+                const isSelected = pricingType === 'existing' && selectedTier.toLowerCase().includes(tier.toLowerCase().replace('wholesale ', ''));
+                html += `<th style="text-align: right; padding: 4px 8px; ${isSelected ? 'color: #90EE90;' : ''}">${tier}</th>`;
+            });
+            
+            // Add custom column if custom pricing selected
+            if (pricingType === 'custom') {
+                html += `<th style="text-align: right; padding: 4px 8px; color: #90EE90;">Custom (${multiplier}×)</th>`;
+            }
+            
+            html += '</tr>';
+            
+            // Add rows for each product
+            allPricingData.products.forEach(product => {
+                html += '<tr style="border-bottom: 1px solid #222;">';
+                html += `<td style="padding: 4px 8px; color: #ccc;">${product.name}</td>`;
+                
+                tiers.forEach(tier => {
+                    const price = product.prices[tier] || product.prices['Tier 1'] || 0;
+                    const isSelected = pricingType === 'existing' && selectedTier.toLowerCase().includes(tier.toLowerCase().replace('wholesale ', ''));
+                    html += `<td style="text-align: right; padding: 4px 8px; ${isSelected ? 'color: #90EE90; font-weight: 500;' : 'color: #888;'}">$${price.toFixed(2)}</td>`;
+                });
+                
+                // Add custom price column
+                if (pricingType === 'custom') {
+                    const tier1Price = product.prices['Tier 1'] || 0;
+                    const customPrice = (tier1Price * multiplier).toFixed(2);
+                    html += `<td style="text-align: right; padding: 4px 8px; color: #90EE90; font-weight: 500;">$${customPrice}</td>`;
+                }
+                
+                html += '</tr>';
+            });
+            
+            html += '</table>';
+            
+            previewDiv.innerHTML = html;
         }
         
         function closeAddCustomerModal() {
@@ -2707,7 +2817,9 @@
             const name = document.getElementById('newCustomerName').value.trim();
             const emailsRaw = document.getElementById('newCustomerEmails').value.trim();
             const terms = document.getElementById('newCustomerTerms').value;
+            const pricingType = document.getElementById('newCustomerPricingType').value;
             const pricingTier = document.getElementById('newCustomerPricingTier').value;
+            const priceMultiplier = parseFloat(document.getElementById('newCustomerPriceMultiplier').value) || 1.0;
             
             if (!code || !validateCustomerCode()) {
                 alert('Please enter a valid unique 3-letter code.');
@@ -2732,7 +2844,9 @@
                         name,
                         emails,
                         terms,
-                        pricingTier
+                        pricingType,
+                        pricingTier: pricingType === 'existing' ? pricingTier : `Wholesale ${name}`,
+                        priceMultiplier: pricingType === 'custom' ? priceMultiplier : null
                     })
                 });
                 
@@ -2746,7 +2860,11 @@
                 // Reload the customers list
                 await loadCustomersList();
                 
-                alert(`Added ${name} (${code}) to Customer Directory.`);
+                let msg = `Added ${name} (${code}) to Customer Directory.`;
+                if (result.pricingCreated) {
+                    msg += `\n\nCustom pricing table created with ${priceMultiplier}× Tier 1 prices.`;
+                }
+                alert(msg);
                 
             } catch (error) {
                 console.error('Error adding customer:', error);

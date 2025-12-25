@@ -7235,13 +7235,70 @@ async function getRoastDeliveriesInRange(startDate, endDate) {
 
 // Get wholesale invoices to OTHER customers (not AOU) in a date range
 async function getOtherCustomerInvoicesInRange(startDate, endDate) {
-  if (!userTokens) return [];
+  if (!userTokens) return { archives: 0, ethiopia: 0, decaf: 0 };
   
-  // Read invoices sheet to find non-AOU invoices
-  // For now, we need the actual line items, which aren't stored in the sheet
-  // This is a limitation - we'll need to track invoice line items separately
-  // For now, return empty and focus on retail deduction
-  return [];
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Read invoices sheet
+    // Structure: B=Date(1), C=Invoice#(2), D=Archives(3), E=Ethiopia(4), F=Decaf(5)
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Invoices!B:F',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const rows = response.data.values || [];
+    
+    // Sum weights for non-AOU invoices in date range
+    let archivesTotal = 0;
+    let ethiopiaTotal = 0;
+    let decafTotal = 0;
+    
+    for (let i = 1; i < rows.length; i++) { // Skip header
+      const row = rows[i];
+      if (!row || !row[0] || !row[1]) continue;
+      
+      const invoiceNum = String(row[1]);
+      
+      // Skip AOU invoices - we only want other customers
+      if (invoiceNum.includes('AOU')) continue;
+      
+      // Parse date - could be Excel serial number or string
+      let invoiceDate;
+      if (typeof row[0] === 'number') {
+        // Excel serial date
+        const excelEpoch = new Date(1899, 11, 30);
+        invoiceDate = new Date(excelEpoch.getTime() + row[0] * 24 * 60 * 60 * 1000);
+      } else {
+        // String date like "12/24/25"
+        const [m, d, y] = String(row[0]).split('/');
+        invoiceDate = new Date(2000 + parseInt(y), parseInt(m) - 1, parseInt(d));
+      }
+      
+      // Check if in date range
+      if (invoiceDate >= startDate && invoiceDate <= endDate) {
+        archivesTotal += parseFloat(row[2]) || 0;  // Column D
+        ethiopiaTotal += parseFloat(row[3]) || 0;  // Column E
+        decafTotal += parseFloat(row[4]) || 0;     // Column F
+        
+        console.log(`📦 Found invoice ${invoiceNum} on ${invoiceDate.toLocaleDateString()}: Archives=${row[2] || 0}, Ethiopia=${row[3] || 0}, Decaf=${row[4] || 0}`);
+      }
+    }
+    
+    console.log(`📊 Other customer invoices in range: Archives=${archivesTotal}lb, Ethiopia=${ethiopiaTotal}lb, Decaf=${decafTotal}lb`);
+    
+    return {
+      archives: archivesTotal,
+      ethiopia: ethiopiaTotal,
+      decaf: decafTotal
+    };
+    
+  } catch (error) {
+    console.error('Error reading other customer invoices:', error);
+    return { archives: 0, ethiopia: 0, decaf: 0 };
+  }
 }
 
 // Calculate AOU weekly reconciliation
@@ -7269,12 +7326,41 @@ async function calculateAOUWeeklyReconciliation(weekDateRange) {
     }
   });
   
+  console.log(`📦 Total delivered in ${weekDateRange}:`, totalDelivered);
+  
+  // Get invoices to OTHER customers (CED, DEX, JUN) in this period
+  const otherInvoices = await getOtherCustomerInvoicesInRange(startDate, endDate);
+  
+  // Subtract other customer invoices from deliveries to get AOU's portion
+  const aouDeliveries = {};
+  
+  for (const [product, weight] of Object.entries(totalDelivered)) {
+    const prodLower = product.toLowerCase();
+    let subtractWeight = 0;
+    
+    if (prodLower.includes('archives')) {
+      subtractWeight = otherInvoices.archives;
+    } else if (prodLower.includes('ethiopia')) {
+      subtractWeight = otherInvoices.ethiopia;
+    } else if (prodLower.includes('decaf') || prodLower.includes('colombia')) {
+      subtractWeight = otherInvoices.decaf;
+    }
+    
+    const aouWeight = Math.max(0, weight - subtractWeight);
+    if (aouWeight > 0) {
+      aouDeliveries[product] = aouWeight;
+    }
+    
+    console.log(`  ${product}: ${weight}lb delivered - ${subtractWeight}lb to other customers = ${aouWeight}lb for AOU`);
+  }
+  
   return {
     weekRange: weekDateRange,
     startDate,
     endDate,
-    deliveries: totalDelivered,
-    totalDeliveredLbs: Object.values(totalDelivered).reduce((a, b) => a + b, 0)
+    deliveries: aouDeliveries,  // Now returns AOU's portion only
+    totalDeliveredLbs: Object.values(aouDeliveries).reduce((a, b) => a + b, 0),
+    otherCustomerInvoices: otherInvoices
   };
 }
 

@@ -6589,7 +6589,8 @@ app.get('/api/pricing/all-tiers', async (req, res) => {
     
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Wholesale Pricing!A:H'
+      range: 'Wholesale Pricing!A:H',
+      valueRenderOption: 'UNFORMATTED_VALUE'
     });
     
     const rows = response.data.values || [];

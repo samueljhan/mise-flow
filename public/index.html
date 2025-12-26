@@ -2702,15 +2702,21 @@
         async function loadPricingData() {
             try {
                 const response = await fetch('/api/pricing/all-tiers');
-                if (response.ok) {
-                    allPricingData = await response.json();
+                const data = await response.json();
+                
+                if (response.ok && data.success !== false) {
+                    allPricingData = data;
+                    console.log('Loaded pricing data:', allPricingData);
                     updatePricingPreview();
                 } else {
-                    document.getElementById('pricingPreviewTable').innerHTML = '<span style="color: #666;">Could not load pricing data</span>';
+                    console.error('Pricing API error:', data);
+                    allPricingData = { error: data.error || 'Failed to load pricing' };
+                    updatePricingPreview();
                 }
             } catch (error) {
                 console.error('Error loading pricing:', error);
-                document.getElementById('pricingPreviewTable').innerHTML = '<span style="color: #666;">Could not load pricing data</span>';
+                allPricingData = { error: error.message };
+                updatePricingPreview();
             }
         }
         
@@ -2724,8 +2730,14 @@
         function updatePricingPreview() {
             const previewDiv = document.getElementById('pricingPreviewTable');
             
-            if (!allPricingData.products || allPricingData.products.length === 0) {
-                previewDiv.innerHTML = '<span style="color: #666;">Loading...</span>';
+            if (!allPricingData || !allPricingData.products || allPricingData.products.length === 0) {
+                if (allPricingData && allPricingData.error) {
+                    previewDiv.innerHTML = `<span style="color: #ff6b6b;">Error: ${allPricingData.error}</span>`;
+                } else if (allPricingData && allPricingData.success === false) {
+                    previewDiv.innerHTML = '<span style="color: #666;">Could not load pricing data</span>';
+                } else {
+                    previewDiv.innerHTML = '<span style="color: #666;">Loading...</span>';
+                }
                 return;
             }
             

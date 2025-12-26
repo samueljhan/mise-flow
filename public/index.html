@@ -6456,6 +6456,7 @@ Archives of Us Coffee`;
             let html = `<div style="margin-bottom: 12px;">${config.message}</div>`;
             html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
             
+            html += '<button class="action-btn" onclick="goHome()">Home</button>';
             if (config.exclude !== 'todo') {
                 html += '<button class="action-btn" onclick="showToDo()">To Do</button>';
             }
@@ -6488,6 +6489,7 @@ Archives of Us Coffee`;
         function addFollowUpButtons() {
             // Just buttons, no message
             let html = '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
+            html += '<button class="action-btn" onclick="goHome()">Home</button>';
             html += '<button class="action-btn" onclick="showToDo()">To Do</button>';
             html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
             html += '<button class="action-btn" onclick="openManageInventory()">Manage Inventory</button>';
@@ -6504,6 +6506,7 @@ Archives of Us Coffee`;
         function addFollowUpMessage() {
             let html = '<div style="margin-bottom: 12px;">What else can I help with?</div>';
             html += '<div style="display: flex; flex-wrap: wrap; gap: 8px;">';
+            html += '<button class="action-btn" onclick="goHome()">Home</button>';
             html += '<button class="action-btn" onclick="showToDo()">To Do</button>';
             html += '<button class="action-btn" onclick="checkCurrentInventory()">Check Inventory</button>';
             html += '<button class="action-btn" onclick="openManageInventory()">Manage Inventory</button>';
@@ -6515,6 +6518,63 @@ Archives of Us Coffee`;
             html += '</div>';
             
             addMessage(html, false);
+        }
+        
+        function goHome() {
+            // Clear all messages and restore welcome screen
+            const chatContainer = document.getElementById('chatContainer');
+            chatContainer.innerHTML = `
+                <div class="welcome-message">
+                    <h2>Welcome AOU Coffee</h2>
+                    <p>What would you like to do right now?</p>
+                    
+                    <div class="example-prompts">
+                        <div class="example-prompt" onclick="showToDo()">
+                            <strong>📋 To Do</strong>
+                            <span>View pending tasks and alerts</span>
+                        </div>
+                        <div class="example-prompt" onclick="checkCurrentInventory()">
+                            <strong>📝 Check Current Inventory</strong>
+                            <span>View all coffee stock levels</span>
+                        </div>
+                        <div class="example-prompt" onclick="openManageInventory()">
+                            <strong>📦 Manage Inventory</strong>
+                            <span>Log counts & update stock</span>
+                        </div>
+                        <div class="example-prompt" onclick="startRoastOrder()">
+                            <strong>🔥 Order Roast</strong>
+                            <span>Draft a new roast order</span>
+                        </div>
+                        <div class="example-prompt" onclick="viewEnRoute()">
+                            <strong>🚚 En Route Coffee</strong>
+                            <span>View and manage shipments</span>
+                        </div>
+                        <div class="example-prompt" onclick="startInvoice()">
+                            <strong>🧾 Generate Invoice</strong>
+                            <span>Create a wholesale invoice</span>
+                        </div>
+                        <div class="example-prompt" onclick="manageAOUCafePlaceholder()">
+                            <strong>☕ AOU Cafe Activity</strong>
+                            <span>Retail sales and coffee usage</span>
+                        </div>
+                        <div class="example-prompt" onclick="openManageCustomers()">
+                            <strong>👥 Manage Customers</strong>
+                            <span>View and add customers</span>
+                        </div>
+                        <div class="example-prompt" onclick="showForecast()">
+                            <strong>📊 Forecast</strong>
+                            <span>Sales and inventory analytics</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Reset any pending states
+            pendingRoastOrder = [];
+            pendingRoastEmail = null;
+            waitingForRoastOrder = false;
+            window.waitingForOrderConfirmation = false;
+            userInput.placeholder = 'Describe what you want to do…';
         }
         
         // ============ Retail Sales Management ============

@@ -7075,7 +7075,8 @@ app.get('/api/inventory-log', async (req, res) => {
         rowIndex: i + 1,
         date: String(dateVal),
         roasted: {},
-        green: {}
+        green: {},
+        confirmation: row[10] || '' // Column K = index 10
       };
       
       roastedCoffees.forEach(coffee => {
@@ -7368,6 +7369,98 @@ app.post('/api/inventory-log/auto-green', async (req, res) => {
     
   } catch (error) {
     console.error('Error auto-populating green inventory:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add new entry to Inventory Log with roasted inventory and confirmation
+app.post('/api/inventory-log/add-entry', async (req, res) => {
+  if (!userTokens) {
+    return res.status(401).json({ error: 'Google not connected' });
+  }
+  
+  const { roastedInventory, confirmation } = req.body;
+  // roastedInventory: { 'Archives Blend': number, 'Ethiopia Gera': number, 'Colombia Decaf': number }
+  // confirmation: string (initials)
+  
+  if (!roastedInventory) {
+    return res.status(400).json({ error: 'Roasted inventory required' });
+  }
+  
+  try {
+    oauth2Client.setCredentials(userTokens);
+    const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Step 1: Get current green coffee inventory from Inventory sheet
+    await ensureFreshInventory();
+    
+    const greenInventory = {};
+    greenCoffeeInventory.forEach(coffee => {
+      greenInventory[coffee.name] = coffee.weight || 0;
+    });
+    
+    // Step 2: Update main Inventory sheet with new roasted values
+    for (const coffee of roastedCoffeeInventory) {
+      if (roastedInventory[coffee.name] !== undefined) {
+        coffee.weight = roastedInventory[coffee.name];
+      }
+    }
+    await syncInventoryToSheets();
+    
+    // Step 3: Get today's date
+    const today = new Date();
+    const dateStr = today.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+    
+    // Step 4: Read Inventory Log to get structure
+    const logResponse = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Inventory Log!A1:K50',
+      valueRenderOption: 'UNFORMATTED_VALUE'
+    });
+    
+    const logRows = logResponse.data.values || [];
+    const headers = logRows[2] || []; // Row 3 has headers
+    
+    // Inventory Log structure (from sheet):
+    // B=Date, C=Archives Blend, D=Ethiopia Gera, E=Colombia Decaf,
+    // F=Brazil Mogiano, G=Ethiopia Yirgacheffe, H=Ethiopia Gera(green), I=Colombia Excelso,
+    // J=Notes, K=Confirmation
+    
+    // Build the new row (columns B through K)
+    const newRow = [
+      dateStr,                                          // B: Date
+      roastedInventory['Archives Blend'] ?? '',         // C: Archives Blend
+      roastedInventory['Ethiopia Gera'] ?? '',          // D: Ethiopia Gera
+      roastedInventory['Colombia Decaf'] ?? '',         // E: Colombia Decaf
+      greenInventory['Brazil Mogiano'] ?? '',           // F: Brazil Mogiano
+      greenInventory['Ethiopia Yirgacheffe'] ?? '',     // G: Ethiopia Yirgacheffe
+      greenInventory['Ethiopia Gera'] ?? '',            // H: Ethiopia Gera (green)
+      greenInventory['Colombia Excelso'] ?? '',         // I: Colombia Excelso
+      '',                                               // J: Notes
+      confirmation || ''                                // K: Confirmation
+    ];
+    
+    // Append to Inventory Log
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Inventory Log!B:K',
+      valueInputOption: 'USER_ENTERED',
+      insertDataOption: 'INSERT_ROWS',
+      resource: { values: [newRow] }
+    });
+    
+    console.log(`Added inventory log entry for ${dateStr}, confirmed by ${confirmation}`);
+    
+    res.json({ 
+      success: true, 
+      date: dateStr,
+      roastedInventory,
+      greenInventory,
+      confirmation
+    });
+    
+  } catch (error) {
+    console.error('Error adding inventory log entry:', error);
     res.status(500).json({ error: error.message });
   }
 });

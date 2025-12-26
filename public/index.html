@@ -638,11 +638,11 @@
                     </div>
                     <div class="example-prompt" onclick="checkCurrentInventory()">
                         <strong>📝 Check Current Inventory</strong>
-                        <span>Enter counts & recalibrate</span>
+                        <span>View all coffee stock levels</span>
                     </div>
                     <div class="example-prompt" onclick="openManageInventory()">
                         <strong>📦 Manage Inventory</strong>
-                        <span>Inventory log & settings</span>
+                        <span>Log counts & update stock</span>
                     </div>
                     <div class="example-prompt" onclick="startRoastOrder()">
                         <strong>🔥 Order Roast</strong>
@@ -1271,168 +1271,76 @@
             if (welcomeMsg) welcomeMsg.remove();
 
             // Show user's request first
-            addMessage('Check current inventory', true);
-            addMessage('Loading inventory data...', false);
+            addMessage('View all coffee stock levels', true);
+            addMessage('Checking current coffee inventory...', false);
             
             try {
-                // Fetch current inventory to show expected values
+                // Fetch full inventory data
                 const invResponse = await fetch('/api/inventory');
                 const inv = await invResponse.json();
                 
+                // Handle error response
                 if (inv.error) {
                     throw new Error(inv.error);
                 }
                 
+                // Ensure arrays exist
+                const green = inv.green || [];
                 const roasted = inv.roasted || [];
+                const enRoute = inv.enRoute || [];
                 
-                // Get today's date
-                const today = new Date();
-                const dateStr = today.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+                greenCoffeeInventory = green;
+                roastedCoffeeInventory = roasted;
+                enRouteCoffeeInventory = enRoute;
                 
-                // Get the last message and update it
+                // Build the summary text - clean and simple
+                let summary = 'Current Coffee Inventory\n\n';
+                
+                summary += 'GREEN COFFEE\n';
+                if (green.length > 0) {
+                    green.forEach(coffee => {
+                        summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
+                    });
+                } else {
+                    summary += '   None\n';
+                }
+                
+                summary += '\nROASTED COFFEE\n';
+                if (roasted.length > 0) {
+                    roasted.forEach(coffee => {
+                        summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
+                    });
+                } else {
+                    summary += '   None\n';
+                }
+                
+                summary += '\nEN ROUTE\n';
+                if (enRoute.length > 0) {
+                    enRoute.forEach(coffee => {
+                        summary += `   ${coffee.name} — ${coffee.weight} lb\n`;
+                    });
+                } else {
+                    summary += '   None\n';
+                }
+                
+                // Get the last message and type into it
                 const messages = chatContainer.querySelectorAll('.message');
                 const lastMsg = messages[messages.length - 1];
-                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    content.style.whiteSpace = 'pre-wrap';
+                    content.style.fontFamily = 'monospace';
+                    await typeText(content, summary, 8);
+                }
                 
-                let html = `<strong>📝 Check Roasted Inventory</strong><br>`;
-                html += `<span style="color: #888; font-size: 12px;">${dateStr}</span><br><br>`;
-                
-                html += '<div style="background: #2a2a2a; padding: 12px; border-radius: 8px; margin-bottom: 12px;">';
-                html += '<div style="font-size: 11px; color: #888; margin-bottom: 8px;">Enter your actual inventory counts:</div>';
-                
-                // Show each roasted coffee with input
-                const roastedCoffees = ['Archives Blend', 'Ethiopia Gera', 'Colombia Decaf'];
-                roastedCoffees.forEach(coffeeName => {
-                    const coffee = roasted.find(c => c.name === coffeeName);
-                    const currentWeight = coffee?.weight || 0;
-                    const safeName = coffeeName.toLowerCase().replace(/\s+/g, '-');
-                    
-                    html += `<div style="display: flex; align-items: center; gap: 8px; margin: 8px 0;">`;
-                    html += `<label style="min-width: 120px; font-size: 13px;">${coffeeName}:</label>`;
-                    html += `<input type="number" step="0.1" min="0" id="recal-${safeName}" placeholder="${currentWeight}" 
-                             style="width: 80px; padding: 6px; background: #1a1a1a; border: 1px solid #404040; color: #fff; border-radius: 4px;">`;
-                    html += `<span style="color: #666; font-size: 11px;">lb</span>`;
-                    html += `<span style="color: #555; font-size: 10px;">(expected: ${currentWeight})</span>`;
-                    html += `</div>`;
-                });
-                
-                html += '</div>';
-                
-                html += '<div style="background: #1a2a1a; padding: 10px; border-radius: 6px; margin-bottom: 12px; border-left: 3px solid #4a6741;">';
-                html += '<div style="font-size: 11px; color: #90EE90;">💡 This will:</div>';
-                html += '<div style="font-size: 11px; color: #888; margin-top: 4px;">• Update the Inventory sheet</div>';
-                html += '<div style="font-size: 11px; color: #888;">• Log this count in Inventory Log</div>';
-                html += '<div style="font-size: 11px; color: #888;">• Add any discrepancy >1lb to AOU wholesale usage</div>';
-                html += '</div>';
-                
-                html += '<div class="response-buttons">';
-                html += '<button class="action-btn" onclick="submitInventoryRecalibration()" style="background: #4a6741;">Save & Recalibrate</button>';
-                html += '<button class="action-btn" onclick="addFollowUpMessage()">Cancel</button>';
-                html += '</div>';
-                
-                content.innerHTML = html;
+                // Add follow-up suggestions
+                setTimeout(() => {
+                    addConversationalFollowUp('inventory_checked');
+                }, 300);
                 
             } catch (error) {
                 console.error('Error:', error);
                 addMessage('Error loading inventory: ' + error.message, false);
-            }
-        }
-        
-        async function submitInventoryRecalibration() {
-            // Collect the entered values
-            const actualInventory = {};
-            const roastedCoffees = ['Archives Blend', 'Ethiopia Gera', 'Colombia Decaf'];
-            
-            let hasValues = false;
-            roastedCoffees.forEach(coffeeName => {
-                const safeName = coffeeName.toLowerCase().replace(/\s+/g, '-');
-                const input = document.getElementById(`recal-${safeName}`);
-                const value = parseFloat(input?.value);
-                
-                if (!isNaN(value)) {
-                    actualInventory[coffeeName] = value;
-                    hasValues = true;
-                } else if (input?.placeholder) {
-                    // Use expected value if nothing entered
-                    actualInventory[coffeeName] = parseFloat(input.placeholder) || 0;
-                }
-            });
-            
-            if (!hasValues) {
-                alert('Please enter at least one inventory value');
-                return;
-            }
-            
-            addMessage('Recalibrating inventory...', false);
-            
-            try {
-                const response = await fetch('/api/inventory/recalibrate', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ actualInventory })
-                });
-                
-                const data = await response.json();
-                
-                if (!data.success) {
-                    throw new Error(data.error);
-                }
-                
-                // Show results
-                const messages = chatContainer.querySelectorAll('.message');
-                const lastMsg = messages[messages.length - 1];
-                const content = lastMsg?.querySelector('.message-content') || lastMsg;
-                
-                let html = '<strong>✅ Inventory Recalibrated</strong><br><br>';
-                
-                // Show discrepancies
-                const discrepancies = data.discrepancies || {};
-                let hasDiscrepancy = false;
-                
-                for (const [coffee, info] of Object.entries(discrepancies)) {
-                    if (Math.abs(info.difference) > 0.5) {
-                        hasDiscrepancy = true;
-                        const direction = info.difference > 0 ? 'less' : 'more';
-                        const color = info.difference > 0 ? '#f0ad4e' : '#90EE90';
-                        html += `<div style="margin-bottom: 4px;">`;
-                        html += `<span style="color: ${color};">${coffee}</span>: `;
-                        html += `Expected ${info.expected}lb → Found ${info.actual}lb `;
-                        html += `<span style="color: #888;">(${Math.abs(info.difference).toFixed(1)}lb ${direction})</span>`;
-                        html += `</div>`;
-                    }
-                }
-                
-                if (!hasDiscrepancy) {
-                    html += '<div style="color: #90EE90; margin-bottom: 8px;">✓ No significant discrepancies found</div>';
-                }
-                
-                // Show AOU adjustments
-                const adjustments = data.adjustments || {};
-                if (data.aouUpdated && Object.keys(adjustments).length > 0) {
-                    html += '<div style="background: #2a3a2a; padding: 10px; border-radius: 6px; margin-top: 12px; border-left: 3px solid #4a6741;">';
-                    html += `<div style="font-size: 12px; color: #90EE90; margin-bottom: 6px;">📋 Added to AOU Wholesale Usage (${data.aouWeekRange}):</div>`;
-                    
-                    for (const [coffee, amount] of Object.entries(adjustments)) {
-                        html += `<div style="font-size: 11px; color: #ccc;">• ${coffee}: +${amount}lb</div>`;
-                    }
-                    
-                    html += '<div style="font-size: 10px; color: #888; margin-top: 6px;">This will be included in the next AOU invoice.</div>';
-                    html += '</div>';
-                }
-                
-                html += '<div style="margin-top: 12px; font-size: 11px; color: #888;">';
-                html += `Logged to Inventory Log for ${data.date}`;
-                html += '</div>';
-                
-                html += '<div class="response-buttons" style="margin-top: 12px;">';
-                html += '<button class="action-btn" onclick="addFollowUpMessage()">Done</button>';
-                html += '</div>';
-                
-                content.innerHTML = html;
-                
-            } catch (error) {
-                console.error('Error:', error);
-                addMessage('Error: ' + error.message, false);
             }
         }
 
@@ -2967,8 +2875,148 @@
         // ============ Manage Inventory Modal ============
 
         function openManageInventory() {
-            // Main entry point - shows Inventory Log
-            showInventoryLog();
+            // Clear welcome message
+            const welcomeMsg = chatContainer.querySelector('.welcome-message');
+            if (welcomeMsg) welcomeMsg.remove();
+            
+            // Show entry form for current roasted inventory
+            showRoastedInventoryEntry();
+        }
+        
+        async function showRoastedInventoryEntry() {
+            addMessage('Manage Inventory', true);
+            addMessage('Loading...', false);
+            
+            try {
+                const response = await fetch('/api/inventory');
+                const inv = await response.json();
+                
+                if (inv.error) throw new Error(inv.error);
+                
+                const roasted = inv.roasted || [];
+                
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                
+                let html = '<strong>📦 Enter Current Roasted Inventory</strong><br><br>';
+                
+                html += '<div style="background: #2a2a2a; padding: 12px; border-radius: 8px; margin-bottom: 12px;">';
+                
+                const roastedCoffees = ['Archives Blend', 'Ethiopia Gera', 'Colombia Decaf'];
+                roastedCoffees.forEach(coffeeName => {
+                    const safeName = coffeeName.toLowerCase().replace(/\s+/g, '-');
+                    html += `<div style="display: flex; align-items: center; gap: 8px; margin: 8px 0;">`;
+                    html += `<label style="min-width: 120px; font-size: 13px;">${coffeeName}:</label>`;
+                    html += `<input type="number" step="0.1" min="0" id="manage-inv-${safeName}" 
+                             style="width: 80px; padding: 6px; background: #1a1a1a; border: 1px solid #404040; color: #fff; border-radius: 4px;">`;
+                    html += `<span style="color: #666; font-size: 11px;">lb</span>`;
+                    html += `</div>`;
+                });
+                
+                html += '</div>';
+                
+                html += '<div class="response-buttons" style="margin-top: 12px;">';
+                html += '<button class="action-btn" onclick="saveRoastedInventoryEntry()" style="background: #4a6741;">Save</button>';
+                html += '<button class="action-btn" onclick="openManageInventoryModal()">Update All Inventory</button>';
+                html += '<button class="action-btn" onclick="showInventoryLog()">Inventory Log</button>';
+                html += '<button class="action-btn" onclick="addFollowUpMessage()">Done</button>';
+                html += '</div>';
+                
+                content.innerHTML = html;
+                
+            } catch (error) {
+                addMessage('Error: ' + error.message, false);
+            }
+        }
+        
+        async function saveRoastedInventoryEntry() {
+            const roastedInventory = {};
+            const roastedCoffees = ['Archives Blend', 'Ethiopia Gera', 'Colombia Decaf'];
+            
+            let hasValues = false;
+            roastedCoffees.forEach(coffeeName => {
+                const safeName = coffeeName.toLowerCase().replace(/\s+/g, '-');
+                const input = document.getElementById(`manage-inv-${safeName}`);
+                const value = parseFloat(input?.value);
+                
+                if (!isNaN(value)) {
+                    roastedInventory[coffeeName] = value;
+                    hasValues = true;
+                }
+            });
+            
+            if (!hasValues) {
+                alert('Please enter at least one inventory value');
+                return;
+            }
+            
+            // Show confirmation prompt for initials
+            let html = '<strong>Confirm Inventory Entry</strong><br><br>';
+            html += '<div style="background: #2a2a2a; padding: 12px; border-radius: 8px; margin-bottom: 12px;">';
+            
+            for (const [coffee, weight] of Object.entries(roastedInventory)) {
+                html += `<div style="margin: 4px 0; color: #ccc;">${coffee}: ${weight}lb</div>`;
+            }
+            
+            html += '</div>';
+            
+            html += '<div style="margin-bottom: 12px;">';
+            html += '<label style="color: #888; font-size: 12px;">Enter your initials to confirm:</label><br>';
+            html += '<input type="text" id="inventory-initials" maxlength="5" placeholder="RP" style="width: 60px; padding: 6px; background: #1a1a1a; border: 1px solid #404040; color: #fff; border-radius: 4px; margin-top: 4px; text-transform: uppercase;">';
+            html += '</div>';
+            
+            // Store the inventory data for the confirm step
+            window.pendingInventoryEntry = roastedInventory;
+            
+            html += '<div class="response-buttons">';
+            html += '<button class="action-btn" onclick="confirmRoastedInventoryEntry()" style="background: #4a6741;">Confirm & Save</button>';
+            html += '<button class="action-btn" onclick="showRoastedInventoryEntry()">Go Back</button>';
+            html += '</div>';
+            
+            addMessage(html, false);
+        }
+        
+        async function confirmRoastedInventoryEntry() {
+            const initials = document.getElementById('inventory-initials')?.value?.trim().toUpperCase();
+            
+            if (!initials) {
+                alert('Please enter your initials');
+                return;
+            }
+            
+            const roastedInventory = window.pendingInventoryEntry;
+            if (!roastedInventory) {
+                alert('No inventory data found');
+                return;
+            }
+            
+            addMessage('Saving inventory...', false);
+            
+            try {
+                const response = await fetch('/api/inventory-log/add-entry', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ roastedInventory, confirmation: initials })
+                });
+                
+                const data = await response.json();
+                
+                if (!data.success) {
+                    throw new Error(data.error);
+                }
+                
+                window.pendingInventoryEntry = null;
+                
+                addMessage(`✅ Inventory logged for ${data.date} (confirmed by ${initials})`, false);
+                
+                setTimeout(() => {
+                    addConversationalFollowUp('inventory_updated');
+                }, 500);
+                
+            } catch (error) {
+                addMessage('Error: ' + error.message, false);
+            }
         }
 
         function openManageInventoryModal() {
@@ -6955,9 +7003,10 @@ Archives of Us Coffee`;
                     
                     entries.forEach(entry => {
                         const hasRoasted = Object.values(entry.roasted).some(v => v !== null);
+                        const hasConfirmation = entry.confirmation && entry.confirmation.trim() !== '';
                         
                         html += `<div style="background: #1a1a1a; padding: 10px; border-radius: 6px; margin-bottom: 8px; border-left: 3px solid ${hasRoasted ? '#4a6741' : '#6a4a41'};">`;
-                        html += `<div style="display: flex; justify-content: space-between; align-items: center;">`;
+                        html += `<div style="display: flex; justify-content: space-between; align-items: center; gap: 8px;">`;
                         html += `<strong>${entry.date}</strong>`;
                         
                         // Show roasted values inline or "Not entered"
@@ -6967,9 +7016,14 @@ Archives of Us Coffee`;
                                 const val = entry.roasted[c];
                                 if (val !== null) roastedParts.push(`${c.split(' ')[0]} ${val}lb`);
                             });
-                            html += `<span style="font-size: 11px; color: #888;">${roastedParts.join(', ')}</span>`;
+                            html += `<span style="font-size: 11px; color: #888; flex: 1;">${roastedParts.join(', ')}</span>`;
                         } else {
-                            html += `<span style="font-size: 11px; color: #6a4a41;">Not entered</span>`;
+                            html += `<span style="font-size: 11px; color: #6a4a41; flex: 1;">Not entered</span>`;
+                        }
+                        
+                        // Show confirmation initials
+                        if (hasConfirmation) {
+                            html += `<span style="font-size: 10px; color: #90EE90; background: #2a3a2a; padding: 2px 6px; border-radius: 4px;">${entry.confirmation}</span>`;
                         }
                         
                         html += `<button class="action-btn" style="padding: 2px 8px; font-size: 10px;" onclick="editInventoryEntry('${entry.date}', ${entry.rowIndex})">Edit</button>`;
@@ -6991,7 +7045,7 @@ Archives of Us Coffee`;
                 html += '<div class="response-buttons" style="margin-top: 12px;">';
                 html += '<button class="action-btn" onclick="viewAllInventory()">View All Inventory</button>';
                 html += '<button class="action-btn" onclick="openManageInventoryModal()">Edit Coffee Types</button>';
-                html += '<button class="action-btn" onclick="addFollowUpMessage()">Done</button>';
+                html += '<button class="action-btn" onclick="showRoastedInventoryEntry()">Go Back</button>';
                 html += '</div>';
                 
                 content.innerHTML = html;

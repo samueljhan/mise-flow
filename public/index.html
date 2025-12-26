@@ -6644,27 +6644,34 @@ Archives of Us Coffee`;
             html += '<div style="background: #1a1a2a; padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 3px solid #5b7aa4;">';
             html += '<div style="font-weight: 600; margin-bottom: 10px;">📦 Coffee Drop-offs</div>';
             
-            // Get recent drop-offs (weeks with coffee usage data)
-            const recentDropoffs = retailWeeks
-                .filter(w => w.archivesUsage > 0 || w.ethiopiaUsage > 0 || w.decafUsage > 0)
-                .slice(-3)
-                .reverse();
+            // Get all drop-offs (weeks with coffee usage data) - use coffeeUsage object
+            const allDropoffs = retailWeeks
+                .filter(w => {
+                    const usage = w.coffeeUsage || {};
+                    return (usage.archives > 0 || usage.ethiopia > 0 || usage.decaf > 0);
+                });
+            
+            // Get recent 3 (including current week if it has data)
+            const recentDropoffs = allDropoffs.slice(-3).reverse();
             
             if (recentDropoffs.length > 0) {
                 html += '<div style="color: #888; font-size: 11px; margin-bottom: 8px;">Recent Drop-offs:</div>';
                 recentDropoffs.forEach(week => {
+                    const usage = week.coffeeUsage || {};
                     const parts = [];
-                    if (week.archivesUsage > 0) parts.push(`Archives ${week.archivesUsage}lb`);
-                    if (week.ethiopiaUsage > 0) parts.push(`Ethiopia ${week.ethiopiaUsage}lb`);
-                    if (week.decafUsage > 0) parts.push(`Decaf ${week.decafUsage}lb`);
+                    if (usage.archives > 0) parts.push(`Archives ${usage.archives}lb`);
+                    if (usage.ethiopia > 0) parts.push(`Ethiopia ${usage.ethiopia}lb`);
+                    if (usage.decaf > 0) parts.push(`Decaf ${usage.decaf}lb`);
+                    
+                    const currentBadge = week.isCurrentWeek ? ' <span style="color: #5b7aa4; font-size: 10px;">(current week)</span>' : '';
                     
                     html += `<div style="background: #252535; padding: 8px; border-radius: 6px; margin-bottom: 6px;">`;
-                    html += `<div style="font-size: 12px; color: #ccc;">${week.dateRange}</div>`;
+                    html += `<div style="font-size: 12px; color: #ccc;">${week.dateRange}${currentBadge}</div>`;
                     html += `<div style="font-size: 11px; color: #888;">${parts.join(', ')}</div>`;
                     html += `</div>`;
                 });
             } else {
-                html += '<div style="color: #666; font-size: 12px; margin-bottom: 8px;">No recent drop-offs recorded</div>';
+                html += '<div style="color: #666; font-size: 12px; margin-bottom: 8px;">No drop-offs recorded</div>';
             }
             
             html += `<div style="margin-top: 10px;">`;
@@ -7167,10 +7174,18 @@ Archives of Us Coffee`;
                 const data = await response.json();
                 
                 if (data.success) {
-                    let summary = `✅ Coffee usage saved for ${weekRange}:\n`;
+                    let summary = `✅ Coffee drop-off saved for ${weekRange}:\n`;
                     if (usage.archives) summary += `• Archives Blend: ${usage.archives} lb\n`;
                     if (usage.ethiopia) summary += `• Ethiopia Gera: ${usage.ethiopia} lb\n`;
                     if (usage.decaf) summary += `• Colombia Decaf: ${usage.decaf} lb\n`;
+                    
+                    // Show inventory deductions if any
+                    if (data.deductions && data.deductions.length > 0) {
+                        summary += '\n<span style="color: #888; font-size: 11px;">Inventory updated:</span>\n';
+                        data.deductions.forEach(d => {
+                            summary += `<span style="color: #f0ad4e; font-size: 11px;">• ${d.name}: -${d.deducted}lb (${d.remaining}lb remaining)</span>\n`;
+                        });
+                    }
                     
                     addMessage(summary, false);
                     setTimeout(() => manageAOUCafe(), 1500);

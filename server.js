@@ -7772,8 +7772,14 @@ app.post('/api/aou/track-usage', async (req, res) => {
   }
   
   try {
+    // Ensure we have fresh inventory before deducting
+    await ensureFreshInventory();
+    
     oauth2Client.setCredentials(userTokens);
     const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+    
+    // Ensure weeks are up to date (adds current week if missing)
+    await ensureRetailWeeksUpToDate(sheets);
     
     // Read AOU Cafe Activity sheet to find the row
     const response = await sheets.spreadsheets.values.get({
@@ -7784,21 +7790,27 @@ app.post('/api/aou/track-usage', async (req, res) => {
     
     const rows = response.data.values || [];
     
+    // Normalize week range for comparison (remove spaces)
+    const normalizeRange = (str) => String(str || '').replace(/\s/g, '').toLowerCase();
+    const targetWeekNormalized = normalizeRange(weekRange);
+    
     // Find the row with matching week range
     let targetRow = -1;
     for (let i = 9; i < rows.length; i++) { // Data starts around row 10
       const row = rows[i];
       if (!row) continue;
       
-      const dateCell = String(row[1] || ''); // Column B
-      if (dateCell === weekRange || dateCell.replace(/\s/g, '') === weekRange.replace(/\s/g, '')) {
+      const dateCell = normalizeRange(row[1]); // Column B
+      if (dateCell === targetWeekNormalized) {
         targetRow = i + 1;
         break;
       }
     }
     
     if (targetRow === -1) {
-      return res.status(400).json({ error: 'Week not found in AOU Cafe Activity sheet' });
+      console.log(`Week not found. Looking for: "${weekRange}" (normalized: "${targetWeekNormalized}")`);
+      console.log(`Available weeks:`, rows.slice(9).map(r => r?.[1]).filter(Boolean));
+      return res.status(400).json({ error: `Week not found in AOU Cafe Activity sheet: ${weekRange}` });
     }
     
     // Update wholesale usage columns (J, K, L)
@@ -7824,9 +7836,44 @@ app.post('/api/aou/track-usage', async (req, res) => {
       });
     }
     
-    console.log(`✅ Tracked AOU coffee usage for ${weekRange}: Archives=${usage.archives || 0}lb, Ethiopia=${usage.ethiopia || 0}lb, Decaf=${usage.decaf || 0}lb`);
+    // Deduct from roasted inventory
+    const deductions = [];
     
-    res.json({ success: true, message: 'Coffee usage tracked' });
+    if (usage.archives && usage.archives > 0) {
+      const archivesCoffee = roastedCoffeeInventory.find(c => c.name === 'Archives Blend');
+      if (archivesCoffee) {
+        archivesCoffee.weight -= usage.archives;
+        deductions.push({ name: 'Archives Blend', deducted: usage.archives, remaining: archivesCoffee.weight });
+      }
+    }
+    
+    if (usage.ethiopia && usage.ethiopia > 0) {
+      const ethiopiaCoffee = roastedCoffeeInventory.find(c => c.name === 'Ethiopia Gera');
+      if (ethiopiaCoffee) {
+        ethiopiaCoffee.weight -= usage.ethiopia;
+        deductions.push({ name: 'Ethiopia Gera', deducted: usage.ethiopia, remaining: ethiopiaCoffee.weight });
+      }
+    }
+    
+    if (usage.decaf && usage.decaf > 0) {
+      const decafCoffee = roastedCoffeeInventory.find(c => c.name === 'Colombia Decaf');
+      if (decafCoffee) {
+        decafCoffee.weight -= usage.decaf;
+        deductions.push({ name: 'Colombia Decaf', deducted: usage.decaf, remaining: decafCoffee.weight });
+      }
+    }
+    
+    // Sync inventory to sheets if we made deductions
+    if (deductions.length > 0) {
+      await syncInventoryToSheets();
+    }
+    
+    console.log(`✅ Tracked AOU coffee drop-off for ${weekRange}: Archives=${usage.archives || 0}lb, Ethiopia=${usage.ethiopia || 0}lb, Decaf=${usage.decaf || 0}lb`);
+    if (deductions.length > 0) {
+      console.log(`   Deducted from inventory: ${deductions.map(d => `${d.name}: -${d.deducted}lb`).join(', ')}`);
+    }
+    
+    res.json({ success: true, message: 'Coffee drop-off tracked', deductions });
     
   } catch (error) {
     console.error('Error tracking coffee usage:', error);

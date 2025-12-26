@@ -7813,17 +7813,28 @@ app.post('/api/aou/track-usage', async (req, res) => {
       return res.status(400).json({ error: `Week not found in AOU Cafe Activity sheet: ${weekRange}` });
     }
     
-    // Update wholesale usage columns (J, K, L)
+    // Get existing values from the target row (columns J, K, L = indices 9, 10, 11)
+    const targetRowData = rows[targetRow - 1] || [];
+    const existingArchives = parseFloat(targetRowData[9]) || 0;
+    const existingEthiopia = parseFloat(targetRowData[10]) || 0;
+    const existingDecaf = parseFloat(targetRowData[11]) || 0;
+    
+    // Calculate new totals (ADD to existing, don't replace)
+    const newArchives = existingArchives + (usage.archives || 0);
+    const newEthiopia = existingEthiopia + (usage.ethiopia || 0);
+    const newDecaf = existingDecaf + (usage.decaf || 0);
+    
+    // Update wholesale usage columns (J, K, L) with accumulated totals
     const updates = [];
     
-    if (usage.archives !== undefined && usage.archives !== null) {
-      updates.push({ range: `AOU Cafe Activity!J${targetRow}`, values: [[usage.archives]] });
+    if (usage.archives !== undefined && usage.archives !== null && usage.archives > 0) {
+      updates.push({ range: `AOU Cafe Activity!J${targetRow}`, values: [[newArchives]] });
     }
-    if (usage.ethiopia !== undefined && usage.ethiopia !== null) {
-      updates.push({ range: `AOU Cafe Activity!K${targetRow}`, values: [[usage.ethiopia]] });
+    if (usage.ethiopia !== undefined && usage.ethiopia !== null && usage.ethiopia > 0) {
+      updates.push({ range: `AOU Cafe Activity!K${targetRow}`, values: [[newEthiopia]] });
     }
-    if (usage.decaf !== undefined && usage.decaf !== null) {
-      updates.push({ range: `AOU Cafe Activity!L${targetRow}`, values: [[usage.decaf]] });
+    if (usage.decaf !== undefined && usage.decaf !== null && usage.decaf > 0) {
+      updates.push({ range: `AOU Cafe Activity!L${targetRow}`, values: [[newDecaf]] });
     }
     
     if (updates.length > 0) {
@@ -7868,12 +7879,22 @@ app.post('/api/aou/track-usage', async (req, res) => {
       await syncInventoryToSheets();
     }
     
-    console.log(`✅ Tracked AOU coffee drop-off for ${weekRange}: Archives=${usage.archives || 0}lb, Ethiopia=${usage.ethiopia || 0}lb, Decaf=${usage.decaf || 0}lb`);
+    console.log(`✅ Tracked AOU coffee drop-off for ${weekRange}: +Archives=${usage.archives || 0}lb, +Ethiopia=${usage.ethiopia || 0}lb, +Decaf=${usage.decaf || 0}lb`);
+    console.log(`   Week totals: Archives=${newArchives}lb, Ethiopia=${newEthiopia}lb, Decaf=${newDecaf}lb`);
     if (deductions.length > 0) {
       console.log(`   Deducted from inventory: ${deductions.map(d => `${d.name}: -${d.deducted}lb`).join(', ')}`);
     }
     
-    res.json({ success: true, message: 'Coffee drop-off tracked', deductions });
+    res.json({ 
+      success: true, 
+      message: 'Coffee drop-off tracked', 
+      deductions,
+      weekTotals: {
+        archives: newArchives,
+        ethiopia: newEthiopia,
+        decaf: newDecaf
+      }
+    });
     
   } catch (error) {
     console.error('Error tracking coffee usage:', error);

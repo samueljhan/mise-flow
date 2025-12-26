@@ -7175,9 +7175,21 @@ Archives of Us Coffee`;
                 
                 if (data.success) {
                     let summary = `✅ Coffee drop-off saved for ${weekRange}:\n`;
-                    if (usage.archives) summary += `• Archives Blend: ${usage.archives} lb\n`;
-                    if (usage.ethiopia) summary += `• Ethiopia Gera: ${usage.ethiopia} lb\n`;
-                    if (usage.decaf) summary += `• Colombia Decaf: ${usage.decaf} lb\n`;
+                    if (usage.archives) summary += `• Archives Blend: +${usage.archives} lb\n`;
+                    if (usage.ethiopia) summary += `• Ethiopia Gera: +${usage.ethiopia} lb\n`;
+                    if (usage.decaf) summary += `• Colombia Decaf: +${usage.decaf} lb\n`;
+                    
+                    // Show week totals
+                    if (data.weekTotals) {
+                        const totals = data.weekTotals;
+                        const totalParts = [];
+                        if (totals.archives > 0) totalParts.push(`Archives ${totals.archives}lb`);
+                        if (totals.ethiopia > 0) totalParts.push(`Ethiopia ${totals.ethiopia}lb`);
+                        if (totals.decaf > 0) totalParts.push(`Decaf ${totals.decaf}lb`);
+                        if (totalParts.length > 0) {
+                            summary += `\n<span style="color: #5b7aa4; font-size: 11px;">Week total: ${totalParts.join(', ')}</span>\n`;
+                        }
+                    }
                     
                     // Show inventory deductions if any
                     if (data.deductions && data.deductions.length > 0) {

@@ -7057,8 +7057,11 @@ Archives of Us Coffee`;
         // ============ Track Coffee Drop-offs ============
         
         let roastedCoffeeTypes = ['Archives Blend', 'Ethiopia Gera', 'Colombia Decaf'];
+        let dropoffFormId = 0; // Unique ID for each form instance
         
         async function showTrackCoffeeUsage() {
+            dropoffFormId = Date.now(); // Generate unique ID for this form instance
+            
             addMessage('Add Coffee Drop-off', true);
             addMessage('Loading...', false);
             
@@ -7079,10 +7082,10 @@ Archives of Us Coffee`;
                 html += '<span style="color: #888; font-size: 12px;">Log coffee dropped off at AOU Cafe</span><br><br>';
                 
                 // Show form to enter drop-off
-                html += '<div style="background: #2a2a2a; padding: 12px; border-radius: 8px; margin-bottom: 12px;">';
+                html += `<div id="dropoff-form-${dropoffFormId}" style="background: #2a2a2a; padding: 12px; border-radius: 8px; margin-bottom: 12px;">`;
                 html += '<div style="margin-bottom: 12px;">';
                 html += '<label style="color: #888; font-size: 12px;">Drop-off Date:</label><br>';
-                html += `<input type="date" id="usageDate" value="${new Date().toISOString().split('T')[0]}" 
+                html += `<input type="date" id="usageDate-${dropoffFormId}" value="${new Date().toISOString().split('T')[0]}" 
                          style="padding: 6px; background: #1a1a1a; border: 1px solid #404040; color: #fff; border-radius: 4px; width: 150px;">`;
                 html += '</div>';
                 
@@ -7092,7 +7095,7 @@ Archives of Us Coffee`;
                     const safeName = coffee.toLowerCase().replace(/\s+/g, '-');
                     html += `<div style="display: flex; align-items: center; gap: 8px; margin: 6px 0;">`;
                     html += `<label style="min-width: 120px; font-size: 13px;">${coffee}:</label>`;
-                    html += `<input type="number" step="0.1" min="0" id="usage-${safeName}" placeholder="0" 
+                    html += `<input type="number" step="0.1" min="0" id="usage-${safeName}-${dropoffFormId}" placeholder="0" 
                              style="width: 80px; padding: 6px; background: #1a1a1a; border: 1px solid #404040; color: #fff; border-radius: 4px;">`;
                     html += `<span style="color: #666; font-size: 11px;">lb</span>`;
                     html += `</div>`;
@@ -7119,7 +7122,7 @@ Archives of Us Coffee`;
         }
         
         async function submitCoffeeUsage() {
-            const dateInput = document.getElementById('usageDate');
+            const dateInput = document.getElementById(`usageDate-${dropoffFormId}`);
             const dropoffDate = dateInput?.value;
             
             if (!dropoffDate) {
@@ -7127,14 +7130,15 @@ Archives of Us Coffee`;
                 return;
             }
             
-            // Collect usage values
+            // Collect usage values from current form instance
             const usage = {};
             let hasAnyUsage = false;
             
             roastedCoffeeTypes.forEach(coffee => {
                 const safeName = coffee.toLowerCase().replace(/\s+/g, '-');
-                const input = document.getElementById(`usage-${safeName}`);
+                const input = document.getElementById(`usage-${safeName}-${dropoffFormId}`);
                 const value = parseFloat(input?.value) || 0;
+                console.log(`Reading ${coffee}: input=${input?.id}, value=${input?.value}, parsed=${value}`);
                 if (value > 0) {
                     hasAnyUsage = true;
                     // Map to standard keys
@@ -7144,11 +7148,88 @@ Archives of Us Coffee`;
                 }
             });
             
+            console.log('Final usage object:', usage);
+            
             if (!hasAnyUsage) {
                 alert('Please enter at least one coffee weight');
                 return;
             }
             
+            // Check inventory before proceeding
+            addMessage('Checking inventory...', false);
+            
+            try {
+                const invResponse = await fetch('/api/inventory');
+                const invData = await invResponse.json();
+                
+                if (invData.error) {
+                    throw new Error(invData.error);
+                }
+                
+                const roasted = invData.roasted || [];
+                const shortages = [];
+                
+                // Check each coffee type
+                if (usage.archives > 0) {
+                    const archivesCoffee = roasted.find(c => c.name === 'Archives Blend');
+                    const available = archivesCoffee?.weight || 0;
+                    if (usage.archives > available) {
+                        shortages.push({ name: 'Archives Blend', requested: usage.archives, available });
+                    }
+                }
+                if (usage.ethiopia > 0) {
+                    const ethiopiaCoffee = roasted.find(c => c.name === 'Ethiopia Gera');
+                    const available = ethiopiaCoffee?.weight || 0;
+                    if (usage.ethiopia > available) {
+                        shortages.push({ name: 'Ethiopia Gera', requested: usage.ethiopia, available });
+                    }
+                }
+                if (usage.decaf > 0) {
+                    const decafCoffee = roasted.find(c => c.name === 'Colombia Decaf');
+                    const available = decafCoffee?.weight || 0;
+                    if (usage.decaf > available) {
+                        shortages.push({ name: 'Colombia Decaf', requested: usage.decaf, available });
+                    }
+                }
+                
+                // If shortages, show error and options
+                if (shortages.length > 0) {
+                    const messages = chatContainer.querySelectorAll('.message');
+                    const lastMsg = messages[messages.length - 1];
+                    const content = lastMsg?.querySelector('.message-content') || lastMsg;
+                    
+                    let html = '<div style="background: #3a2020; padding: 12px; border-radius: 8px; border-left: 3px solid #ff6b6b;">';
+                    html += '<div style="color: #ff6b6b; font-weight: 600; margin-bottom: 8px;">⚠️ Not Enough Inventory</div>';
+                    html += '<div style="color: #ccc; font-size: 12px; margin-bottom: 8px;">Cannot complete drop-off:</div>';
+                    
+                    shortages.forEach(s => {
+                        const shortage = s.requested - s.available;
+                        html += `<div style="color: #f0ad4e; font-size: 12px; margin: 4px 0;">`;
+                        html += `• ${s.name}: need ${s.requested}lb but only ${s.available}lb available (short ${shortage}lb)`;
+                        html += `</div>`;
+                    });
+                    
+                    html += '</div>';
+                    
+                    html += '<div class="response-buttons" style="margin-top: 12px;">';
+                    html += '<button class="action-btn" onclick="showTrackCoffeeUsage()">Edit Drop-off</button>';
+                    html += '<button class="action-btn" onclick="manageAOUCafe()">Go Back</button>';
+                    html += '</div>';
+                    
+                    content.innerHTML = html;
+                    return;
+                }
+                
+                // Inventory is sufficient, proceed with drop-off
+                await proceedWithDropoff(dropoffDate, usage);
+                
+            } catch (error) {
+                console.error('Error checking inventory:', error);
+                addMessage(`Error: ${error.message}`, false);
+            }
+        }
+        
+        async function proceedWithDropoff(dropoffDate, usage) {
             // Find the week that contains the dropoff date
             const dropDate = new Date(dropoffDate);
             // Weeks run Friday-Thursday
@@ -7162,7 +7243,11 @@ Archives of Us Coffee`;
             const formatShortDate = (d) => `${(d.getMonth() + 1).toString().padStart(2, '0')}/${d.getDate().toString().padStart(2, '0')}/${d.getFullYear().toString().slice(-2)}`;
             const weekRange = `${formatShortDate(weekStart)}-${formatShortDate(weekEnd)}`;
             
-            addMessage(`Saving coffee usage for ${weekRange}...`, false);
+            // Update the last message to show saving
+            const messages = chatContainer.querySelectorAll('.message');
+            const lastMsg = messages[messages.length - 1];
+            const content = lastMsg?.querySelector('.message-content') || lastMsg;
+            content.innerHTML = `Saving coffee drop-off for ${weekRange}...`;
             
             try {
                 const response = await fetch('/api/aou/track-usage', {
@@ -7202,11 +7287,11 @@ Archives of Us Coffee`;
                     addMessage(summary, false);
                     setTimeout(() => manageAOUCafe(), 1500);
                 } else {
-                    throw new Error(data.error || 'Failed to save usage');
+                    throw new Error(data.error || 'Failed to save drop-off');
                 }
                 
             } catch (error) {
-                console.error('Error saving usage:', error);
+                console.error('Error saving drop-off:', error);
                 addMessage(`Error: ${error.message}`, false);
             }
         }

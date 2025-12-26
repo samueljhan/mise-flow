@@ -1551,6 +1551,80 @@ async function syncInventoryToSheets() {
       hour12: true
     }) + ' PST';
 
+    // Read en route items from Roast Log (source of truth)
+    let enRouteFromRoastLog = [];
+    try {
+      const roastLogResponse = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Roast Log!A:H',
+        valueRenderOption: 'UNFORMATTED_VALUE'
+      });
+      
+      const roastLogRows = roastLogResponse.data.values || [];
+      // Structure: B=Date Ordered(1), C=Tracking#(2), D=Archives(3), E=Ethiopia(4), F=Decaf(5), G=Arrival Date(6), H=Confirmation(7)
+      
+      const formatExcelDate = (dateVal) => {
+        if (!dateVal) return '';
+        if (typeof dateVal === 'number') {
+          const excelEpoch = new Date(1899, 11, 30);
+          const date = new Date(excelEpoch.getTime() + dateVal * 24 * 60 * 60 * 1000);
+          const m = (date.getMonth() + 1).toString().padStart(2, '0');
+          const d = date.getDate().toString().padStart(2, '0');
+          const y = date.getFullYear().toString().slice(-2);
+          return `${m}/${d}/${y}`;
+        }
+        return String(dateVal);
+      };
+      
+      for (let i = 2; i < roastLogRows.length; i++) {
+        const row = roastLogRows[i];
+        if (!row || !row[1]) continue; // Skip if no date ordered
+        
+        const arrivalDate = row[6];
+        const confirmation = row[7];
+        
+        // Only include items NOT yet delivered AND confirmed
+        if (arrivalDate && confirmation) continue;
+        
+        const archivesWeight = parseFloat(row[3]) || 0;
+        const ethiopiaWeight = parseFloat(row[4]) || 0;
+        const decafWeight = parseFloat(row[5]) || 0;
+        
+        const trackingNumber = row[2] || '';
+        const dateOrdered = formatExcelDate(row[1]);
+        
+        if (archivesWeight > 0) {
+          enRouteFromRoastLog.push({
+            id: `roast-log-${i}-archives`,
+            name: 'Archives Blend',
+            weight: archivesWeight,
+            trackingNumber: String(trackingNumber).trim(),
+            dateOrdered
+          });
+        }
+        if (ethiopiaWeight > 0) {
+          enRouteFromRoastLog.push({
+            id: `roast-log-${i}-ethiopia`,
+            name: 'Ethiopia Gera',
+            weight: ethiopiaWeight,
+            trackingNumber: String(trackingNumber).trim(),
+            dateOrdered
+          });
+        }
+        if (decafWeight > 0) {
+          enRouteFromRoastLog.push({
+            id: `roast-log-${i}-decaf`,
+            name: 'Colombia Decaf',
+            weight: decafWeight,
+            trackingNumber: String(trackingNumber).trim(),
+            dateOrdered
+          });
+        }
+      }
+    } catch (e) {
+      console.log('Could not read Roast Log for en route:', e.message);
+    }
+
     // Build combined inventory data (Column A empty, Row 1 empty)
     const data = [];
     
@@ -1584,32 +1658,12 @@ async function syncInventoryToSheets() {
     // Empty row
     data.push(['', '', '', '', '', '', '']);
     
-    // EN ROUTE SECTION
-    // En Route: ID in column B (internal), then Name, Weight, Tracking, Date Ordered, Est. Delivery
+    // EN ROUTE SECTION (from Roast Log)
     data.push(['', 'En Route Inventory', '', '', '', '', '']);
-    data.push(['', 'ID', 'Name', 'Weight (lb)', 'Tracking Number', 'Date Ordered', 'Est. Delivery']);
-    if (enRouteCoffeeInventory.length > 0) {
-      enRouteCoffeeInventory.forEach(c => {
-        // Only show estimated delivery if tracking number exists
-        const estDelivery = c.trackingNumber ? (c.estimatedDelivery || '') : '';
-        
-        // Format dateOrdered as mm/dd/yy
-        let dateOrdered = c.dateOrdered || c.orderDate || c.dateAdded || '';
-        if (dateOrdered && !dateOrdered.match(/^\d{2}\/\d{2}\/\d{2}$/)) {
-          // Try to convert to mm/dd/yy format
-          try {
-            const d = new Date(dateOrdered);
-            if (!isNaN(d.getTime())) {
-              const month = String(d.getMonth() + 1).padStart(2, '0');
-              const day = String(d.getDate()).padStart(2, '0');
-              const year = String(d.getFullYear()).slice(-2);
-              dateOrdered = `${month}/${day}/${year}`;
-            }
-          } catch (e) {}
-        }
-        
-        // ID in column B, then Name, Weight, Tracking, Date, Est. Delivery
-        data.push(['', c.id, c.name, c.weight, c.trackingNumber || '', dateOrdered, estDelivery]);
+    data.push(['', 'Name', 'Weight (lb)', 'Tracking Number', 'Date Ordered', '', '']);
+    if (enRouteFromRoastLog.length > 0) {
+      enRouteFromRoastLog.forEach(c => {
+        data.push(['', c.name, c.weight, c.trackingNumber || '', c.dateOrdered || '', '', '']);
       });
     }
 
@@ -1640,6 +1694,45 @@ async function syncInventoryToSheets() {
         requestBody: { values: data }
       });
     });
+    
+    // Apply Calibri 11 font formatting to entire sheet
+    try {
+      // Get sheet ID
+      const spreadsheet = await sheets.spreadsheets.get({
+        spreadsheetId: SPREADSHEET_ID
+      });
+      const inventorySheet = spreadsheet.data.sheets.find(s => s.properties.title === 'Inventory');
+      if (inventorySheet) {
+        const sheetId = inventorySheet.properties.sheetId;
+        await sheets.spreadsheets.batchUpdate({
+          spreadsheetId: SPREADSHEET_ID,
+          requestBody: {
+            requests: [{
+              repeatCell: {
+                range: {
+                  sheetId: sheetId,
+                  startRowIndex: 0,
+                  endRowIndex: data.length,
+                  startColumnIndex: 0,
+                  endColumnIndex: 7
+                },
+                cell: {
+                  userEnteredFormat: {
+                    textFormat: {
+                      fontFamily: 'Calibri',
+                      fontSize: 11
+                    }
+                  }
+                },
+                fields: 'userEnteredFormat.textFormat(fontFamily,fontSize)'
+              }
+            }]
+          }
+        });
+      }
+    } catch (fontErr) {
+      console.log('Could not apply font formatting:', fontErr.message);
+    }
 
     const timestamp = new Date().toISOString();
     console.log(`✅ Inventory synced to Google Sheets at ${timestamp}`);

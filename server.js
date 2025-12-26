@@ -353,7 +353,7 @@ function getLoginPage(error = '') {
 <body>
   <div class="login-container">
     <h1>Mise Flow</h1>
-    <p class="subtitle">AI-powered Work Flow for AOU Coffee, Inc.</p>
+    <p class="subtitle">Workflow assistant for inventory and operations</p>
     
     <div class="error-msg" id="errorMsg" style="display: none;">Authentication failed. Please try again.</div>
     

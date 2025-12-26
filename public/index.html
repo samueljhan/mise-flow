@@ -727,7 +727,7 @@
             </div>
             
             <div class="modal-buttons">
-                <button class="modal-btn cancel" onclick="closeInventoryModal(); showRoastedInventoryEntry();">Go Back</button>
+                <button class="modal-btn cancel" onclick="closeInventoryModal();">Go Back</button>
                 <button class="modal-btn send" onclick="saveInventoryChanges()">Save Changes</button>
             </div>
         </div>
@@ -3628,7 +3628,8 @@
                 
                 closeInventoryModal();
                 addMessage('✅ Inventory updated!', false);
-                setTimeout(() => showRoastedInventoryEntry(), 1000);
+                // Just add follow-up buttons instead of regenerating the screen
+                setTimeout(() => addFollowUpMessage(), 1000);
             } catch (error) {
                 console.error('Error saving inventory:', error);
                 alert('Error saving inventory: ' + error.message);

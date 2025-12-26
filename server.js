@@ -4739,10 +4739,88 @@ wss.on('connection', async (clientWs) => {
 // Get all inventory
 app.get('/api/inventory', async (req, res) => {
   await ensureFreshInventory();
+  
+  // Get en route items from Roast Log (primary source of truth)
+  let enRouteFromRoastLog = [];
+  
+  if (userTokens) {
+    try {
+      oauth2Client.setCredentials(userTokens);
+      const sheets = google.sheets({ version: 'v4', auth: oauth2Client });
+      
+      const response = await sheets.spreadsheets.values.get({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Roast Log!A:H',
+        valueRenderOption: 'UNFORMATTED_VALUE'
+      });
+      
+      const rows = response.data.values || [];
+      // Structure: B=Date Ordered(1), C=Tracking#(2), D=Archives(3), E=Ethiopia(4), F=Decaf(5), G=Arrival Date(6), H=Confirmation(7)
+      
+      const formatExcelDate = (dateVal) => {
+        if (!dateVal) return '';
+        if (typeof dateVal === 'number') {
+          const excelEpoch = new Date(1899, 11, 30);
+          const date = new Date(excelEpoch.getTime() + dateVal * 24 * 60 * 60 * 1000);
+          return date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
+        }
+        return String(dateVal);
+      };
+      
+      for (let i = 2; i < rows.length; i++) {
+        const row = rows[i];
+        if (!row || !row[1]) continue; // Skip if no date ordered
+        
+        const arrivalDate = row[6];
+        const confirmation = row[7];
+        
+        // Only include items NOT yet delivered AND confirmed
+        if (arrivalDate && confirmation) continue;
+        
+        const archivesWeight = parseFloat(row[3]) || 0;
+        const ethiopiaWeight = parseFloat(row[4]) || 0;
+        const decafWeight = parseFloat(row[5]) || 0;
+        
+        const trackingNumber = row[2] || '';
+        const dateOrdered = formatExcelDate(row[1]);
+        
+        if (archivesWeight > 0) {
+          enRouteFromRoastLog.push({
+            id: `roast-log-${i}-archives`,
+            name: 'Archives Blend',
+            weight: archivesWeight,
+            trackingNumber: String(trackingNumber).trim(),
+            dateOrdered
+          });
+        }
+        if (ethiopiaWeight > 0) {
+          enRouteFromRoastLog.push({
+            id: `roast-log-${i}-ethiopia`,
+            name: 'Ethiopia Gera',
+            weight: ethiopiaWeight,
+            trackingNumber: String(trackingNumber).trim(),
+            dateOrdered
+          });
+        }
+        if (decafWeight > 0) {
+          enRouteFromRoastLog.push({
+            id: `roast-log-${i}-decaf`,
+            name: 'Colombia Decaf',
+            weight: decafWeight,
+            trackingNumber: String(trackingNumber).trim(),
+            dateOrdered
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error reading en route from Roast Log:', error);
+    }
+  }
+  
   res.json({
     green: greenCoffeeInventory || [],
     roasted: roastedCoffeeInventory || [],
-    enRoute: enRouteCoffeeInventory || []
+    enRoute: enRouteFromRoastLog
   });
 });
 
@@ -5374,96 +5452,6 @@ app.get('/api/todo', async (req, res) => {
       }
     } catch (e) {
       console.log('Could not check roast log:', e.message);
-    }
-    
-    // 5. Check Inventory Log for weeks needing roasted inventory counts
-    try {
-      const invLogResponse = await sheets.spreadsheets.values.get({
-        spreadsheetId: SPREADSHEET_ID,
-        range: 'Inventory Log!A1:Z50',
-        valueRenderOption: 'UNFORMATTED_VALUE'
-      });
-      
-      const invLogRows = invLogResponse.data.values || [];
-      const headers = invLogRows[2] || [];
-      const sectionRow = invLogRows[1] || [];
-      
-      // Find roasted section boundaries
-      let roastedStartIndex = -1;
-      let greenStartIndex = -1;
-      
-      for (let i = 0; i < sectionRow.length; i++) {
-        const section = String(sectionRow[i] || '').toLowerCase();
-        if (section.includes('roasted')) roastedStartIndex = i;
-        else if (section.includes('green')) greenStartIndex = i;
-      }
-      
-      // Get current week ending date to exclude it
-      const today = new Date();
-      const dayOfWeek = today.getDay();
-      const diffToFriday = dayOfWeek >= 5 ? (dayOfWeek - 5) : (dayOfWeek + 2);
-      const currentWeekStart = new Date(today);
-      currentWeekStart.setDate(today.getDate() - diffToFriday);
-      const currentWeekEnd = new Date(currentWeekStart);
-      currentWeekEnd.setDate(currentWeekStart.getDate() + 6);
-      const currentWeekEndStr = currentWeekEnd.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
-      
-      const weeksNeedingRoastedInventory = [];
-      
-      // Check each week for missing roasted inventory
-      for (let i = 3; i < invLogRows.length; i++) {
-        const row = invLogRows[i];
-        if (!row || !row[1]) continue;
-        
-        let dateVal = row[1];
-        if (typeof dateVal === 'number') {
-          const excelEpoch = new Date(1899, 11, 30);
-          const date = new Date(excelEpoch.getTime() + dateVal * 24 * 60 * 60 * 1000);
-          dateVal = date.toLocaleDateString('en-US', { month: '2-digit', day: '2-digit', year: '2-digit' });
-        }
-        
-        // Skip current week
-        if (String(dateVal) === currentWeekEndStr) continue;
-        
-        // Check if roasted inventory columns have data
-        let hasRoastedData = false;
-        for (let j = roastedStartIndex; j < greenStartIndex; j++) {
-          if (headers[j] && !headers[j].toLowerCase().includes('date')) {
-            const val = row[j];
-            if (val !== undefined && val !== null && val !== '') {
-              hasRoastedData = true;
-              break;
-            }
-          }
-        }
-        
-        if (!hasRoastedData) {
-          weeksNeedingRoastedInventory.push({
-            date: String(dateVal),
-            rowIndex: i + 1
-          });
-        }
-      }
-      
-      // Add inventory log section if there are weeks needing entries
-      if (weeksNeedingRoastedInventory.length > 0) {
-        let detailedDesc = `header|Roasted Inventory Needed\n`;
-        weeksNeedingRoastedInventory.slice(-4).forEach(week => {
-          detailedDesc += `inventory|Week ending ${week.date}\n`;
-        });
-        
-        todoItems.push({
-          type: 'inventory_log',
-          priority: 'medium',
-          title: 'Inventory Log',
-          description: detailedDesc.trim(),
-          summary: `${weeksNeedingRoastedInventory.length} week(s) need inventory counts`,
-          weeksNeedingRoastedInventory,
-          action: 'showInventoryLog'
-        });
-      }
-    } catch (e) {
-      console.log('Could not check inventory log:', e.message);
     }
     
     // Sort by priority: high, medium, low

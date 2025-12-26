@@ -1633,27 +1633,86 @@
         async function confirmDefaultOrder() {
             window.waitingForOrderConfirmation = false;
             addMessage('Confirmed', true);
-            addMessage('Generating email draft...', false);
+            addMessage('Validating inventory...', false);
             
             try {
-                const response = await fetch('/api/roast-order/generate-email', {
+                // First, validate and update inventory
+                const validateResponse = await fetch('/api/roast-order/confirm-no-draft', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        orderItems: pendingRoastOrder
+                    })
+                });
+                
+                const validateData = await validateResponse.json();
+                
+                // Check for inventory shortage
+                if (validateData.success === false) {
+                    let errorHtml = '<strong style="color: #ff6b6b;">⚠️ Insufficient Inventory</strong><br><br>';
+                    errorHtml += `<div style="color: #ff6b6b; margin-bottom: 12px;">${validateData.message}</div>`;
+                    
+                    if (validateData.shortages && validateData.shortages.length > 0) {
+                        errorHtml += '<div style="background: #3a2020; padding: 10px; border-radius: 8px; margin-bottom: 12px;">';
+                        validateData.shortages.forEach(s => {
+                            errorHtml += `<div style="color: #ff6b6b; margin-bottom: 4px;">• ${s.name}: need ${s.required}lb, only ${s.available}lb available</div>`;
+                        });
+                        errorHtml += '</div>';
+                    }
+                    
+                    errorHtml += '<div style="color: #888; margin-bottom: 12px;">Reduce order quantities or add more green coffee.</div>';
+                    errorHtml += '<div class="response-buttons">';
+                    errorHtml += '<button class="action-btn" onclick="showDefaultOrderInChat()">Edit Order</button>';
+                    errorHtml += '<button class="action-btn" onclick="cancelRoastOrder()">Cancel</button>';
+                    errorHtml += '</div>';
+                    
+                    const messages = chatContainer.querySelectorAll('.message');
+                    const lastMsg = messages[messages.length - 1];
+                    if (lastMsg) {
+                        const content = lastMsg.querySelector('.message-content') || lastMsg;
+                        content.innerHTML = errorHtml;
+                    }
+                    return;
+                }
+                
+                // Store confirmation data for later reference
+                window.orderConfirmationData = validateData;
+                
+                // Reload inventory (it was updated)
+                await loadInventory();
+                
+                // Now generate email
+                const emailResponse = await fetch('/api/roast-order/generate-email', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ orderItems: pendingRoastOrder })
                 });
                 
-                const data = await response.json();
-                pendingRoastEmail = data;
+                const emailData = await emailResponse.json();
+                pendingRoastEmail = emailData;
                 
                 // Show email preview in chat
-                let html = '<strong>Email Preview</strong><br><br>';
-                html += `<strong>To:</strong> ${data.to}<br>`;
-                html += `<strong>Subject:</strong> ${data.subject}<br><br>`;
-                html += `<div style="background:#1a1a1a; padding:12px; border-radius:8px; white-space:pre-wrap; font-size:13px;">${data.body}</div><br>`;
+                let html = '<strong>✅ Order Confirmed</strong><br><br>';
+                
+                // Show inventory updates
+                if (validateData.deductions && validateData.deductions.length > 0) {
+                    html += '<div style="background: #1a2a1a; padding: 10px; border-radius: 8px; margin-bottom: 12px; border-left: 3px solid #4a6741;">';
+                    html += '<div style="font-size: 11px; color: #90EE90; margin-bottom: 6px;">Green coffee inventory updated:</div>';
+                    validateData.deductions.forEach(d => {
+                        html += `<div style="font-size: 11px; color: #ccc;">• ${d.name}: -${d.deducted}lb (${d.remaining}lb remaining)</div>`;
+                    });
+                    html += `<div style="font-size: 11px; color: #ccc; margin-top: 4px;">• Added ${validateData.enRouteItems?.length || 0} item(s) to en route</div>`;
+                    html += '</div>';
+                }
+                
+                html += '<strong>Email Preview</strong><br>';
+                html += `<strong>To:</strong> ${emailData.to}<br>`;
+                html += `<strong>Subject:</strong> ${emailData.subject}<br><br>`;
+                html += `<div style="background:#1a1a1a; padding:12px; border-radius:8px; white-space:pre-wrap; font-size:13px;">${emailData.body}</div><br>`;
                 html += '<div class="response-buttons" style="margin-top: 12px;">';
-                html += '<button class="action-btn" onclick="copyRoastEmail()">Copy Email</button>';
+                html += '<button class="action-btn" onclick="copyRoastEmailOnly()">Copy Email</button>';
                 html += '<button class="action-btn" onclick="editRoastEmail()">Edit Email</button>';
-                html += '<button class="action-btn" onclick="cancelRoastOrder()">Cancel</button>';
+                html += '<button class="action-btn" onclick="finishRoastOrder()">Done</button>';
                 html += '</div>';
                 
                 const messages = chatContainer.querySelectorAll('.message');
@@ -1664,9 +1723,54 @@
                 }
                 
             } catch (error) {
-                console.error('Error generating email:', error);
-                addMessage('Error generating email: ' + error.message, false);
+                console.error('Error confirming order:', error);
+                addMessage('Error: ' + error.message, false);
             }
+        }
+
+        // Copy email to clipboard only (inventory already updated)
+        async function copyRoastEmailOnly() {
+            if (!pendingRoastEmail) return;
+            
+            try {
+                const emailText = `To: ${pendingRoastEmail.to}\nSubject: ${pendingRoastEmail.subject}\n\n${pendingRoastEmail.body}`;
+                await navigator.clipboard.writeText(emailText);
+                
+                // Show brief confirmation
+                const messages = chatContainer.querySelectorAll('.message');
+                const lastMsg = messages[messages.length - 1];
+                if (lastMsg) {
+                    const content = lastMsg.querySelector('.message-content') || lastMsg;
+                    // Add a visual confirmation
+                    const originalHtml = content.innerHTML;
+                    const copyBtn = content.querySelector('button[onclick="copyRoastEmailOnly()"]');
+                    if (copyBtn) {
+                        const originalText = copyBtn.textContent;
+                        copyBtn.textContent = '✓ Copied!';
+                        copyBtn.style.background = '#4a6741';
+                        setTimeout(() => {
+                            copyBtn.textContent = originalText;
+                            copyBtn.style.background = '';
+                        }, 2000);
+                    }
+                }
+            } catch (error) {
+                console.error('Error copying:', error);
+                alert('Could not copy to clipboard. Please select and copy the email text manually.');
+            }
+        }
+
+        // Finish roast order (Done button)
+        function finishRoastOrder() {
+            // Reset state
+            pendingRoastOrder = [];
+            pendingRoastEmail = null;
+            waitingForRoastOrder = false;
+            window.waitingForOrderConfirmation = false;
+            window.orderConfirmationData = null;
+            userInput.placeholder = 'Describe what you want to do…';
+            
+            addConversationalFollowUp('roast_order_confirmed');
         }
 
         // Edit email in modal
@@ -1691,8 +1795,15 @@
             await finalizeRoastOrder(emailData);
         }
 
-        // Copy email to clipboard
+        // Copy email to clipboard (legacy - redirects to new function)
         async function copyRoastEmail() {
+            // If order already confirmed (new flow), just copy
+            if (window.orderConfirmationData) {
+                await copyRoastEmailOnly();
+                return;
+            }
+            
+            // Legacy path - validate first then copy
             if (!pendingRoastEmail) return;
             
             addMessage('Validating inventory and updating...', false);
@@ -1711,17 +1822,22 @@
                 
                 // Check for inventory shortage
                 if (data.success === false) {
-                    let errorHtml = '<strong style="color: #ff6b6b;">Order Cannot Be Confirmed</strong><br><br>';
+                    let errorHtml = '<strong style="color: #ff6b6b;">⚠️ Insufficient Inventory</strong><br><br>';
                     errorHtml += `<div style="color: #ff6b6b; margin-bottom: 12px;">${data.message}</div>`;
                     
                     if (data.shortages && data.shortages.length > 0) {
-                        errorHtml += '<div style="margin-bottom: 12px;">Shortages:</div>';
+                        errorHtml += '<div style="background: #3a2020; padding: 10px; border-radius: 8px; margin-bottom: 12px;">';
                         data.shortages.forEach(s => {
-                            errorHtml += `<div style="color: #ff6b6b;">• ${s.name}: need ${s.required}lb, only ${s.available}lb available</div>`;
+                            errorHtml += `<div style="color: #ff6b6b; margin-bottom: 4px;">• ${s.name}: need ${s.required}lb, only ${s.available}lb available</div>`;
                         });
+                        errorHtml += '</div>';
                     }
                     
-                    errorHtml += '<br><div>Please reduce the order quantities or add more green coffee inventory.</div>';
+                    errorHtml += '<div style="color: #888; margin-bottom: 12px;">Reduce order quantities or add more green coffee.</div>';
+                    errorHtml += '<div class="response-buttons">';
+                    errorHtml += '<button class="action-btn" onclick="showDefaultOrderInChat()">Edit Order</button>';
+                    errorHtml += '<button class="action-btn" onclick="cancelRoastOrder()">Cancel</button>';
+                    errorHtml += '</div>';
                     
                     const messages = chatContainer.querySelectorAll('.message');
                     const lastMsg = messages[messages.length - 1];
@@ -1732,23 +1848,23 @@
                     return;
                 }
                 
-                // Only copy email if inventory update succeeded
+                // Copy email
                 const emailText = `To: ${pendingRoastEmail.to}\nSubject: ${pendingRoastEmail.subject}\n\n${pendingRoastEmail.body}`;
                 await navigator.clipboard.writeText(emailText);
                 
                 // Show confirmation message
-                let confirmHtml = '<strong>Order Confirmed & Email Copied</strong><br><br>';
+                let confirmHtml = '<strong>✅ Order Confirmed & Email Copied</strong><br><br>';
                 confirmHtml += '<div style="color: #90EE90; margin-bottom: 12px;">✓ Email copied - paste into your email client</div>';
                 
                 if (data.deductions && data.deductions.length > 0) {
-                    confirmHtml += 'Green coffee inventory updated:<br>';
+                    confirmHtml += '<div style="background: #1a2a1a; padding: 10px; border-radius: 8px; margin-bottom: 12px;">';
                     data.deductions.forEach(d => {
-                        confirmHtml += `   ${d.name}: -${d.deducted}lb (${d.remaining}lb remaining)<br>`;
+                        confirmHtml += `<div style="font-size: 11px; color: #ccc;">• ${d.name}: -${d.deducted}lb (${d.remaining}lb remaining)</div>`;
                     });
-                    confirmHtml += '<br>';
+                    confirmHtml += '</div>';
                 }
                 
-                confirmHtml += `Added ${data.enRouteItems?.length || 0} item(s) to en route.`;
+                confirmHtml += `<div style="color: #888;">Added ${data.enRouteItems?.length || 0} item(s) to en route.</div>`;
                 
                 const messages = chatContainer.querySelectorAll('.message');
                 const lastMsg = messages[messages.length - 1];
@@ -1771,8 +1887,8 @@
                 addConversationalFollowUp('roast_order_confirmed');
                 
             } catch (error) {
-                console.error('Error copying email:', error);
-                addMessage('Error: ' + error.message, false);
+                console.error('Error:', error);
+                alert('Could not copy to clipboard. Please select and copy the email text manually.');
             }
         }
 
@@ -2930,8 +3046,7 @@
                 
                 html += '<div class="response-buttons" style="margin-top: 12px;">';
                 html += '<button class="action-btn" onclick="saveRoastedInventoryEntry()" style="background: #4a6741;">Save</button>';
-                html += '<button class="action-btn" onclick="openManageInventoryModal()">Update All Inventory</button>';
-                html += '<button class="action-btn" onclick="showInventoryLog()">Inventory Log</button>';
+                html += '<button class="action-btn" onclick="openManageInventoryModal()">Manage All Inventory</button>';
                 html += '<button class="action-btn" onclick="addFollowUpMessage()">Done</button>';
                 html += '</div>';
                 
@@ -6354,109 +6469,42 @@ Archives of Us Coffee`;
         
         function showRetailManagementUI(data) {
             let html = '<strong>☕ AOU Cafe Activity</strong><br>';
-            html += '<span style="color: #888; font-size: 12px;">Track retail sales, coffee usage, and invoicing</span><br><br>';
+            html += '<span style="color: #888; font-size: 12px;">Track coffee drop-offs at AOU Cafe</span><br><br>';
             
-            // ========== SECTION 1: RETAIL SALES ==========
-            html += '<div style="background: #1a2a1a; padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 3px solid #4a6741;">';
-            html += '<div style="font-weight: 600; margin-bottom: 8px;">💰 Retail Sales</div>';
-            
-            // Weeks needing sales data
-            if (weeksNeedingRetailSales.length > 0) {
-                html += `<div style="color: #f0ad4e; font-size: 12px; margin-bottom: 8px;">⚠️ ${weeksNeedingRetailSales.length} week(s) need sales data:</div>`;
-                weeksNeedingRetailSales.slice(0, 3).forEach(week => {
-                    html += `<div style="display: flex; justify-content: space-between; align-items: center; margin: 4px 0; font-size: 12px;">`;
-                    html += `<span>${week.dateRange}</span>`;
-                    html += `<button class="action-btn" style="padding: 2px 8px; font-size: 10px;" onclick="enterWeekSales(${week.rowIndex}, '${week.dateRange}')">Enter Sales</button>`;
-                    html += `</div>`;
-                });
-                if (weeksNeedingRetailSales.length > 3) {
-                    html += `<div style="color: #666; font-size: 10px;">+${weeksNeedingRetailSales.length - 3} more</div>`;
-                }
-            } else {
-                html += '<div style="color: #4a6741; font-size: 12px;">✓ All retail sales up to date</div>';
-            }
-            
-            // Recent weeks with sales
-            if (recentWeeksWithSales.length > 0) {
-                html += '<div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #333;">';
-                html += '<div style="color: #888; font-size: 11px; margin-bottom: 4px;">Recent Sales:</div>';
-                recentWeeksWithSales.forEach(week => {
-                    html += `<div style="font-size: 12px; color: #ccc; margin: 2px 0;">`;
-                    html += `${week.dateRange}: $${week.totalSales?.toFixed(2) || '0.00'} <span style="color: #888;">(net: $${week.netPayout?.toFixed(2) || '0.00'})</span>`;
-                    html += `</div>`;
-                });
-                html += '</div>';
-            }
-            
-            html += `<div style="margin-top: 8px;">`;
-            html += `<button class="action-btn" style="font-size: 11px; padding: 4px 10px;" onclick="showRetailProductsManager()">Manage Products</button>`;
-            html += `</div>`;
-            html += '</div>';
-            
-            // ========== SECTION 2: COFFEE USAGE ==========
+            // ========== COFFEE DROP-OFFS ==========
             html += '<div style="background: #1a1a2a; padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 3px solid #5b7aa4;">';
-            html += '<div style="font-weight: 600; margin-bottom: 8px;">📦 Coffee Usage</div>';
+            html += '<div style="font-weight: 600; margin-bottom: 10px;">📦 Coffee Drop-offs</div>';
             
-            // Weeks needing coffee usage
-            if (weeksNeedingCoffeeUsage.length > 0) {
-                html += `<div style="color: #f0ad4e; font-size: 12px; margin-bottom: 8px;">⚠️ ${weeksNeedingCoffeeUsage.length} week(s) need coffee usage:</div>`;
-                weeksNeedingCoffeeUsage.slice(0, 3).forEach(week => {
-                    html += `<div style="display: flex; justify-content: space-between; align-items: center; margin: 4px 0; font-size: 12px;">`;
-                    html += `<span>${week.dateRange}</span>`;
-                    html += `<button class="action-btn" style="padding: 2px 8px; font-size: 10px;" onclick="trackCoffeeUsage('${week.dateRange}', ${week.rowIndex})">Track Usage</button>`;
-                    html += `</div>`;
-                });
-                if (weeksNeedingCoffeeUsage.length > 3) {
-                    html += `<div style="color: #666; font-size: 10px;">+${weeksNeedingCoffeeUsage.length - 3} more</div>`;
-                }
-            } else {
-                html += '<div style="color: #5b7aa4; font-size: 12px;">✓ All coffee usage tracked</div>';
-            }
+            // Get recent drop-offs (weeks with coffee usage data)
+            const recentDropoffs = retailWeeks
+                .filter(w => w.archivesUsage > 0 || w.ethiopiaUsage > 0 || w.decafUsage > 0)
+                .slice(-3)
+                .reverse();
             
-            html += `<div style="margin-top: 8px;">`;
-            html += `<button class="action-btn" style="font-size: 11px; padding: 4px 10px;" onclick="showTrackCoffeeUsage()">Add Coffee Drop-off</button>`;
-            html += `</div>`;
-            html += '</div>';
-            
-            // ========== SECTION 3: INVOICES ==========
-            html += '<div style="background: #2a1a2a; padding: 12px; border-radius: 8px; margin-bottom: 16px; border-left: 3px solid #8a5a9a;">';
-            html += '<div style="font-weight: 600; margin-bottom: 8px;">📄 Invoices</div>';
-            
-            // Weeks ready for invoicing
-            if (weeksReadyForInvoice.length > 0) {
-                html += `<div style="color: #90EE90; font-size: 12px; margin-bottom: 8px;">✓ ${weeksReadyForInvoice.length} week(s) ready to invoice:</div>`;
-                weeksReadyForInvoice.forEach(week => {
-                    html += `<div style="display: flex; justify-content: space-between; align-items: center; margin: 4px 0; font-size: 12px;">`;
-                    html += `<span>${week.dateRange}</span>`;
-                    html += `<button class="action-btn" style="padding: 2px 8px; font-size: 10px;" onclick="sendAOUInvoice(${week.rowIndex}, '${week.dateRange}')">Generate Invoice</button>`;
+            if (recentDropoffs.length > 0) {
+                html += '<div style="color: #888; font-size: 11px; margin-bottom: 8px;">Recent Drop-offs:</div>';
+                recentDropoffs.forEach(week => {
+                    const parts = [];
+                    if (week.archivesUsage > 0) parts.push(`Archives ${week.archivesUsage}lb`);
+                    if (week.ethiopiaUsage > 0) parts.push(`Ethiopia ${week.ethiopiaUsage}lb`);
+                    if (week.decafUsage > 0) parts.push(`Decaf ${week.decafUsage}lb`);
+                    
+                    html += `<div style="background: #252535; padding: 8px; border-radius: 6px; margin-bottom: 6px;">`;
+                    html += `<div style="font-size: 12px; color: #ccc;">${week.dateRange}</div>`;
+                    html += `<div style="font-size: 11px; color: #888;">${parts.join(', ')}</div>`;
                     html += `</div>`;
                 });
             } else {
-                const reason = weeksNeedingRetailSales.length > 0 ? 'Need retail sales first' :
-                              weeksNeedingCoffeeUsage.length > 0 ? 'Need coffee usage first' : 'All invoices sent';
-                html += `<div style="color: #888; font-size: 12px;">${reason}</div>`;
+                html += '<div style="color: #666; font-size: 12px; margin-bottom: 8px;">No recent drop-offs recorded</div>';
             }
             
-            // Recent sent invoices
-            const sentInvoices = retailWeeks.filter(w => w.invoiceSent).slice(-3).reverse();
-            if (sentInvoices.length > 0) {
-                html += '<div style="margin-top: 10px; padding-top: 8px; border-top: 1px solid #333;">';
-                html += '<div style="color: #888; font-size: 11px; margin-bottom: 4px;">Recent Invoices Sent:</div>';
-                sentInvoices.forEach(week => {
-                    html += `<div style="font-size: 12px; color: #ccc; margin: 2px 0;">`;
-                    html += `${week.dateRange} <span style="color: #4a6741;">✓</span>`;
-                    html += `</div>`;
-                });
-                html += '</div>';
-            }
-            
-            html += `<div style="margin-top: 8px;">`;
-            html += `<button class="action-btn" style="font-size: 11px; padding: 4px 10px;" onclick="viewAOUInvoices()">View All Invoices</button>`;
+            html += `<div style="margin-top: 10px;">`;
+            html += `<button class="action-btn" onclick="showTrackCoffeeUsage()" style="background: #5b7aa4;">Add Drop-off</button>`;
             html += `</div>`;
             html += '</div>';
             
-            // Done button only
-            html += '<div class="response-buttons" style="margin-top: 12px;">';
+            // Done button
+            html += '<div class="response-buttons">';
             html += '<button class="action-btn" onclick="addFollowUpMessage()">Done</button>';
             html += '</div>';
             
@@ -6756,12 +6804,12 @@ Archives of Us Coffee`;
             });
         }
         
-        // ============ Track Coffee Usage ============
+        // ============ Track Coffee Drop-offs ============
         
         let roastedCoffeeTypes = ['Archives Blend', 'Ethiopia Gera', 'Colombia Decaf'];
         
         async function showTrackCoffeeUsage() {
-            addMessage('Track Coffee Usage', true);
+            addMessage('Add Coffee Drop-off', true);
             addMessage('Loading...', false);
             
             try {
@@ -6773,18 +6821,14 @@ Archives of Us Coffee`;
                     roastedCoffeeTypes = invData.roastedCoffees;
                 }
                 
-                // Get retail weeks that need usage tracking
-                const retailResponse = await fetch('/api/retail/data');
-                const retailData = await retailResponse.json();
-                
                 const messages = chatContainer.querySelectorAll('.message');
                 const lastMsg = messages[messages.length - 1];
                 const content = lastMsg?.querySelector('.message-content') || lastMsg;
                 
-                let html = '<strong>☕ Track AOU Coffee Usage</strong><br>';
+                let html = '<strong>📦 Add Coffee Drop-off</strong><br>';
                 html += '<span style="color: #888; font-size: 12px;">Log coffee dropped off at AOU Cafe</span><br><br>';
                 
-                // Show form to enter usage
+                // Show form to enter drop-off
                 html += '<div style="background: #2a2a2a; padding: 12px; border-radius: 8px; margin-bottom: 12px;">';
                 html += '<div style="margin-bottom: 12px;">';
                 html += '<label style="color: #888; font-size: 12px;">Drop-off Date:</label><br>';
@@ -6806,24 +6850,15 @@ Archives of Us Coffee`;
                 
                 html += '</div>';
                 
-                // Show weeks needing usage data
-                const weeksNeedingUsageLocal = (retailData.weeksNeedingCoffeeUsage || []);
-                if (weeksNeedingUsageLocal.length > 0) {
-                    html += '<div style="margin-bottom: 12px; padding: 8px; background: #3a3a20; border-radius: 6px;">';
-                    html += `<div style="font-size: 11px; color: #888; margin-bottom: 4px;">⚠️ ${weeksNeedingUsageLocal.length} week(s) need usage data:</div>`;
-                    html += `<div style="font-size: 12px;">${weeksNeedingUsageLocal.map(w => w.dateRange).join(', ')}</div>`;
-                    html += '</div>';
-                }
-                
                 html += '<div class="response-buttons">';
-                html += '<button class="action-btn" onclick="submitCoffeeUsage()">Save Usage</button>';
+                html += '<button class="action-btn" onclick="submitCoffeeUsage()" style="background: #5b7aa4;">Save Drop-off</button>';
                 html += '<button class="action-btn" onclick="manageAOUCafe()">Go Back</button>';
                 html += '</div>';
                 
                 content.innerHTML = html;
                 
             } catch (error) {
-                console.error('Error loading usage form:', error);
+                console.error('Error loading drop-off form:', error);
                 const messages = chatContainer.querySelectorAll('.message');
                 const lastMsg = messages[messages.length - 1];
                 if (lastMsg) {
